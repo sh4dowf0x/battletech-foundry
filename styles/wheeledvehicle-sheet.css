@@ -1,0 +1,432 @@
+/* styles/wheeledvehicle-sheet.css */
+
+.atow-wheeledvehicle-sheet {
+  font-family: "Franklin Gothic Medium", "Trebuchet MS", "Tahoma", sans-serif;
+  color: #1b1b1b;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 6px;
+}
+
+.atow-wheeledvehicle-sheet * {
+  box-sizing: border-box;
+}
+
+.atow-wheeledvehicle-sheet .wv-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.25);
+}
+
+.atow-wheeledvehicle-sheet .wv-name-input {
+  flex: 1;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.atow-wheeledvehicle-sheet .wv-subtitle {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: rgba(0, 0, 0, 0.65);
+}
+
+.atow-wheeledvehicle-sheet input,
+.atow-wheeledvehicle-sheet select {
+  font-family: inherit;
+  font-size: 12px;
+  padding: 3px 6px;
+  border-radius: 4px;
+  border: 1px solid rgba(0, 0, 0, 0.35);
+  background: transparent;
+  color: #1b1b1b;
+}
+
+.atow-wheeledvehicle-sheet input[type="number"] {
+  text-align: center;
+}
+
+.atow-wheeledvehicle-sheet .wv-body {
+  display: grid;
+  grid-template-columns: 1.1fr 0.9fr 0.9fr;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.atow-wheeledvehicle-sheet .wv-panel {
+  border: 1px solid rgba(0, 0, 0, 0.25);
+  border-radius: 5px;
+  background: transparent;
+  padding: 6px;
+  margin-bottom: 8px;
+}
+
+.atow-wheeledvehicle-sheet .wv-panel h3 {
+  margin: 0 0 6px 0;
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  color: rgba(0, 0, 0, 0.65);
+}
+
+.atow-wheeledvehicle-sheet .wv-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.atow-wheeledvehicle-sheet .wv-grid-2 {
+  grid-template-columns: 1fr 1fr;
+}
+
+.atow-wheeledvehicle-sheet .wv-field label {
+  display: block;
+  font-size: 11px;
+  font-weight: 700;
+  color: rgba(0, 0, 0, 0.65);
+  margin-bottom: 4px;
+}
+
+.atow-wheeledvehicle-sheet .wv-inline {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.atow-wheeledvehicle-sheet .wv-inline span {
+  font-size: 11px;
+  font-weight: 700;
+  color: rgba(0, 0, 0, 0.65);
+}
+
+.atow-wheeledvehicle-sheet .wv-mini-input {
+  width: 48px;
+}
+
+.atow-wheeledvehicle-sheet .wv-track {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  gap: 4px;
+}
+
+.atow-wheeledvehicle-sheet .wv-track-box {
+  border: 1px solid rgba(0, 0, 0, 0.35);
+  border-radius: 4px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  font-weight: 800;
+  user-select: none;
+  cursor: pointer;
+  background: rgba(0, 0, 0, 0.06);
+}
+
+.atow-wheeledvehicle-sheet .wv-track-box.filled {
+  background: rgba(0, 0, 0, 0.12);
+}
+
+.atow-wheeledvehicle-sheet .wv-check {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  color: rgba(0, 0, 0, 0.65);
+  margin-bottom: 4px;
+}
+
+.atow-wheeledvehicle-sheet .wv-inline-checks {
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.atow-wheeledvehicle-sheet .wv-crit-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+}
+
+.atow-wheeledvehicle-sheet .wv-check input[type="checkbox"] {
+  width: 12px;
+  height: 12px;
+  margin: 0;
+}
+
+.atow-wheeledvehicle-sheet .wv-crit-col .wv-field {
+  margin-bottom: 4px;
+}
+
+.atow-wheeledvehicle-sheet .wv-drop-zone {
+  border: 2px dashed rgba(0, 0, 0, 0.2);
+  border-radius: 6px;
+  padding: 6px;
+  background: transparent;
+}
+
+.atow-wheeledvehicle-sheet .wv-drop-hint {
+  font-size: 11px;
+  color: rgba(0, 0, 0, 0.65);
+  margin-bottom: 6px;
+}
+
+.atow-wheeledvehicle-sheet .wv-we-table {
+  display: grid;
+  gap: 2px;
+}
+
+.atow-wheeledvehicle-sheet .wv-we-row {
+  grid-template-columns: 2fr 0.6fr 0.6fr 0.2fr 0.6fr 0.6fr 0.6fr 0.6fr 0.4fr;
+  display: grid;
+  gap: 6px;
+  align-items: center;
+  padding: 4px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+}
+
+.atow-wheeledvehicle-sheet .wv-we-header {
+  font-weight: 800;
+  text-transform: uppercase;
+  color: rgba(0, 0, 0, 0.65);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.25);
+  border-radius: 0;
+  padding-bottom: 6px;
+}
+
+.atow-wheeledvehicle-sheet .wv-we-col.sep {
+  border-left: 1px solid rgba(0, 0, 0, 0.2);
+  height: 100%;
+}
+
+.atow-wheeledvehicle-sheet .wv-we-col.type a {
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.atow-wheeledvehicle-sheet .wv-we-col.ctrl {
+  text-align: center;
+}
+
+.atow-wheeledvehicle-sheet .item-delete {
+  cursor: pointer;
+  font-weight: 800;
+  opacity: 0.7;
+}
+
+.atow-wheeledvehicle-sheet .item-delete:hover {
+  opacity: 1;
+}
+
+.atow-wheeledvehicle-sheet .wv-panel-bv {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.atow-wheeledvehicle-sheet .wv-panel-bv label {
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+}
+
+.atow-wheeledvehicle-sheet .wv-panel-armor {
+}
+
+.atow-wheeledvehicle-sheet .wv-armor-controls {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px 10px;
+  margin-bottom: 8px;
+}
+
+.atow-wheeledvehicle-sheet .wv-armor-control {
+  display: grid;
+  grid-template-columns: 1fr 60px;
+  gap: 6px;
+  align-items: center;
+}
+
+.atow-wheeledvehicle-sheet .wv-armor-control label {
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  opacity: 0.75;
+}
+
+.atow-wheeledvehicle-sheet .wv-armor-max {
+  height: 22px;
+  text-align: center;
+}
+
+.atow-wheeledvehicle-sheet .wv-armor-diagram {
+  position: relative;
+  display: block;
+  padding: 6px;
+  border: 1px solid rgba(0, 0, 0, 0.25);
+  border-radius: 5px;
+  background: url("../assets/armor-diagram-wv.png") center / contain no-repeat;
+  aspect-ratio: 420 / 679;
+  min-height: 320px;
+}
+
+.atow-wheeledvehicle-sheet .wv-armor-loc {
+  position: absolute;
+  display: grid;
+  grid-template-columns: repeat(var(--cols, 6), 8px);
+  grid-auto-rows: 8px;
+  gap: 2px;
+  padding: 2px;
+  justify-content: center;
+  align-content: start;
+  pointer-events: none;
+}
+
+.atow-wheeledvehicle-sheet .wv-armor-label {
+  font-size: 11px;
+  font-weight: 800;
+  color: rgba(0, 0, 0, 0.65);
+  margin-bottom: 4px;
+}
+
+.atow-wheeledvehicle-sheet .wv-armor-pips {
+  display: contents;
+}
+
+.atow-wheeledvehicle-sheet .wv-armor-left .wv-armor-pips,
+.atow-wheeledvehicle-sheet .wv-armor-right .wv-armor-pips {
+}
+.atow-wheeledvehicle-sheet .wv-armor-pip {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1px solid rgba(0, 0, 0, 0.55);
+  background: transparent;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.atow-wheeledvehicle-sheet .wv-structure-loc {
+  position: absolute;
+  display: grid;
+  grid-template-columns: repeat(var(--cols, 5), 8px);
+  grid-auto-rows: 8px;
+  gap: 2px;
+  padding: 2px;
+  justify-content: center;
+  align-content: start;
+  pointer-events: none;
+}
+
+.atow-wheeledvehicle-sheet .wv-structure-pip {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1px solid rgba(0, 0, 0, 0.65);
+  background: transparent;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.atow-wheeledvehicle-sheet .wv-structure-pip.filled {
+  background: rgba(0, 0, 0, 0.65);
+}
+
+.atow-wheeledvehicle-sheet .wv-structure-front {
+  top: 34.5%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  --cols: 5;
+}
+
+.atow-wheeledvehicle-sheet .wv-structure-left {
+  top: 51%;
+  left: 24%;
+  transform: translate(-50%, -50%);
+  --cols: 2;
+}
+
+.atow-wheeledvehicle-sheet .wv-structure-right {
+  top: 51%;
+  left: 76%;
+  transform: translate(-50%, -50%);
+  --cols: 2;
+}
+
+.atow-wheeledvehicle-sheet .wv-structure-turret {
+  top: 58%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  --cols: 5;
+}
+
+.atow-wheeledvehicle-sheet .wv-structure-rear {
+  top: 85.5%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  --cols: 5;
+}
+
+.atow-wheeledvehicle-sheet .wv-armor-pip.filled {
+  background: #2f2f2f;
+}
+
+.atow-wheeledvehicle-sheet .wv-armor-front {
+  top: 20%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  --cols: 8;
+}
+.atow-wheeledvehicle-sheet .wv-armor-left {
+  top: 50%;
+  left: 10%;
+  transform: translate(-50%, -50%);
+  --cols: 2;
+}
+.atow-wheeledvehicle-sheet .wv-armor-turret {
+  top: 70%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  --cols: 8;
+}
+.atow-wheeledvehicle-sheet .wv-armor-right {
+  top: 50%;
+  left: 90%;
+  transform: translate(-50%, -50%);
+  --cols: 2;
+}
+.atow-wheeledvehicle-sheet .wv-armor-rear {
+  top: 93%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  --cols: 12;
+}
+
+.atow-wheeledvehicle-sheet .wv-portrait {
+  width: 100%;
+  height: auto;
+  max-height: 320px;
+  object-fit: contain;
+  border: 1px solid rgba(0, 0, 0, 0.25);
+  border-radius: 5px;
+  background: transparent;
+}
+
+@media (max-width: 1000px) {
+  .atow-wheeledvehicle-sheet .wv-body {
+    grid-template-columns: 1fr;
+  }
+
+  .atow-wheeledvehicle-sheet .wv-header {
+    grid-template-columns: 1fr;
+  }
+}

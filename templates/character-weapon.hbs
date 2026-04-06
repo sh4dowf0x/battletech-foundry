@@ -1,0 +1,95 @@
+<div class="atow-item-sheet atow-character-weapon">
+  <header class="sheet-header" style="display:flex; gap:12px; align-items:center;">
+    <img
+      class="profile-img"
+      src="{{item.img}}"
+      data-edit="img"
+      title="{{item.name}}"
+      style="width:72px; height:72px; object-fit:cover; border-radius:10px;" />
+
+    <div style="flex:1; display:flex; flex-direction:column; gap:6px;">
+      <input
+        name="name"
+        type="text"
+        value="{{item.name}}"
+        placeholder="Weapon Name"
+        style="font-size:1.3em; font-weight:700;" />
+
+      <div style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap:8px;">
+        <div>
+          <label style="display:block; opacity:0.8;">Tech</label>
+          <input type="text" name="system.ratings.tech" value="{{system.ratings.tech}}" placeholder="A" />
+        </div>
+        <div>
+          <label style="display:block; opacity:0.8;">Legality</label>
+          <input type="text" name="system.ratings.legality" value="{{system.ratings.legality}}" placeholder="A" />
+        </div>
+        <div>
+          <label style="display:block; opacity:0.8;">Availability</label>
+          <input type="text" name="system.ratings.availability" value="{{system.ratings.availability}}" placeholder="A" />
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <hr />
+
+  <section style="display:grid; grid-template-columns: 1fr 1fr; gap:12px;">
+    <div>
+      <label style="display:block; opacity:0.8;">AP / BD</label>
+      <div style="display:flex; gap:6px; align-items:center;">
+        <input type="text" name="system.damage.ap" value="{{system.damage.ap}}" placeholder="AP" />
+        <span style="opacity:0.7;">/</span>
+        <input type="text" name="system.damage.bd" value="{{system.damage.bd}}" placeholder="BD" />
+      </div>
+    </div>
+
+    <div>
+      <label style="display:block; opacity:0.8;">Range</label>
+      <input type="text" name="system.range" value="{{system.range}}" placeholder="e.g. 1m / 5m / 10m" />
+    </div>
+
+<div>
+  <label style="display:block; opacity:0.8;">Skill</label>
+  <select name="system.skillKey">
+    {{selectOptions skillChoices selected=system.skillKey localize=false}}
+  </select>
+  <div style="font-size:0.85em; opacity:0.7; margin-top:4px;">Tied to: {{skillTied}}</div>
+</div>
+
+    <div>
+      <label style="display:block; opacity:0.8;">Shots</label>
+      <input type="text" name="system.shots" value="{{system.shots}}" placeholder="— / 6 / 30" />
+    </div>
+
+    <div>
+      <label style="display:block; opacity:0.8;">Cost / Reload</label>
+      <input type="text" name="system.costReload" value="{{system.costReload}}" placeholder="e.g. 25" />
+    </div>
+
+    <div>
+      <label style="display:block; opacity:0.8;">AFF</label>
+      <input type="text" name="system.affiliation" value="{{system.affiliation}}" placeholder="Faction / Manufacturer" />
+    </div>
+
+    <div>
+      <label style="display:block; opacity:0.8;">Mass (kg) / Reload Mass (kg)</label>
+      <div style="display:flex; gap:6px; align-items:center;">
+        <input type="number" step="0.01" name="system.mass.weaponKg" value="{{system.mass.weaponKg}}" placeholder="4" />
+        <span style="opacity:0.7;">/</span>
+        <input type="number" step="0.01" name="system.mass.reloadKg" value="{{system.mass.reloadKg}}" placeholder="—" />
+      </div>
+    </div>
+  </section>
+
+  <hr />
+
+  <section>
+    <label style="display:block; opacity:0.8; margin-bottom:6px;">Notes</label>
+    <textarea
+      name="system.notes"
+      rows="6"
+      style="width:100%;"
+      placeholder="Special rules (e.g. -2 to attack roll, Simple Action reload, etc.)">{{system.notes}}</textarea>
+  </section>
+</div>

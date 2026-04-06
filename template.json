@@ -1,0 +1,445 @@
+{
+  "Actor": {
+    "types": [
+      "character",
+      "abomination",
+      "npc",
+      "mech",
+      "wheeledvehicle",
+      "vehicle"
+    ],
+    "templates": {
+      "base": {
+        "biography": "",
+        "notes": ""
+      },
+      "atowCommon": {
+        "health": {
+          "value": 0,
+          "min": 0,
+          "max": 0
+        },
+        "fatigue": {
+          "value": 0,
+          "min": 0,
+          "max": 0
+        },
+        "edge": {
+          "value": 2,
+          "min": 0,
+          "max": 2
+        },
+        "attributes": {
+          "str": {
+            "value": 2
+          },
+          "bod": {
+            "value": 2
+          },
+          "rfl": {
+            "value": 2
+          },
+          "dex": {
+            "value": 2
+          },
+          "int": {
+            "value": 2
+          },
+          "wil": {
+            "value": 2
+          },
+          "cha": {
+            "value": 2
+          },
+          "edg": {
+            "value": 2
+          }
+        },
+        "derived": {
+          "initiative": {
+            "formula": "2d6 + @attributes.rfl.value"
+          },
+          "move": {
+            "walk": 0,
+            "run": 0,
+            "jump": 0
+          }
+        }
+      },
+      "mechCommon": {
+        "heat": {
+          "value": 0,
+          "max": 30,
+          "baseSinks": 10,
+          "engineSinksUsed": "auto",
+          "engineSinks": null,
+          "sinkType": "single",
+          "isDouble": false,
+          "dissipation": 0
+        },
+        "armorTrack": {
+          "value": 0,
+          "min": 0,
+          "max": 0
+        }
+      }
+    },
+    "character": {
+      "templates": [
+        "base",
+        "atowCommon"
+      ],
+      "xp": {
+        "total": 0,
+        "spent": 0,
+        "pools": {
+          "attributes": {
+            "str": 0,
+            "bod": 0,
+            "rfl": 0,
+            "dex": 0,
+            "int": 0,
+            "wil": 0,
+            "cha": 0,
+            "edg": 0
+          },
+          "skills": {},
+          "traits": {},
+          "unallocated": 0
+        }
+      },
+      "rank": "",
+      "affiliation": "",
+      "biographyModules": [
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "biographyNotes": ""
+    },
+    "abomination": {
+      "templates": [
+        "base",
+        "atowCommon"
+      ],
+      "pilot": {
+        "gunnery": 0,
+        "piloting": 0
+      },
+      "abomination": {
+        "origin": "",
+        "lineage": "",
+        "tell": "",
+        "covenant": "",
+        "hunger": 0,
+        "torment": 0,
+        "manifestations": "",
+        "weaknesses": "",
+        "type": "",
+        "sizeClass": "Hulk",
+        "gunnerySkill": "",
+        "aniMeleeSkill": "",
+        "groundMp": 0,
+        "handler": "",
+        "bonus": "",
+        "trackCount": 3,
+        "trackPips": 15,
+        "track1": 0,
+        "track2": 0,
+        "track3": 0,
+        "physical": {
+          "mob": 0,
+          "hobble": 0,
+          "melee": 0
+        },
+        "weapons": [
+          {
+            "name": "",
+            "dmg": "",
+            "min": "",
+            "sht": "",
+            "med": "",
+            "lng": ""
+          },
+          {
+            "name": "",
+            "dmg": "",
+            "min": "",
+            "sht": "",
+            "med": "",
+            "lng": ""
+          },
+          {
+            "name": "",
+            "dmg": "",
+            "min": "",
+            "sht": "",
+            "med": "",
+            "lng": ""
+          },
+          {
+            "name": "",
+            "dmg": "",
+            "min": "",
+            "sht": "",
+            "med": "",
+            "lng": ""
+          }
+        ]
+      }
+    },
+    "npc": {
+      "templates": [
+        "base",
+        "atowCommon"
+      ],
+      "threat": 0
+    },
+    "mech": {
+      "templates": [
+        "base",
+        "mechCommon"
+      ],
+      "stats": {}
+    },
+    "vehicle": {
+      "templates": [
+        "base"
+      ],
+      "stats": {}
+    },
+    "wheeledvehicle": {
+      "templates": [
+        "base"
+      ],
+      "vehicle": {
+        "type": "",
+        "tonnage": 0,
+        "techBase": "",
+        "rulesLevel": "",
+        "role": "",
+        "engine": "",
+        "movement": {
+          "cruise": 0,
+          "flank": 0,
+          "type": "Wheeled"
+        },
+        "bv": 0
+      },
+      "crew": {
+        "name": "",
+        "gunnery": 0,
+        "driving": 0,
+        "commanderHit": 0,
+        "driverHit": 0
+      },
+      "armor": {
+        "front": { "max": 0, "dmg": 0 },
+        "left": { "max": 0, "dmg": 0 },
+        "right": { "max": 0, "dmg": 0 },
+        "rear": { "max": 0, "dmg": 0 },
+        "turret": { "max": 0, "dmg": 0 }
+      },
+      "structure": {
+        "front": { "dmg": 0 },
+        "left": { "dmg": 0 },
+        "right": { "dmg": 0 },
+        "rear": { "dmg": 0 },
+        "turret": { "dmg": 0 }
+      },
+      "crit": {
+        "turretLocked": false,
+        "engineHit": false,
+        "sensorHits": 0,
+        "motiveHits": 0,
+        "stabilizerLeft": false,
+        "stabilizerRight": false,
+        "location": {
+          "front": false,
+          "rear": false,
+          "left": false,
+          "right": false,
+          "turret": false
+        }
+      }
+    }
+  },
+  "Item": {
+    "types": [
+      "skill",
+      "characterSkill",
+      "trait",
+      "characterTrait",
+      "mechWeapon",
+      "mechEquipment",
+      "characterModule",
+      "characterWeapon",
+      "characterArmor",
+      "characterEquipment"
+    ],
+    "templates": {
+      "base": {
+        "description": "",
+        "source": "",
+        "notes": ""
+      }
+    },
+    "skill": {
+      "templates": [
+        "base"
+      ],
+      "rank": 0,
+      "linkedAttribute": "",
+      "specializations": []
+    },
+    "mechWeapon": {
+      "templates": [
+        "base"
+      ],
+      "loc": "",
+      "heat": 0,
+      "damage": 0,
+      "dmgType": "DE",
+      "range": {
+        "min": 0,
+        "short": 0,
+        "medium": 0,
+        "long": 0
+      },
+      "manufacturer": "",
+      "ammoType": "",
+      "specialRules": ""
+    },
+    "mechEquipment": {
+      "templates": [
+        "base"
+      ],
+      "critSlots": 1,
+      "ammoType": "",
+      "ammoAmount": 0,
+      "heatDissipation": 0,
+      "notes": ""
+    },
+    "characterModule": {
+      "templates": [
+        "base"
+      ],
+      "moduleType": "earlyChildhood",
+      "moduleCost": 0,
+      "description": "",
+      "prereq": {
+        "affiliation": "any",
+        "attributesText": ""
+      },
+      "fixed": {
+        "attributesText": "",
+        "skillsText": "",
+        "traitsText": ""
+      },
+      "flexible": {
+        "amount": 25,
+        "picks": 0,
+        "allowAttributes": true,
+        "allowSkills": false,
+        "allowTraits": true
+      }
+    },
+    "characterWeapon": {
+      "templates": [
+        "base"
+      ],
+      "ratings": {
+        "tech": "",
+        "legality": "",
+        "availability": ""
+      },
+      "damage": {
+        "ap": "",
+        "bd": ""
+      },
+      "range": "",
+      "shots": "",
+      "costReload": "",
+      "affiliation": "",
+      "mass": {
+        "weaponKg": 0,
+        "reloadKg": 0
+      },
+      "notes": ""
+    },
+    "characterArmor": {
+      "templates": [
+        "base"
+      ],
+      "ratings": {
+        "tech": "",
+        "legality": "",
+        "availability": ""
+      },
+      "bar": {
+        "m": "",
+        "b": "",
+        "e": "",
+        "x": ""
+      },
+      "costPatch": "",
+      "affiliation": "",
+      "massKg": 0,
+      "coverage": {
+        "head": false,
+        "torso": false,
+        "arms": false,
+        "legs": false,
+        "hands": false,
+        "feet": false
+      },
+      "notes": ""
+    },
+    "characterSkill": {
+      "templates": [
+        "base"
+      ],
+      "rank": 0,
+      "linkedAttribute": "",
+      "specializations": []
+    },
+    "trait": {
+      "templates": [
+        "base"
+      ],
+      "category": "advantage",
+      "cost": 0
+    },
+    "characterTrait": {
+      "templates": [
+        "base"
+      ],
+      "category": "advantage",
+      "cost": 0
+    },
+    "characterEquipment": {
+      "templates": [
+        "base"
+      ],
+      "equipped": false,
+      "gearType": "miscellaneous",
+      "ratings": {
+        "tech": "",
+        "availability": "",
+        "legality": ""
+      },
+      "costCbills": 0,
+      "massKg": 0,
+      "powerUsePph": 0,
+      "range": "",
+      "notes": ""
+    }
+  }
+}

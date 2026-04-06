@@ -1,0 +1,565 @@
+<div class="atow-character-sheet">
+  {{!-- version: 0.1.3 --}}
+  {{!-- templates/character-sheet.hbs --}}
+  {{!-- IMPORTANT: Do NOT wrap this template in <form>...</form>. SheetV2 provides the form wrapper. --}}
+
+  <header class="atow-topbar">
+    <div class="brand">
+      <div class="brand-title">BATTLETECH</div>
+      <div class="brand-sub">A TIME OF WAR</div>
+    </div>
+
+    <div class="top-right">
+      <button type="button" class="atow-icon-btn" data-action="roll-initiative" title="Roll Initiative (2d6)">
+        <i class="fas fa-dice"></i>
+      </button>
+    </div>
+  </header>
+
+  
+
+
+    <section class="atow-panel atow-panel-wide atow-personal-wide">
+      <div class="panel-title">Personal Data</div>
+
+      <div class="personal-portrait-grid">
+        <div class="portrait-col">
+          <img class="profile-img char-portrait" src="{{actor.img}}" data-edit="img" title="{{actor.name}}" />
+        </div>
+
+        <div class="personal-grid personal-grid-compact">
+        <div class="personal-left">
+          <div class="personal-field personal-name">
+            <label>Name</label>
+            <input name="name" type="text" value="{{actor.name}}" placeholder="Name" />
+          </div>
+
+          <div class="personal-two">
+            <div class="personal-field">
+              <label>Height</label>
+              <input name="system.personal.height" type="number" value="{{system.personal.height}}" />
+            </div>
+
+            <div class="personal-field">
+              <label>Weight</label>
+              <input name="system.personal.weight" type="number" value="{{system.personal.weight}}" />
+            </div>
+          </div>
+
+          <div class="personal-two">
+            <div class="personal-field">
+              <label>Hair</label>
+              <input name="system.personal.hair" type="text" value="{{system.personal.hair}}" />
+            </div>
+
+            <div class="personal-field">
+              <label>Eyes</label>
+              <input name="system.personal.eyes" type="text" value="{{system.personal.eyes}}" />
+            </div>
+          </div>
+        </div>
+
+        <div class="personal-right">
+          <div class="personal-field">
+            <label>Player</label>
+            <input name="system.player" type="text" value="{{system.player}}" placeholder="Player" />
+          </div>
+
+          <div class="personal-field">
+            <label>Affiliation</label>
+            <input name="system.affiliation" type="text" value="{{system.affiliation}}" />
+          </div>
+
+          <div class="personal-field personal-extra">
+            <label>Extra</label>
+            <input name="system.personal.extra" type="text" value="{{system.personal.extra}}" />
+          </div>
+        </div>
+        </div>
+      </div>
+
+    </section>
+
+  
+  <section class="atow-grid atow-grid-2 atow-core-grid">
+    <div class="atow-left-stack">
+<section class="atow-panel">
+      <div class="panel-title">Attributes</div>
+
+      <table class="atow-table">
+        <thead>
+          <tr>
+            <th class="col-attr">Attribute</th>
+            <th class="col-score">Score</th>
+            <th class="col-link">Link</th>
+            <th class="col-xp">XP</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{#each attributes as |a|}}
+            <tr>
+              <td class="mono">{{a.label}}</td>
+              <td><input type="number" value="{{a.value}}" disabled /></td>
+              <td><input type="number" value="{{a.link}}" disabled /></td>
+              <td><input class="attr-xp" name="system.attributes.{{a.key}}.xp" type="number" value="{{a.xp}}" /></td>
+            </tr>
+          {{/each}}
+        </tbody>
+      </table>
+    </section>
+
+<section class="atow-panel">
+      <div class="panel-title">
+        <span>Traits (Personal)</span>
+        <button type="button" class="atow-mini-btn item-create" data-type="characterTrait" title="Add Trait">
+          <i class="fas fa-plus"></i> Add
+        </button>
+      </div>
+
+      <table class="atow-table">
+        <thead>
+          <tr>
+            <th>Trait</th>
+            <th class="col-small">TP</th>
+            <th class="col-small">Page</th>
+            <th class="col-small">XP</th>
+            <th class="col-small">On?</th>
+            <th class="col-controls"></th>
+          </tr>
+        </thead>
+        <tbody>
+          {{#each traits as |t|}}
+            <tr class="item" data-item-id="{{t._id}}">
+              <td class="truncate">
+                <span class="dot {{#if t.active}}on{{else}}off{{/if}}" title="{{#if t.active}}Active{{else}}Inactive{{/if}}"></span>
+                {{t.name}}
+              </td>
+              <td><input type="number" value="{{t.tp}}" disabled /></td>
+              <td><input type="text" value="{{t.pageRef}}" placeholder="p. ___" /></td>
+              <td><input class="trait-cost" type="number" value="{{t.cost}}" data-item-id="{{t._id}}" /></td>
+              <td><input type="text" value="{{#if t.active}}Yes{{else}}No{{/if}}" disabled /></td>
+              <td class="controls">
+                <a class="item-edit" title="Edit"><i class="fas fa-edit"></i></a>
+                <a class="item-delete" title="Delete"><i class="fas fa-trash"></i></a>
+              </td>
+            </tr>
+          {{/each}}
+        </tbody>
+      </table>
+
+      <div class="mini-note">Trait is Active when XP reaches TP × 100 (XP can be negative).</div>
+    </section>
+    </div>
+
+    <section class="atow-panel atow-combat-tall">
+      <div class="panel-title">Combat Data</div>
+
+      {{!-- CONDITION MONITOR --}}
+      <div class="combat-section">
+        <div class="combat-label">Condition Monitor</div>
+
+        <div class="combat-cond-grid">
+          <div class="cond-left">
+            <div class="pip-line">
+              <span class="pip-label">Standard Damage:</span>
+              <div class="pip-rows" aria-label="Standard Damage">
+                {{#each healthPipRows as |row|}}
+                  <div class="pip-row">
+                    {{#each row as |p|}}
+                      <span class="pip {{#if p.filled}}filled{{/if}}" data-track="health" data-value="{{p.value}}"></span>
+                    {{/each}}
+                  </div>
+                {{/each}}
+              </div>
+            </div>
+
+            <div class="pip-line">
+              <span class="pip-label">Fatigue Damage:</span>
+              <div class="pip-rows" aria-label="Fatigue Damage">
+                {{#each fatiguePipRows as |row|}}
+                  <div class="pip-row">
+                    {{#each row as |p|}}
+                      <span class="pip {{#if p.filled}}filled{{/if}}" data-track="fatigue" data-value="{{p.value}}"></span>
+                    {{/each}}
+                  </div>
+                {{/each}}
+              </div>
+            </div>
+
+            <div class="combat-toggles">
+              <label class="combat-toggle">
+                <span>Stun:</span>
+                <input type="checkbox" name="system.combat.stun" {{checked combatFlags.stun}} />
+              </label>
+              <label class="combat-toggle">
+                <span>Unconscious:</span>
+                <input type="checkbox" name="system.combat.unconscious" {{checked combatFlags.unconscious}} />
+              </label>
+            </div>
+          </div>
+
+          <div class="cond-right">
+            <div class="track">
+              <div class="track-label">Edge</div>
+              <div class="track-input">
+                <input name="system.edge.value" type="number" value="{{system.edge.value}}" />
+                <span class="slash">/</span>
+                <input name="system.edge.max" type="number" value="{{system.edge.max}}" disabled title="Max Edge is derived from EDG" />
+                <input type="hidden" name="system.edge.max" value="{{system.edge.max}}" />
+              </div>
+            </div>
+
+            <div class="track">
+              <div class="track-label">XP (Spent / Earned)</div>
+              <div class="track-input">
+                <input type="number" value="{{xpSummary.spentTotal}}" disabled />
+                <span class="slash">/</span>
+                <input name="system.xp.total" type="number" value="{{xpSummary.earnedTotal}}" />
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+{{!-- MOVEMENT --}}
+      <div class="combat-section">
+        <div class="combat-label">Movement (Meters per Turn)</div>
+
+        <div class="move-2col">
+          <div class="move-col">
+            <div class="move-line">
+              <span class="move-name">Walk</span>
+              <input type="number" value="{{derivedMove.walk}}" disabled />
+            </div>
+            <div class="move-line">
+              <span class="move-name">Run / Evade</span>
+              <input type="number" value="{{derivedMove.run}}" disabled />
+            </div>
+            <div class="move-line">
+              <span class="move-name">Sprint</span>
+              <input type="number" value="{{derivedMove.sprint}}" disabled />
+            </div>
+          </div>
+
+          <div class="move-col">
+            <div class="move-line">
+              <span class="move-name">Climb</span>
+              <input type="number" value="{{derivedMove.climb}}" disabled />
+            </div>
+            <div class="move-line">
+              <span class="move-name">Crawl</span>
+              <input type="number" value="{{derivedMove.crawl}}" disabled />
+            </div>
+            <div class="move-line">
+              <span class="move-name">Swim</span>
+              <input type="number" value="{{derivedMove.swim}}" disabled />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {{!-- PERSONAL ARMOR --}}
+      <div class="combat-section">
+        <div class="combat-label combat-label-row">
+          <span>Personal Armor</span>
+        </div>
+
+        <div class="combat-list combat-armor-list">
+          <div class="combat-list-header armor">
+            <span class="h-name">Armor</span>
+            <span class="h-loc">Loc</span>
+            <span class="h-type">Type</span>
+            <span class="h-mbex">M/B/E/X</span>
+            <span class="h-controls"></span>
+          </div>
+
+          {{#each combatArmor as |a idx|}}
+            <div class="combat-row armor-row">
+              <input class="combat-input armor-name" type="text" value="{{a.name}}" placeholder="—" readonly />
+              <input class="combat-input loc" type="text" value="{{a.loc}}" placeholder="Loc" readonly />
+              <input class="combat-input type" type="text" value="{{a.type}}" placeholder="Armor Type" readonly />
+
+              <div class="armor-mbex">
+                <input class="combat-input mbex" type="number" value="{{a.m}}" placeholder="M" readonly />
+                <input class="combat-input mbex" type="number" value="{{a.b}}" placeholder="B" readonly />
+                <input class="combat-input mbex" type="number" value="{{a.e}}" placeholder="E" readonly />
+                <input class="combat-input mbex" type="number" value="{{a.x}}" placeholder="X" readonly />
+              </div>
+            </div>
+          {{/each}}
+        </div>
+      </div>
+
+{{!-- WEAPONS --}}
+      <div class="combat-section">
+        <div class="combat-label combat-label-row">
+          <span>Weapons</span>
+        </div>
+
+        <div class="combat-list combat-weapons-list">
+          <div class="combat-list-header weapons">
+            <span class="h-name">Weapon</span>
+            <span class="h-skill">Skill</span>
+            <span class="h-apbd">AP/BD</span>
+            <span class="h-range">Range</span>
+            <span class="h-ammo">Ammo</span>
+            <span class="h-notes">Notes</span>
+            <span class="h-controls"></span>
+          </div>
+
+          {{#each combatWeapons as |w idx|}}
+            <div class="combat-row weapon-row">
+              <input class="combat-input grow weapon-roll" type="text" value="{{w.name}}" placeholder="—" readonly data-action="roll-weapon" data-item-id="{{w._sourceItemId}}" title="Roll Attack" />
+              <input class="combat-input w-skill" type="text" value="{{w.skill}}" placeholder="Skill" readonly />
+              <input class="combat-input w-apbd" type="text" value="{{w.apbd}}" placeholder="AP/BD" readonly />
+              <input class="combat-input w-range" type="text" value="{{w.range}}" placeholder="Range" readonly />
+              <input class="combat-input w-ammo" type="number" value="{{w.ammo}}" placeholder="Ammo" readonly />
+              <input class="combat-input w-notes" type="text" value="{{w.notes}}" placeholder="Notes" readonly />
+            </div>
+          {{/each}}
+        </div>
+      </div>
+
+    </section>
+  </section>
+
+
+
+
+
+
+  
+
+{{!-- SKILLS (two-column, like the canon sheet) --}}
+  <section class="atow-panel atow-panel-wide">
+    <div class="panel-title">
+      <span>Skills</span>
+      <button type="button" class="atow-mini-btn item-create" data-type="characterSkill" title="Add Skill">
+        <i class="fas fa-plus"></i> Add
+      </button>
+    </div>
+
+    <div class="skills-two-col">
+      <table class="atow-table skills">
+        <thead>
+          <tr>
+            <th>Skill</th>
+            <th class="col-small">Lvl</th>
+            <th>Links</th>
+            <th class="col-small">TN/C</th>
+            <th class="col-small">XP</th>
+            <th class="col-controls"></th>
+          </tr>
+        </thead>
+        <tbody>
+          {{#each skillsLeft as |s|}}
+            <tr class="item" data-item-id="{{s._id}}">
+              <td class="truncate">
+                <a class="rollable" data-action="roll-skill" data-item-id="{{s._id}}">
+                  <i class="fas fa-dice"></i> {{s.name}}
+                </a>
+              </td>
+              <td><input type="number" value="{{s.rank}}" disabled /></td>
+              <td class="mono">{{s.attrLabels}} ({{s.totalLink}})</td>
+              <td class="mono">{{s.tnc}}</td>
+              <td><input class="skill-xp" type="number" value="{{s.xp}}" data-item-id="{{s._id}}" /></td>
+              <td class="controls">
+                <a class="item-edit" title="Edit"><i class="fas fa-edit"></i></a>
+                <a class="item-delete" title="Delete"><i class="fas fa-trash"></i></a>
+              </td>
+            </tr>
+          {{/each}}
+        </tbody>
+      </table>
+
+      <table class="atow-table skills">
+        <thead>
+          <tr>
+            <th>Skill</th>
+            <th class="col-small">Lvl</th>
+            <th>Links</th>
+            <th class="col-small">TN/C</th>
+            <th class="col-small">XP</th>
+            <th class="col-controls"></th>
+          </tr>
+        </thead>
+        <tbody>
+          {{#each skillsRight as |s|}}
+            <tr class="item" data-item-id="{{s._id}}">
+              <td class="truncate">
+                <a class="rollable" data-action="roll-skill" data-item-id="{{s._id}}">
+                  <i class="fas fa-dice"></i> {{s.name}}
+                </a>
+              </td>
+              <td><input type="number" value="{{s.rank}}" disabled /></td>
+              <td class="mono">{{s.attrLabels}} ({{s.totalLink}})</td>
+              <td class="mono">{{s.tnc}}</td>
+              <td><input class="skill-xp" type="number" value="{{s.xp}}" data-item-id="{{s._id}}" /></td>
+              <td class="controls">
+                <a class="item-edit" title="Edit"><i class="fas fa-edit"></i></a>
+                <a class="item-delete" title="Delete"><i class="fas fa-trash"></i></a>
+              </td>
+            </tr>
+          {{/each}}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  {{!-- GEAR + NOTES/BIO (kept compact) --}}
+  <section class="atow-grid atow-grid-2">
+    <section class="atow-panel">
+      <div class="panel-title">
+        <span>Gear</span>
+        <button type="button" class="atow-mini-btn item-create" data-type="characterEquipment" title="Add Equipment">
+          <i class="fas fa-plus"></i> Add
+        </button>
+      </div>
+
+      
+      <table class="atow-table gear-table gear-drop-zone">
+        <thead>
+          <tr>
+            <th class="col-small">Eq</th>
+            <th>Item</th>
+            <th class="col-small">Type</th>
+            <th class="col-small">Mass</th>
+            <th>Notes</th>
+            <th class="col-controls"></th>
+          </tr>
+        </thead>
+        <tbody>
+          {{#each gearItems as |g|}}
+            <tr class="item" data-item-id="{{g._id}}">
+              <td class="gear-eq">
+                <a class="gear-equip-toggle" data-item-id="{{g._id}}" title="Toggle Equipped">
+                  <i class="{{#if g.equipped}}fas fa-check-square{{else}}far fa-square{{/if}}"></i>
+                </a>
+              </td>
+
+              <td class="gear-item-cell">
+                <img class="item-icon" src="{{g.img}}" alt="{{g.name}}" width="20" height="20" />
+                <span class="item-name truncate">{{g.name}}</span>
+              </td>
+
+              <td class="mono">{{g.typeLabel}}</td>
+              <td class="mono">{{#if g.mass}}{{g.mass}}{{else}}—{{/if}}</td>
+              <td class="truncate">{{g.notes}}</td>
+
+              <td class="controls">
+                <a class="item-edit" title="Edit"><i class="fas fa-edit"></i></a>
+                <a class="item-delete" title="Delete"><i class="fas fa-trash"></i></a>
+              </td>
+            </tr>
+          {{/each}}
+        </tbody>
+      </table>
+
+      {{!--
+        Gear row sizing guard:
+        Some global sheet CSS rules can cause <img> to expand to 100% width/height.
+        Keep Gear item icons constrained so a single dropped item doesn't balloon the section.
+      --}}
+      <style>
+        .atow-character-sheet .gear-table td { vertical-align: middle; }
+        .atow-character-sheet .gear-table .gear-item-cell {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          min-width: 0;
+        }
+        .atow-character-sheet .gear-table .gear-item-cell .item-name {
+          min-width: 0;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+        .atow-character-sheet .gear-table .item-icon {
+          width: 20px !important;
+          height: 20px !important;
+          flex: 0 0 20px;
+          object-fit: contain;
+          border-radius: 4px;
+        }
+        .atow-character-sheet .gear-table tbody tr { height: 32px; }
+      </style>
+
+    </section>
+
+    <section class="atow-panel">
+      <div class="panel-title">Notes / Bio</div>
+      <div class="textareas">
+        <div class="ta">
+          <label>Notes</label>
+          <textarea name="system.notes" rows="6">{{system.notes}}</textarea>
+        </div>
+        <div class="ta">
+          <label>Biography</label>
+          <textarea name="system.biography" rows="6">{{system.biography}}</textarea>
+        </div>
+      </div>
+    </section>
+  </section>
+
+  {{!-- BIOGRAPHY (Life Modules) --}}
+  <section class="atow-panel atow-panel-wide atow-biography">
+    <div class="panel-title">Biography</div>
+
+    <div class="bio-grid">
+      <div class="bio-col">
+        <div class="bio-col-title">Life Module</div>
+
+        <div class="bio-lines">
+          <div class="bio-line">
+            <span class="bio-label">1 / Early Childhood:</span>
+            <input type="text" name="system.biographyModules.0" value="{{lookup system.biographyModules 0}}" />
+          </div>
+          <div class="bio-line">
+            <span class="bio-label">2 / Late Childhood:</span>
+            <input type="text" name="system.biographyModules.1" value="{{lookup system.biographyModules 1}}" />
+          </div>
+          <div class="bio-line">
+            <span class="bio-label">3:</span>
+            <input type="text" name="system.biographyModules.2" value="{{lookup system.biographyModules 2}}" />
+          </div>
+          <div class="bio-line">
+            <span class="bio-label">4:</span>
+            <input type="text" name="system.biographyModules.3" value="{{lookup system.biographyModules 3}}" />
+          </div>
+          <div class="bio-line">
+            <span class="bio-label">5:</span>
+            <input type="text" name="system.biographyModules.4" value="{{lookup system.biographyModules 4}}" />
+          </div>
+          <div class="bio-line">
+            <span class="bio-label">6:</span>
+            <input type="text" name="system.biographyModules.5" value="{{lookup system.biographyModules 5}}" />
+          </div>
+          <div class="bio-line">
+            <span class="bio-label">7:</span>
+            <input type="text" name="system.biographyModules.6" value="{{lookup system.biographyModules 6}}" />
+          </div>
+          <div class="bio-line">
+            <span class="bio-label">8:</span>
+            <input type="text" name="system.biographyModules.7" value="{{lookup system.biographyModules 7}}" />
+          </div>
+          <div class="bio-line">
+            <span class="bio-label">9:</span>
+            <input type="text" name="system.biographyModules.8" value="{{lookup system.biographyModules 8}}" />
+          </div>
+          <div class="bio-line">
+            <span class="bio-label">10:</span>
+            <input type="text" name="system.biographyModules.9" value="{{lookup system.biographyModules 9}}" />
+          </div>
+        </div>
+      </div>
+
+      <div class="bio-col">
+        <div class="bio-col-title">Other Notes</div>
+
+        <textarea class="bio-notes" name="system.biographyNotes" rows="10">{{system.biographyNotes}}</textarea>
+      </div>
+    </div>
+  </section>
+
+
+</div>

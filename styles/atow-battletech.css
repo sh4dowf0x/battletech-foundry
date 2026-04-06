@@ -1,0 +1,259 @@
+/* styles/atow-battletech.css */
+.atow.sheet.actor.character {
+  --atow-gap: 10px;
+  --atow-radius: 10px;
+  --atow-border: 1px solid var(--color-border-light-2);
+  --atow-bg: var(--color-bg);
+  --atow-panel: var(--color-bg-option);
+}
+
+/* Layout helpers */
+.atow .grid {
+  display: grid;
+  gap: var(--atow-gap);
+}
+.atow .grid-2col {
+  grid-template-columns: 1fr 1fr;
+}
+@media (max-width: 900px) {
+  .atow .grid-2col {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Header */
+.atow .sheet-header {
+  display: grid;
+  grid-template-columns: 96px 1fr;
+  gap: var(--atow-gap);
+  align-items: center;
+  margin-bottom: var(--atow-gap);
+}
+.atow .profile-img {
+  width: 96px;
+  height: 96px;
+  border-radius: var(--atow-radius);
+  border: var(--atow-border);
+  object-fit: cover;
+}
+.atow .charname input {
+  width: 100%;
+  font-size: 1.6rem;
+  font-weight: 700;
+  border: 0;
+  border-bottom: var(--atow-border);
+  border-radius: 0;
+  background: transparent;
+  padding: 4px 2px;
+}
+.atow .header-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--atow-gap);
+  margin-top: 6px;
+}
+.atow .field label {
+  display: block;
+  font-size: 0.8rem;
+  opacity: 0.85;
+  margin-bottom: 2px;
+}
+.atow input[type="text"],
+.atow input[type="number"],
+.atow textarea {
+  width: 100%;
+  border: var(--atow-border);
+  border-radius: 8px;
+  padding: 6px 8px;
+  background: var(--atow-bg);
+}
+
+/* Resources */
+.atow .resources {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--atow-gap);
+  margin-bottom: var(--atow-gap);
+}
+@media (max-width: 900px) {
+  .atow .resources {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+.atow .resource {
+  border: var(--atow-border);
+  border-radius: var(--atow-radius);
+  padding: 8px;
+  background: var(--atow-panel);
+}
+.atow .resource > label {
+  display: block;
+  font-size: 0.8rem;
+  opacity: 0.85;
+  margin-bottom: 6px;
+}
+.atow .resource-row {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  gap: 6px;
+  align-items: center;
+}
+.atow .resource-row span {
+  opacity: 0.7;
+  text-align: center;
+}
+
+/* Tabs */
+.atow .sheet-tabs {
+  display: flex;
+  gap: 6px;
+  border-bottom: var(--atow-border);
+  margin: 6px 0 var(--atow-gap);
+  padding-bottom: 6px;
+}
+.atow .sheet-tabs .item {
+  padding: 6px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  user-select: none;
+  border: 1px solid transparent;
+}
+.atow .sheet-tabs .item.active {
+  background: var(--atow-panel);
+  border-color: var(--color-border-light-2);
+}
+
+/* Panels */
+.atow .panel {
+  border: var(--atow-border);
+  border-radius: var(--atow-radius);
+  padding: 10px;
+  background: var(--atow-panel);
+}
+.atow .panel h2 {
+  font-size: 1.1rem;
+  margin: 0 0 10px 0;
+}
+
+/* Attributes */
+.atow .attr-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--atow-gap);
+}
+@media (max-width: 900px) {
+  .atow .attr-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+.atow .attr {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 4px;
+}
+.atow .attr label {
+  font-size: 0.8rem;
+  opacity: 0.85;
+}
+
+/* Derived */
+.atow .derived-row {
+  display: grid;
+  grid-template-columns: 1fr 2fr;
+  gap: var(--atow-gap);
+  align-items: center;
+  margin-bottom: 10px;
+}
+.atow .derived-controls {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 6px;
+  align-items: center;
+}
+.atow .derived-controls.move {
+  grid-template-columns: 1fr 1fr 1fr;
+}
+.atow button.roll {
+  width: 36px;
+  height: 34px;
+  border-radius: 8px;
+  border: var(--atow-border);
+  background: var(--atow-bg);
+  cursor: pointer;
+}
+.atow button.roll:hover {
+  filter: brightness(1.05);
+}
+
+/* Lists (Skills/Gear) */
+.atow .list-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--atow-gap);
+  margin-bottom: 8px;
+}
+.atow .item-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.atow .item {
+  border: var(--atow-border);
+  border-radius: var(--atow-radius);
+  background: var(--atow-bg);
+  padding: 8px;
+  margin-bottom: 8px;
+}
+.atow .item-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: var(--atow-gap);
+  align-items: center;
+}
+.atow .item-name {
+  font-weight: 600;
+}
+.atow .rollable {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  text-decoration: none;
+}
+.atow .rollable:hover {
+  text-decoration: underline;
+}
+.atow .item-fields {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.atow .field.small input {
+  width: 70px;
+  text-align: center;
+}
+.atow .item-controls {
+  display: inline-flex;
+  gap: 8px;
+  opacity: 0.9;
+}
+.atow .item-controls a {
+  cursor: pointer;
+}
+.atow .item-controls a:hover {
+  opacity: 1;
+}
+
+/* Textareas */
+.atow textarea {
+  resize: vertical;
+  min-height: 80px;
+}
+
+/* Small separators */
+.atow hr {
+  border: 0;
+  border-top: 1px solid var(--color-border-light-2);
+  margin: 10px 0;
+}

@@ -1,0 +1,59 @@
+<div class="atow-sheet atow-skill-sheet">
+  <header class="sheet-header">
+    <div class="header-left">
+      <img class="profile-img" src="{{item.img}}" data-edit="img" title="{{item.name}}" />
+    </div>
+
+    <div class="header-right">
+      <h1 class="itemname">
+        <input name="name" type="text" value="{{item.name}}" placeholder="Skill Name" />
+      </h1>
+
+      <div class="header-fields">
+        <div class="field">
+          <label>Default TN</label>
+          <select name="system.tn">
+            {{#each tnOptions as |tn|}}
+              <option value="{{tn}}" {{#ifEq tn ../selected.tn}}selected{{/ifEq}}>{{tn}}</option>
+            {{/each}}
+          </select>
+        </div>
+
+        <div class="field">
+          <label>XP</label>
+          <input name="system.xp" type="number" value="{{system.xp}}" />
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <section class="panel">
+    <h2>Linked Attributes</h2>
+    <small style="opacity:0.75;">A skill can have up to two linked attributes.</small>
+
+    <div class="grid grid-2col" style="margin-top: 0.5rem;">
+      <div class="field">
+        <label>Linked Attribute 1</label>
+        <select name="system.linkedAttribute1">
+          {{#each attributeOptions as |a|}}
+            <option value="{{a.value}}" {{#ifEq a.value ../selected.linkedAttribute1}}selected{{/ifEq}}>{{a.label}}</option>
+          {{/each}}
+        </select>
+      </div>
+
+      <div class="field">
+        <label>Linked Attribute 2</label>
+        <select name="system.linkedAttribute2">
+          {{#each attributeOptions as |a|}}
+            <option value="{{a.value}}" {{#ifEq a.value ../selected.linkedAttribute2}}selected{{/ifEq}}>{{a.label}}</option>
+          {{/each}}
+        </select>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>Notes</h2>
+    <textarea name="system.notes" rows="8">{{system.notes}}</textarea>
+  </section>
+</div>

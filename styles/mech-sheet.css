@@ -1,0 +1,755 @@
+/* systems/atow-battletech/styles/mech-sheet.css */
+/* Scope everything to the mech sheet so we don't accidentally style other sheets */
+.atow.battletech.sheet.mech {
+  --gap: 8px;
+  --pad: 6px;
+  --border: 1px solid rgba(0, 0, 0, 0.25);
+  --muted: rgba(0, 0, 0, 0.65);
+}
+
+/* ===== Layout ===== */
+
+.atow.battletech.sheet.mech .sheet-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--gap);
+  padding: var(--pad);
+  border-bottom: var(--border);
+}
+
+.atow.battletech.sheet.mech .sheet-header .name {
+  font-size: 18px;
+  font-weight: 700;
+  width: 100%;
+}
+
+.atow.battletech.sheet.mech .sheet-body {
+  padding: var(--pad);
+}
+
+/* 3-column grid */
+.atow.battletech.sheet.mech .mech-layout {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: var(--gap);
+  align-items: start;
+}
+
+.atow.battletech.sheet.mech .mech-col {
+  min-width: 0; /* allows tables to shrink instead of overflowing */
+}
+
+/* Explicit column placement (prevents auto-placement surprises) */
+.atow.battletech.sheet.mech .mech-col-1 { grid-column: 1; grid-row: 1; }
+.atow.battletech.sheet.mech .mech-col-2 { grid-column: 2; grid-row: 1; }
+.atow.battletech.sheet.mech .mech-col-3 { grid-column: 3; grid-row: 1 / span 2; }
+.atow.battletech.sheet.mech .crit-panel { grid-column: 1 / span 2; grid-row: 2; }
+
+/* ===== Panels ===== */
+
+.atow.battletech.sheet.mech .panel {
+  border: var(--border);
+  border-radius: 5px;
+  padding: var(--pad);
+  margin-bottom: var(--gap);
+}
+
+.atow.battletech.sheet.mech .panel h3 {
+  margin: 0 0 6px 0;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+}
+
+.atow.battletech.sheet.mech .panel-empty {
+  min-height: 220px;
+  opacity: 0.35;
+}
+
+/* ===== Compact info grid (two fields per line) ===== */
+
+.atow.battletech.sheet.mech .info-grid {
+  display: grid;
+  gap: 8px;
+}
+
+.atow.battletech.sheet.mech .info-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--gap);
+}
+
+.atow.battletech.sheet.mech .info-field label {
+  display: block;
+  font-weight: 700;
+  font-size: 11px;
+  margin-bottom: 3px;
+  color: var(--muted);
+}
+
+.atow.battletech.sheet.mech input[type="text"],
+.atow.battletech.sheet.mech input[type="number"],
+.atow.battletech.sheet.mech textarea {
+  width: 100%;
+  height: 22px;
+  padding: 3px 6px;
+  border: var(--border);
+  border-radius: 4px;
+}
+
+.atow.battletech.sheet.mech textarea {
+  height: auto;
+  min-height: 120px;
+}
+
+.atow.battletech.sheet.mech .inline {
+  display: flex;
+  gap: 6px;
+}
+
+.atow.battletech.sheet.mech .inline input {
+  flex: 1;
+}
+
+/* movement: tighter little boxes */
+.atow.battletech.sheet.mech .inline.movement {
+  align-items: center;
+  gap: 6px;
+}
+
+.atow.battletech.sheet.mech .inline.movement input {
+  width: 48px;
+  flex: 0 0 auto;
+  text-align: center;
+}
+
+.atow.battletech.sheet.mech .mini-label {
+  font-size: 11px;
+  font-weight: 700;
+  opacity: 0.75;
+  user-select: none;
+}
+
+/* ===== Drop Zone ===== */
+
+.atow.battletech.sheet.mech .drop-zone {
+  border: 2px dashed rgba(0, 0, 0, 0.25);
+  border-radius: 5px;
+  padding: 8px;
+}
+
+.atow.battletech.sheet.mech .drop-hint {
+  font-size: 11px;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+/* ===== Weapons/Equipment table ===== */
+
+.atow.battletech.sheet.mech .we-table {
+  display: grid;
+  gap: 2px;
+}
+
+.atow.battletech.sheet.mech .we-row {
+  display: grid;
+  /* Type Loc Ht Dmg | Min Sht Med Lng + ctrl */
+  grid-template-columns: 2.2fr 0.6fr 0.5fr 0.6fr 0.2fr 0.55fr 0.55fr 0.55fr 0.55fr 0.4fr;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border-radius: 4px;
+}
+
+.atow.battletech.sheet.mech .we-header {
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  opacity: 0.8;
+  border-bottom: var(--border);
+  border-radius: 0;
+  padding-bottom: 6px;
+}
+
+.atow.battletech.sheet.mech .we-row:not(.we-header):hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.atow.battletech.sheet.mech .we-col {
+  font-size: 11px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.atow.battletech.sheet.mech .we-col.sep {
+  border-left: var(--border);
+  height: 100%;
+}
+
+.atow.battletech.sheet.mech .we-col.type a {
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.atow.battletech.sheet.mech .we-col.ctrl {
+  text-align: right;
+}
+
+.atow.battletech.sheet.mech .item-delete {
+  cursor: pointer;
+  font-weight: 900;
+  opacity: 0.7;
+}
+
+.atow.battletech.sheet.mech .item-delete:hover {
+  opacity: 1;
+}
+
+/* ===== Physical Attacks table ===== */
+
+.atow.battletech.sheet.mech 
+/* --- Ammunition panel --- */
+.atow.battletech.sheet.mech .ammo-table{
+  display: grid;
+  gap: 2px;
+}
+
+.atow.battletech.sheet.mech .ammo-row{
+  display: grid;
+  grid-template-columns: 1.6fr 0.7fr 0.7fr;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border-radius: 4px;
+}
+
+.atow.battletech.sheet.mech .ammo-header{
+  font-size: 11px;
+  text-transform: uppercase;
+  opacity: 0.75;
+  background: rgba(0,0,0,0.15);
+}
+
+.atow.battletech.sheet.mech .ammo-col.cur input{
+  width: 100%;
+  height: 24px;
+}
+
+.atow.battletech.sheet.mech .ammo-empty{
+  padding: 6px;
+}
+
+.pa-table {
+  display: grid;
+  gap: 2px;
+}
+
+.atow.battletech.sheet.mech .pa-row {
+  display: grid;
+  grid-template-columns: 1.4fr 0.8fr 0.6fr;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border-radius: 4px;
+}
+
+.atow.battletech.sheet.mech .pa-header {
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  opacity: 0.8;
+  border-bottom: var(--border);
+  border-radius: 0;
+  padding-bottom: 6px;
+}
+
+.atow.battletech.sheet.mech .pa-col input {
+  height: 24px;
+}
+
+/* ===== Responsive fallback (optional) ===== */
+@media (max-width: 1100px) {
+  .atow.battletech.sheet.mech .mech-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* --- Warrior Data panel (Column 2) --- */
+.atow.battletech.sheet.mech .warrior-data .wd-row{
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.atow.battletech.sheet.mech .warrior-data .wd-two{
+  grid-template-columns: 1fr 1fr;
+}
+
+.atow.battletech.sheet.mech .warrior-data .wd-two .wd-field{
+  display: grid;
+  grid-template-rows: auto auto;
+  gap: 3px;
+}
+
+.atow.battletech.sheet.mech .warrior-data label{
+  font-weight: 700;
+  font-size: 11px;
+  color: rgba(0,0,0,0.65);
+}
+
+.atow.battletech.sheet.mech .warrior-data label.rollable{
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+}
+
+.atow.battletech.sheet.mech .track{
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  gap: 4px;
+}
+
+.atow.battletech.sheet.mech .track-box{
+  border: 1px solid rgba(0,0,0,0.35);
+  border-radius: 4px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  font-weight: 800;
+  user-select: none;
+  cursor: pointer;
+  background: rgba(255,255,255,0.6);
+}
+
+.atow.battletech.sheet.mech .track-box.filled,
+.atow.battletech.sheet.mech .track-box.active{
+  background: rgba(0,0,0,0.12);
+}
+
+.atow.battletech.sheet.mech .mech-portrait-panel .mech-portrait-img{
+  width: 100%;
+  height: auto;
+  max-height: 520px;
+  object-fit: contain;
+  border: 1px solid rgba(0,0,0,0.25);
+  border-radius: 5px;
+}
+
+/* ===== Column 3: Armor Diagram ===== */
+.atow.battletech.sheet.mech .armor-panel .armor-controls{
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px 10px;
+  margin-bottom: 10px;
+}
+
+.atow.battletech.sheet.mech .armor-panel .armor-control{
+  display: grid;
+  grid-template-columns: 1fr 70px;
+  gap: 6px;
+  align-items: center;
+}
+
+.atow.battletech.sheet.mech .armor-panel .armor-control label{
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  opacity: 0.75;
+}
+
+.atow.battletech.sheet.mech .armor-panel .armor-control input{
+  height: 22px;
+  text-align: center;
+}
+
+.atow.battletech.sheet.mech .armor-diagram{
+  position: relative;
+  width: 100%;
+  aspect-ratio: 685 / 998; /* matches your provided image */
+  border: 1px solid rgba(0,0,0,0.25);
+  border-radius: 5px;
+  background: url("../assets/armor-diagram.png") center / contain no-repeat;
+  overflow: hidden;
+}
+
+/* Location containers are positioned over the diagram.
+   Tweak these values to perfectly match your silhouette. */
+.atow.battletech.sheet.mech .armor-panel{
+  /* Global pip tuning */
+  --pipSize: 7px;     /* drop to 6px if you need to fit Assault mech armor */
+  --pipGap: 2px;
+  --pipBorder: 1px;
+}
+
+/* Location containers are positioned over the diagram.
+   Each location can define --cols to control wrapping. */
+.atow.battletech.sheet.mech .armor-loc{
+  position: absolute;
+  display: grid;
+  grid-template-columns: repeat(var(--cols, 6), var(--pipSize));
+  grid-auto-rows: var(--pipSize);
+  grid-auto-flow: row;
+  gap: var(--pipGap);
+  padding: 2px;
+  /* Helps keep dense blocks centered within a location */
+  justify-content: center;
+  align-content: start;
+}
+
+.atow.battletech.sheet.mech .armor-pip{
+  width: var(--pipSize);
+  height: var(--pipSize);
+  border-radius: 50%;
+  border: var(--pipBorder) solid rgba(0,0,0,0.55);
+  background: rgba(255,255,255,0.7);
+  cursor: pointer;
+  box-sizing: border-box;
+}
+
+.atow.battletech.sheet.mech .armor-pip.filled{
+  background: rgba(0,0,0,0.55);
+}
+
+.atow.battletech.sheet.mech .armor-hint{
+  margin-top: 8px;
+  font-size: 11px;
+  opacity: 0.7;
+}
+
+/* --- Rough placement (starter) --- */
+.atow.battletech.sheet.mech .armor-loc-head  { top: 6%;  left: 49%; transform: translateX(-50%);  --cols: 5; }
+.atow.battletech.sheet.mech .armor-loc-ct    { top: 18%; left: 49%; transform: translateX(-50%);  --cols: 5; }
+.atow.battletech.sheet.mech .armor-loc-lt    { top: 18%; left: 34%; transform: translateX(-50%);  --cols: 5; }
+.atow.battletech.sheet.mech .armor-loc-rt    { top: 18%; left: 64%; transform: translateX(-50%);  --cols: 5; }
+
+.atow.battletech.sheet.mech .armor-loc-la    { top: 18%; left: 19%; transform: translateX(-50%);  --cols: 4; }
+.atow.battletech.sheet.mech .armor-loc-ra    { top: 18%; left: 79%; transform: translateX(-50%);  --cols: 4; }
+
+.atow.battletech.sheet.mech .armor-loc-ll    { top: 50%; left: 32%; transform: translateX(-50%);  --cols: 4; }
+.atow.battletech.sheet.mech .armor-loc-rl    { top: 50%; left: 66%; transform: translateX(-50%);  --cols: 4; }
+
+/* rear armor blocks at bottom */
+.atow.battletech.sheet.mech .armor-loc-lback { top: 82%; left: 35%; transform: translateX(-50%);  --cols: 4; }
+.atow.battletech.sheet.mech .armor-loc-back  { top: 80%; left: 50%; transform: translateX(-50%);  --cols: 5; }
+.atow.battletech.sheet.mech .armor-loc-rback { top: 82%; left: 64%; transform: translateX(-50%);  --cols: 4; }
+
+/* ===== Bottom Section: Critical Hit Table ===== */
+.atow.battletech.sheet.mech .crit-panel{
+  margin-top: var(--gap);
+}
+
+.atow.battletech.sheet.mech .crit-grid{
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 6px;
+  align-items: start;
+}
+
+.atow.battletech.sheet.mech .crit-loc{
+  margin-bottom: var(--gap);
+}
+
+.atow.battletech.sheet.mech .crit-loc-title{
+  font-size: 18px;
+  font-weight: 900;
+  text-align: center;
+  margin: 2px 0 6px 0;
+}
+
+.atow.battletech.sheet.mech .crit-band{
+  display: grid;
+  grid-template-columns: 40px 1fr;
+  gap: 8px;
+  align-items: start;
+}
+
+.atow.battletech.sheet.mech .crit-band-label{
+  font-size: 22px;
+  font-weight: 900;
+  text-align: center;
+  line-height: 1;
+  opacity: 0.85;
+  user-select: none;
+}
+
+.atow.battletech.sheet.mech .crit-slots{
+  display: grid;
+  gap: 4px;
+}
+
+.atow.battletech.sheet.mech .crit-slot{
+  display: grid;
+  grid-template-columns: 22px 1fr;
+  gap: 6px;
+  align-items: center;
+}
+
+.atow.battletech.sheet.mech .crit-num{
+  font-weight: 900;
+  text-align: right;
+  opacity: 0.85;
+  user-select: none;
+}
+
+.atow.battletech.sheet.mech .crit-slot input{
+  height: 22px;
+  border: none;
+  border-bottom: 2px solid rgba(0,0,0,0.55);
+  border-radius: 0;
+  background: transparent;
+  padding: 0 2px;
+}
+
+.atow.battletech.sheet.mech .crit-slot input:focus{
+  box-shadow: none;
+}
+
+.atow.battletech.sheet.mech .crit-system-hits{
+  border: var(--border);
+  border-radius: 10px;
+  padding: 10px;
+  margin-top: 6px;
+  margin-bottom: 10px;
+}
+
+.atow.battletech.sheet.mech .csh-row{
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.atow.battletech.sheet.mech .csh-label{
+  font-size: 18px;
+  font-weight: 900;
+}
+
+.atow.battletech.sheet.mech .csh-dots{
+  display: grid;
+  grid-auto-flow: column;
+  gap: 6px;
+  justify-content: end;
+}
+
+.atow.battletech.sheet.mech .crit-dot{
+  width: 14px;
+  height: 14px;
+  border: 3px solid rgba(0,0,0,0.9);
+  border-radius: 50%;
+  background: transparent;
+  cursor: pointer;
+}
+
+.atow.battletech.sheet.mech .crit-dot.filled{
+  background: rgba(0,0,0,0.9);
+}
+
+.atow.battletech.sheet.mech .damage-transfer{
+  text-align: center;
+  opacity: 0.75;
+  margin-top: 6px;
+}
+
+.atow.battletech.sheet.mech .dt-title{
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.atow.battletech.sheet.mech .dt-sub{
+  font-size: 11px;
+  font-weight: 700;
+}
+
+
+
+
+/* Compact Critical Hit Table (v2) */
+.atow.battletech.sheet.mech .crit-grid{ gap: 4px; }
+.atow.battletech.sheet.mech .crit-loc{ margin-bottom: 4px; }
+.atow.battletech.sheet.mech .crit-loc-title{ font-size: 13px; margin: 0 0 4px 0; }
+.atow.battletech.sheet.mech .crit-band{ grid-template-columns: 32px 1fr; gap: 6px; }
+.atow.battletech.sheet.mech .crit-band-label{ font-size: 16px; }
+.atow.battletech.sheet.mech .crit-slots{ gap: 2px; }
+.atow.battletech.sheet.mech .crit-slot{ grid-template-columns: 18px 1fr; gap: 4px; }
+.atow.battletech.sheet.mech .crit-slot input{ height: 18px; font-size: 11px; border-bottom-width: 1px; }
+.atow.battletech.sheet.mech .crit-num{ font-size: 11px; }
+
+.atow.battletech.sheet.mech .crit-slot.span-start{
+  border-left: 2px solid rgba(0,0,0,0.25);
+  padding-left: 4px;
+}
+.atow.battletech.sheet.mech .crit-slot.continuation{ opacity: 0.25; }
+.atow.battletech.sheet.mech .crit-slot.continuation input{
+  border-bottom: none;
+  pointer-events: none;
+}
+
+
+/* Crit slot clear control */
+.atow.battletech.sheet.mech .crit-slot{ position: relative; }
+
+.atow.battletech.sheet.mech .crit-clear{
+  position: absolute;
+  right: 2px;
+  top: 0px;
+  font-weight: 900;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.6;
+}
+
+.atow.battletech.sheet.mech .crit-clear:hover{ opacity: 1; }
+
+
+/* Compact Critical Hit Table (v3) */
+.atow.battletech.sheet.mech .crit-slot{ grid-template-columns: 16px 1fr; gap: 3px; }
+.atow.battletech.sheet.mech .crit-slot input{ height: 16px; font-size: 10px; }
+.atow.battletech.sheet.mech .crit-slots{ gap: 1px; }
+.atow.battletech.sheet.mech .crit-loc{ margin-bottom: 3px; }
+.atow.battletech.sheet.mech .crit-band{ gap: 4px; grid-template-columns: 28px 1fr; }
+.atow.battletech.sheet.mech .crit-band-label{ font-size: 14px; }
+
+
+/* ===== Column 3: Structure Diagram ===== */
+.atow.battletech.sheet.mech .structure-panel .structure-controls{
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px 10px;
+  margin-bottom: 10px;
+}
+
+.atow.battletech.sheet.mech .structure-panel .structure-control{
+  display: grid;
+  grid-template-columns: 1fr 70px;
+  gap: 6px;
+  align-items: center;
+}
+
+.atow.battletech.sheet.mech .structure-panel .structure-control label{
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  opacity: 0.75;
+}
+
+.atow.battletech.sheet.mech .structure-panel .structure-control input{
+  height: 22px;
+  text-align: center;
+}
+
+.atow.battletech.sheet.mech .structure-diagram{
+  position: relative;
+  width: 100%;
+  aspect-ratio: 685 / 998;
+  border: 1px solid rgba(0,0,0,0.25);
+  border-radius: 5px;
+  background: url("../assets/structure-diagram.png") center / contain no-repeat;
+  overflow: hidden;
+}
+
+.atow.battletech.sheet.mech .structure-panel{
+  --spipSize: 7px;
+  --spipGap: 2px;
+  --spipBorder: 1px;
+}
+
+.atow.battletech.sheet.mech .structure-loc{
+  position: absolute;
+  display: grid;
+  grid-template-columns: repeat(var(--cols, 6), var(--spipSize));
+  grid-auto-rows: var(--spipSize);
+  grid-auto-flow: row;
+  gap: var(--spipGap);
+  padding: 2px;
+  justify-content: center;
+  align-content: start;
+}
+
+.atow.battletech.sheet.mech .structure-pip{
+  width: var(--spipSize);
+  height: var(--spipSize);
+  border-radius: 50%;
+  border: var(--spipBorder) solid rgba(0,0,0,0.55);
+  background: rgba(255,255,255,0.7);
+  cursor: pointer;
+  box-sizing: border-box;
+}
+
+.atow.battletech.sheet.mech .structure-pip.filled{
+  background: rgba(0,0,0,0.55);
+}
+
+.atow.battletech.sheet.mech .structure-hint{
+  margin-top: 8px;
+  font-size: 11px;
+  opacity: 0.7;
+}
+
+/* --- Rough placement (starter) --- */
+.atow.battletech.sheet.mech .structure-loc-head { top: 6%;  left: 49%; transform: translateX(-50%); --cols: 4; }
+.atow.battletech.sheet.mech .structure-loc-ct   { top: 20%; left: 49%; transform: translateX(-50%); --cols: 5; }
+.atow.battletech.sheet.mech .structure-loc-lt   { top: 18%; left: 34%; transform: translateX(-50%); --cols: 4; }
+.atow.battletech.sheet.mech .structure-loc-rt   { top: 18%; left: 64%; transform: translateX(-50%); --cols: 4; }
+.atow.battletech.sheet.mech .structure-loc-la   { top: 22%; left: 19%; transform: translateX(-50%); --cols: 3; }
+.atow.battletech.sheet.mech .structure-loc-ra   { top: 22%; left: 79%; transform: translateX(-50%); --cols: 3; }
+.atow.battletech.sheet.mech .structure-loc-ll   { top: 55%; left: 32%; transform: translateX(-50%); --cols: 3; }
+.atow.battletech.sheet.mech .structure-loc-rl   { top: 55%; left: 66%; transform: translateX(-50%); --cols: 3; }
+
+/* ------------------------------------------------------------
+   Crit component destroyed flags
+   ------------------------------------------------------------ */
+.atow.battletech.sheet.mech .crit-destroy{
+  position: absolute;
+  right: 18px;
+  top: 0px;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.7;
+}
+
+.atow.battletech.sheet.mech .crit-destroy:hover{ opacity: 1; }
+
+/* Give room so icons don't overlap the slot text */
+.atow.battletech.sheet.mech .crit-slot input{
+  padding-right: 40px;
+}
+
+/* Destroyed styling */
+.atow.battletech.sheet.mech .crit-slot.destroyed{
+  background: rgba(255, 0, 0, 0.18);
+}
+
+.atow.battletech.sheet.mech .crit-slot.destroyed input{
+  border-bottom-color: rgba(255, 0, 0, 0.7);
+  color: rgba(255, 220, 220, 0.95);
+  text-decoration: line-through;
+}
+
+.atow.battletech.sheet.mech .crit-slot.destroyed .crit-num{
+  color: rgba(255, 190, 190, 0.95);
+  font-weight: 700;
+}
+
+
+/* ===== Heat: engine sink adjustment ===== */
+.atow.battletech.sheet.mech .heat-field input[type="range"] {
+  flex: 1;
+  min-width: 120px;
+}
+
+.atow.battletech.sheet.mech .heat-field .engine-sinks-number {
+  width: 54px;
+  flex: 0 0 auto;
+  text-align: center;
+}

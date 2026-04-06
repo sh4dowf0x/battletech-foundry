@@ -1,0 +1,103 @@
+<form class="{{cssClass}} mech-weapon" autocomplete="off">
+  <header class="sheet-header">
+    <img class="profile" src="{{item.img}}" data-edit="img" title="{{item.name}}" height="64" width="64"/>
+    <div class="header-fields">
+      <h1 class="charname">
+        <input name="name" type="text" value="{{item.name}}" placeholder="Weapon Name"/>
+      </h1>
+    </div>
+  </header>
+
+  <section class="sheet-body">
+
+    <div class="form-group">
+      <label>Mount Loc</label>
+      <input name="system.loc" type="text" value="{{system.loc}}" placeholder="LA/RA/CT/LT/RT/etc"/>
+    </div>
+
+    <fieldset>
+      <legend>Combat</legend>
+
+      <div class="form-group">
+        <label>Heat (Ht)</label>
+        <input name="system.heat" type="number" value="{{system.heat}}" />
+      </div>
+
+      <div class="form-group">
+        <label>Damage (Dmg)</label>
+        <input name="system.damage" type="number" value="{{system.damage}}" />
+      </div>
+
+      <div class="form-group">
+        <label>Damage Type</label>
+        <select name="system.dmgType">
+          {{selectOptions dmgTypeOptions selected=system.dmgType}}
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label>Rapid Fire (R)</label>
+        <input name="system.rapidFire" type="number" value="{{system.rapidFire}}" min="1" max="20" />
+      </div>
+
+      <div class="form-group">
+        <label>Crit Slots</label>
+        <input name="system.critSlots" type="number" value="{{system.critSlots}}" min="1" />
+      </div>
+
+      <div class="form-group">
+        <label>Tonnage (tons)</label>
+        <input name="system.tonnage" type="number" value="{{system.tonnage}}" min="0" step="0.5" />
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Ranges</legend>
+
+      <div class="form-group">
+        <label>Min</label>
+        <input name="system.range.min" type="number" value="{{system.range.min}}" />
+      </div>
+
+      <div class="form-group">
+        <label>Short (Sht)</label>
+        <input name="system.range.short" type="number" value="{{system.range.short}}" />
+      </div>
+
+      <div class="form-group">
+        <label>Medium (Med)</label>
+        <input name="system.range.medium" type="number" value="{{system.range.medium}}" />
+      </div>
+
+      <div class="form-group">
+        <label>Long (Lng)</label>
+        <input name="system.range.long" type="number" value="{{system.range.long}}" />
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Details</legend>
+
+      <div class="form-group">
+        <label>Manufacturer</label>
+        <input name="system.manufacturer" type="text" value="{{system.manufacturer}}" />
+      </div>
+
+      <div class="form-group">
+        <label>Ammo Type</label>
+        <input name="system.ammoType" type="text" value="{{system.ammoType}}" placeholder="SRM / LRM / AC/5 / Gauss / N/A"/>
+      </div>
+
+      <div class="form-group stacked">
+        <label>Special Rules</label>
+        <textarea name="system.specialRules" rows="4">{{system.specialRules}}</textarea>
+      </div>
+
+      <div class="form-group stacked">
+        <label>Notes</label>
+        <textarea name="system.notes" rows="4">{{system.notes}}</textarea>
+      </div>
+    </fieldset>
+
+  </section>
+</form>

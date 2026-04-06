@@ -1,0 +1,364 @@
+/* styles/abomination-sheet.css */
+
+.atow-abomination-sheet {
+  --abom-ink: #2b241c;
+  --abom-ash: #6b5b49;
+  --abom-border: #b06b2d;
+  --abom-panel: #cfd2c2;
+  --abom-panel-light: #d7dacb;
+  --abom-title: #1e1b18;
+  --abom-highlight: #f1e1cd;
+  --abom-portrait-size: 180px;
+  font-family: "Franklin Gothic Medium", "Trebuchet MS", "Tahoma", sans-serif;
+  color: var(--abom-ink);
+  background: linear-gradient(180deg, #bfc2b1 0%, #c9ccbe 50%, #b8bbac 100%);
+  border: 2px solid var(--abom-border);
+  border-radius: 10px;
+  padding: 8px 10px;
+  box-shadow: inset 0 0 0 1px rgba(43, 36, 28, 0.2);
+}
+
+.atow-abomination-sheet * {
+  box-sizing: border-box;
+}
+
+.atow-abomination-sheet .abom-titlebar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: linear-gradient(90deg, #1b1815, #33251d);
+  border: 1px solid #5a3b26;
+  border-radius: 6px;
+  padding: 6px 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: #f0e0c8;
+}
+
+.atow-abomination-sheet .abom-titlebar .abom-name {
+  flex: 1;
+  background: transparent;
+  border: none;
+  color: #f0e0c8;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  padding: 0;
+}
+
+.atow-abomination-sheet .abom-titlebar .abom-name:focus {
+  outline: none;
+}
+
+.atow-abomination-sheet .abom-titlebar .abom-title-suffix {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.atow-abomination-sheet label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--abom-ash);
+  margin-right: 6px;
+}
+
+.atow-abomination-sheet input {
+  font-family: inherit;
+  font-size: 12px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid rgba(43, 36, 28, 0.35);
+  background: var(--abom-panel-light);
+  color: var(--abom-ink);
+}
+
+.atow-abomination-sheet input[type="number"] {
+  text-align: center;
+}
+
+.atow-abomination-sheet .abom-body {
+  display: grid;
+  grid-template-columns: var(--abom-portrait-size) 1fr;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.atow-abomination-sheet .abom-portrait-column {
+  display: flex;
+  align-items: stretch;
+}
+
+.atow-abomination-sheet .abom-left {
+  display: grid;
+  gap: 8px;
+}
+
+.atow-abomination-sheet .abom-content {
+  display: grid;
+  grid-template-columns: 1.4fr 0.9fr;
+  gap: 12px;
+}
+
+.atow-abomination-sheet .abom-portrait {
+  width: var(--abom-portrait-size);
+  height: var(--abom-portrait-size);
+  object-fit: cover;
+  border-radius: 6px;
+  border: 1px solid rgba(43, 36, 28, 0.4);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.2);
+  cursor: pointer;
+}
+
+.atow-abomination-sheet .abom-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.atow-abomination-sheet .abom-type-row {
+  gap: 12px;
+}
+
+.atow-abomination-sheet .abom-type-row .abom-inline-field {
+  flex: 1 1 auto;
+}
+
+.atow-abomination-sheet .abom-type-row input,
+.atow-abomination-sheet .abom-type-row select {
+  min-width: 140px;
+}
+
+.atow-abomination-sheet .abom-row input:not(.skill-number):not(.mp-number):not(.mini-number) {
+  min-width: 140px;
+}
+
+.atow-abomination-sheet .abom-skill-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.atow-abomination-sheet .abom-skill {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.atow-abomination-sheet .skill-number {
+  width: 34px;
+  height: 22px;
+  padding: 0 4px;
+  font-size: 12px;
+  line-height: 1;
+  min-width: 0;
+}
+
+.atow-abomination-sheet .abom-mp-row {
+  align-items: center;
+  gap: 6px;
+}
+
+.atow-abomination-sheet .mp-number {
+  width: 34px;
+  height: 22px;
+  padding: 0 4px;
+  font-size: 12px;
+  line-height: 1;
+  min-width: 0;
+}
+
+.atow-abomination-sheet .abom-weapons {
+  border: 1px solid rgba(43, 36, 28, 0.3);
+  border-radius: 6px;
+  padding: 6px;
+  background: var(--abom-panel);
+}
+
+.atow-abomination-sheet .abom-weapons-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--abom-title);
+  margin-bottom: 4px;
+}
+
+.atow-abomination-sheet .abom-weapons-drop {
+  border: 1px dashed rgba(43, 36, 28, 0.35);
+  border-radius: 6px;
+  padding: 6px;
+  background: var(--abom-panel-light);
+}
+
+.atow-abomination-sheet .abom-weapons-hint {
+  font-size: 11px;
+  color: var(--abom-ash);
+  margin-bottom: 6px;
+}
+
+.atow-abomination-sheet .abom-we-row {
+  display: grid;
+  grid-template-columns: 1.6fr 0.5fr 0.4fr 0.5fr 0.5fr 0.5fr 0.5fr 0.5fr 32px;
+  gap: 6px;
+  align-items: center;
+  font-size: 11px;
+  margin: 0;
+  padding: 0;
+}
+
+.atow-abomination-sheet .abom-we-header {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--abom-title);
+  margin-bottom: 4px;
+}
+
+.atow-abomination-sheet .abom-we-row .col-name {
+  text-align: left;
+}
+
+.atow-abomination-sheet .abom-we-row .col-ctrl {
+  text-align: center;
+}
+
+.atow-abomination-sheet .abom-we-row .col-ctrl a {
+  color: var(--abom-title);
+}
+
+.atow-abomination-sheet .abom-we-attack {
+  margin-right: 6px;
+}
+
+.atow-abomination-sheet .abom-physical {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.atow-abomination-sheet .abom-physical .physical-label {
+  font-weight: 700;
+  color: var(--abom-title);
+  margin-right: 4px;
+}
+
+.atow-abomination-sheet .physical-field {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.atow-abomination-sheet .physical-field input {
+  width: 42px;
+}
+
+.atow-abomination-sheet .abom-right {
+  display: grid;
+  gap: 8px;
+}
+
+.atow-abomination-sheet .abom-inline-field {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.atow-abomination-sheet .abom-inline-field label {
+  margin-right: 2px;
+}
+
+.atow-abomination-sheet .abom-inline-field .mini-number {
+  width: 34px;
+  height: 22px;
+  padding: 0 4px;
+  font-size: 12px;
+  line-height: 1;
+  min-width: 0;
+}
+
+.atow-abomination-sheet .abom-readonly {
+  background: #ebe6d8;
+}
+
+.atow-abomination-sheet .abom-track {
+  display: grid;
+  grid-template-columns: 26px 1fr;
+  gap: 6px;
+  align-items: center;
+  background: var(--abom-panel);
+  border: 1px solid rgba(43, 36, 28, 0.3);
+  border-radius: 6px;
+  padding: 6px;
+}
+
+.atow-abomination-sheet .track-number {
+  font-weight: 700;
+  text-align: center;
+  background: var(--abom-highlight);
+  border: 1px solid rgba(43, 36, 28, 0.3);
+  border-radius: 4px;
+  padding: 2px 0;
+}
+
+.atow-abomination-sheet .track-pips {
+  display: grid;
+  gap: 4px;
+}
+
+.atow-abomination-sheet .track-row {
+  display: grid;
+  grid-template-columns: repeat(19, 1fr);
+  gap: 3px;
+}
+
+.atow-abomination-sheet .abom-pip {
+  width: 10px;
+  height: 10px;
+  border: 1px solid rgba(43, 36, 28, 0.5);
+  border-radius: 50%;
+  background: #ebe6d8;
+  cursor: pointer;
+}
+
+.atow-abomination-sheet .abom-pip.filled {
+  background: #3a2a22;
+}
+
+.atow-abomination-sheet .abom-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 16px;
+  margin-top: 8px;
+}
+
+.atow-abomination-sheet .abom-footer label {
+  margin-right: 4px;
+}
+
+.atow-abomination-sheet .abom-handler,
+.atow-abomination-sheet .abom-bonus {
+  display: flex;
+  align-items: center;
+}
+
+.atow-abomination-sheet .abom-handler input,
+.atow-abomination-sheet .abom-bonus input {
+  min-width: 120px;
+}
+
+@media (max-width: 900px) {
+  .atow-abomination-sheet .abom-body {
+    grid-template-columns: 1fr;
+  }
+
+  .atow-abomination-sheet .abom-content {
+    grid-template-columns: 1fr;
+  }
+
+  .atow-abomination-sheet .abom-footer {
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+}

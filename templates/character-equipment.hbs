@@ -1,0 +1,78 @@
+<form class="atow item-sheet character-equipment" autocomplete="off">
+  <header class="sheet-header">
+    <img class="profile-img" src="{{item.img}}" data-edit="img" title="{{item.name}}" height="64" width="64"/>
+    <div class="header-fields">
+      <h1 class="charname">
+        <input name="name" type="text" value="{{item.name}}" placeholder="Equipment Name"/>
+      </h1>
+
+      <div class="grid grid-3col" style="gap: 8px;">
+        <div class="form-group">
+          <label>Type</label>
+          <select name="system.gearType">
+            {{#each gearTypeOptions}}
+              <option value="{{this.value}}" {{#ifEq ../system.gearType this.value}}selected{{/ifEq}}>{{this.label}}</option>
+            {{/each}}
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label>Equipped</label>
+          <input type="checkbox" name="system.equipped" {{checked system.equipped}} />
+        </div>
+
+        <div class="form-group">
+          <label>Cost (C-bills)</label>
+          <input type="number" name="system.costCbills" value="{{system.costCbills}}" step="1" min="0"/>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <section class="sheet-body">
+    <fieldset class="atow-fieldset">
+      <legend>Equipment Ratings</legend>
+      <div class="grid grid-3col" style="gap: 8px;">
+        <div class="form-group">
+          <label>Tech</label>
+          <input type="text" name="system.ratings.tech" value="{{system.ratings.tech}}" placeholder="e.g. A / B / C"/>
+        </div>
+        <div class="form-group">
+          <label>Availability</label>
+          <input type="text" name="system.ratings.availability" value="{{system.ratings.availability}}" placeholder="e.g. A / B / C"/>
+        </div>
+        <div class="form-group">
+          <label>Legality</label>
+          <input type="text" name="system.ratings.legality" value="{{system.ratings.legality}}" placeholder="e.g. L / R / X"/>
+        </div>
+      </div>
+    </fieldset>
+
+    <fieldset class="atow-fieldset">
+      <legend>Stats</legend>
+      <div class="grid grid-4col" style="gap: 8px;">
+        <div class="form-group">
+          <label>Mass (kg)</label>
+          <input type="number" name="system.massKg" value="{{system.massKg}}" step="0.1" min="0"/>
+        </div>
+        <div class="form-group">
+          <label>Power Use (PPH)</label>
+          <input type="number" name="system.powerUsePph" value="{{system.powerUsePph}}" step="0.1" min="0"/>
+        </div>
+        <div class="form-group">
+          <label>Range</label>
+          <input type="text" name="system.range" value="{{system.range}}" placeholder="—"/>
+        </div>
+        <div class="form-group">
+          <label> </label>
+          <div class="hint">Use Power/Range only when relevant.</div>
+        </div>
+      </div>
+    </fieldset>
+
+    <fieldset class="atow-fieldset">
+      <legend>Notes</legend>
+      <textarea name="system.notes" rows="8" style="width:100%;">{{system.notes}}</textarea>
+    </fieldset>
+  </section>
+</form>

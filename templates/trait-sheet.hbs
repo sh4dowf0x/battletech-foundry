@@ -1,0 +1,65 @@
+<div class="atow-sheet atow-trait-sheet">
+  <header class="sheet-header">
+    <div class="header-left">
+      <img class="profile-img" src="{{item.img}}" data-edit="img" title="{{item.name}}" />
+    </div>
+
+    <div class="header-right">
+      <div class="title-row" style="display:flex; align-items:center; justify-content:space-between; gap:0.75rem;">
+        <h1 class="itemname" style="flex:1;">
+          <input name="name" type="text" value="{{item.name}}" placeholder="Trait Name" />
+        </h1>
+
+        {{#if trait.active}}
+          <span class="badge" title="Trait is active" style="display:inline-flex; align-items:center; gap:0.35rem; padding:0.25rem 0.5rem; border:1px solid var(--color-border-light-primary); border-radius:6px;">
+            <i class="fas fa-check-circle"></i> Active
+          </span>
+        {{else}}
+          <span class="badge" title="Trait is not active" style="display:inline-flex; align-items:center; gap:0.35rem; padding:0.25rem 0.5rem; border:1px solid var(--color-border-light-primary); border-radius:6px; opacity:0.75;">
+            <i class="far fa-circle"></i> Inactive
+          </span>
+        {{/if}}
+      </div>
+
+      <div class="header-fields" style="margin-top:0.5rem;">
+        <div class="field">
+          <label>Trait Points (TP)</label>
+          <input name="system.tp" type="number" value="{{trait.tp}}" />
+          <small style="opacity:0.75;">Activates at TP × 100 XP</small>
+        </div>
+
+        <div class="field">
+          <label>Trait XP</label>
+          <input name="system.cost" type="number" value="{{trait.xp}}" />
+          <small style="opacity:0.75;">Positive spends XP, negative grants XP</small>
+        </div>
+
+        <div class="field">
+          <label>Activation Threshold</label>
+          <input type="number" value="{{trait.threshold}}" disabled />
+          <small style="opacity:0.75;">Active when Trait XP reaches this value</small>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <section class="panel">
+    <h2>Description</h2>
+    <textarea name="system.description" rows="10">{{system.description}}</textarea>
+  </section>
+
+  <section class="panel">
+    <h2>Details</h2>
+    <div class="grid grid-2col" style="margin-top: 0.5rem;">
+      <div class="field">
+        <label>Category</label>
+        <input name="system.category" type="text" value="{{system.category}}" placeholder="e.g. Advantage / Disadvantage" />
+      </div>
+
+      <div class="field">
+        <label>Notes</label>
+        <input name="system.notes" type="text" value="{{system.notes}}" placeholder="Optional" />
+      </div>
+    </div>
+  </section>
+</div>

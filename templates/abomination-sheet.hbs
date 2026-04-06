@@ -1,0 +1,148 @@
+<div class="atow-abomination-sheet">
+  {{!-- templates/abomination-sheet.hbs --}}
+  {{!-- IMPORTANT: Do NOT wrap this template in <form>...</form>. SheetV2 provides the form wrapper. --}}
+
+  <header class="abom-titlebar">
+    <input class="abom-name" name="name" type="text" value="{{actor.name}}" placeholder="Abomination" />
+    <span class="abom-title-suffix">Abomination</span>
+  </header>
+
+  <section class="abom-body">
+    <div class="abom-portrait-column">
+      <img class="profile-img abom-portrait" src="{{actor.img}}" data-edit="img" title="{{actor.name}}" />
+    </div>
+
+    <div class="abom-content">
+      <div class="abom-left">
+      <div class="abom-row abom-type-row">
+        <div class="abom-inline-field">
+          <label>Type:</label>
+          <input name="system.abomination.type" type="text" value="{{system.abomination.type}}" placeholder="Tyrant" />
+        </div>
+        <div class="abom-inline-field">
+          <label>Class:</label>
+          <select name="system.abomination.sizeClass">
+            <option value="Swarmer" {{#ifEq system.abomination.sizeClass "Swarmer"}}selected{{/ifEq}}>Swarmer</option>
+            <option value="Hulk" {{#ifEq system.abomination.sizeClass "Hulk"}}selected{{/ifEq}}>Hulk</option>
+            <option value="Giant" {{#ifEq system.abomination.sizeClass "Giant"}}selected{{/ifEq}}>Giant</option>
+            <option value="Titan" {{#ifEq system.abomination.sizeClass "Titan"}}selected{{/ifEq}}>Titan</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="abom-row abom-count-row">
+        <div class="abom-inline-field">
+          <label>Count</label>
+          <input class="mini-number" name="system.abomination.trackCount" type="number" value="{{abominationTrackConfig.trackCount}}" min="1" max="6" />
+        </div>
+        <div class="abom-inline-field">
+          <label>Gunnery</label>
+          <input class="skill-number" name="system.pilot.gunnery" type="number" value="{{system.pilot.gunnery}}" />
+        </div>
+        <div class="abom-inline-field">
+          <label>AniMelee</label>
+          <input class="skill-number" name="system.abomination.aniMeleeSkill" type="number" value="{{system.abomination.aniMeleeSkill}}" />
+        </div>
+      </div>
+
+      <div class="abom-row abom-mp-row">
+        <div class="abom-inline-field">
+          <label>Ground MP</label>
+          <input class="mp-number" name="system.abomination.groundMp" type="number" value="{{system.abomination.groundMp}}" />
+        </div>
+        <div class="abom-inline-field">
+          <label>Health</label>
+          <input class="mini-number" name="system.abomination.trackPips" type="number" value="{{abominationTrackConfig.trackPips}}" min="1" max="95" />
+        </div>
+        <div class="abom-inline-field">
+          <label>Alive</label>
+          <input class="mini-number abom-readonly" type="text" value="{{abominationAliveCount}}/{{abominationTrackConfig.trackCount}}" readonly />
+        </div>
+      </div>
+
+      <div class="abom-physical">
+        <span class="physical-label">Damage:</span>
+        <div class="physical-field">
+          <label>Mob</label>
+          <input name="system.abomination.physical.mob" type="number" value="{{system.abomination.physical.mob}}" />
+        </div>
+        <div class="physical-field">
+          <label>Hobble</label>
+          <input name="system.abomination.physical.hobble" type="number" value="{{system.abomination.physical.hobble}}" />
+        </div>
+        <div class="physical-field">
+          <label>Melee</label>
+          <input name="system.abomination.physical.melee" type="number" value="{{system.abomination.physical.melee}}" />
+        </div>
+      </div>
+
+      <div class="abom-weapons">
+        <div class="abom-weapons-title">Weapons &amp; Equip.</div>
+
+        <div class="abom-weapons-drop drop-zone" data-drop-zone="abomination-weapons">
+          <div class="abom-weapons-hint">Drag &amp; drop mech weapons here.</div>
+
+          <div class="abom-we-table">
+            <div class="abom-we-row abom-we-header">
+              <div class="col-name">Weapon</div>
+              <div class="col-loc">Loc</div>
+              <div class="col-ht">Ht</div>
+              <div class="col-dmg">Dmg</div>
+              <div class="col-min">Min</div>
+              <div class="col-sht">Sht</div>
+              <div class="col-med">Med</div>
+              <div class="col-lng">Lng</div>
+              <div class="col-ctrl"></div>
+            </div>
+
+            {{#each abominationMechWeapons as |w|}}
+              <div class="abom-we-row item" data-item-id="{{w._id}}">
+                <div class="col-name"><a class="item-edit">{{w.name}}</a></div>
+                <div class="col-loc">{{w.system.loc}}</div>
+                <div class="col-ht">{{w.system.heat}}</div>
+                <div class="col-dmg">{{w.system.damage}}</div>
+                <div class="col-min">{{w.system.range.min}}</div>
+                <div class="col-sht">{{w.system.range.short}}</div>
+                <div class="col-med">{{w.system.range.medium}}</div>
+                <div class="col-lng">{{w.system.range.long}}</div>
+                <div class="col-ctrl">
+                  <a class="abom-we-attack" title="Attack"><i class="fas fa-crosshairs"></i></a>
+                  <a class="item-delete" title="Delete"><i class="fas fa-trash"></i></a>
+                </div>
+              </div>
+            {{/each}}
+          </div>
+        </div>
+      </div>
+      </div>
+
+      <aside class="abom-right">
+        {{#each abominationTracks as |t|}}
+          <div class="abom-track">
+            <div class="track-number">{{t.label}}</div>
+            <div class="track-pips">
+              {{#each t.rows as |row|}}
+                <div class="track-row">
+                  {{#each row as |p|}}
+                    <span class="abom-pip {{#if p.filled}}filled{{/if}}" data-track="{{t.key}}" data-value="{{p.value}}"></span>
+                  {{/each}}
+                </div>
+              {{/each}}
+            </div>
+          </div>
+        {{/each}}
+      </aside>
+    </div>
+  </section>
+
+  <footer class="abom-footer">
+    <div class="abom-handler">
+      <label>Handler:</label>
+      <input name="system.abomination.handler" type="text" value="{{system.abomination.handler}}" />
+    </div>
+    <div class="abom-bonus">
+      <label>Bonus:</label>
+      <input name="system.abomination.bonus" type="text" value="{{system.abomination.bonus}}" />
+    </div>
+  </footer>
+</div>

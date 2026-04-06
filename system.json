@@ -1,0 +1,141 @@
+{
+    "id":  "atow-battletech",
+    "title":  "BattleTech: A Time of War",
+    "description":  "A Foundry VTT system for BattleTech: A Time of War (AToW).",
+    "version":  "0.1.0",
+    "authors":  [
+                    {
+                        "name":  "Your Name"
+                    }
+                ],
+    "url":  "https://github.com/yourname/atow-battletech-foundryvtt",
+    "license":  "LICENSE",
+    "esmodules":  [
+                      "atow-battletech.js"
+                  ],
+    "styles":  [
+                   "styles/atow-battletech.css",
+                   "styles/mech-sheet.css"
+               ],
+    "languages":  [
+                      {
+                          "lang":  "en",
+                          "name":  "English",
+                          "path":  "lang/en.json"
+                      }
+                  ],
+    "packs":  [
+                  {
+                      "label":  "Combat Vehicles",
+                      "type":  "Actor",
+                      "name":  "combat-vehicles",
+                      "path":  "packs/combat-vehicles",
+                      "system":  "atow-battletech",
+                      "ownership":  {
+                                        "PLAYER":  "OBSERVER",
+                                        "ASSISTANT":  "OWNER"
+                                    },
+                      "flags":  {
+
+                                }
+                  },
+                  {
+                      "label":  "TRO 3025",
+                      "type":  "Actor",
+                      "name":  "tro-3025",
+                      "path":  "packs/tro-3025",
+                      "system":  "atow-battletech",
+                      "ownership":  {
+                                        "PLAYER":  "OBSERVER",
+                                        "ASSISTANT":  "OWNER"
+                                    },
+                      "flags":  {
+
+                                }
+                  },
+                  {
+                      "label":  "TRO 3050",
+                      "type":  "Actor",
+                      "name":  "tro-3050",
+                      "path":  "packs/tro-3050",
+                      "system":  "atow-battletech",
+                      "ownership":  {
+                                        "PLAYER":  "OBSERVER",
+                                        "ASSISTANT":  "OWNER"
+                                    },
+                      "flags":  {
+
+                                }
+                  },
+                  {
+                      "label":  "TRO CUSTOM MECHS",
+                      "type":  "Actor",
+                      "name":  "tro-custom-mechs",
+                      "path":  "packs/tro-custom-mechs",
+                      "system":  "atow-battletech",
+                      "ownership":  {
+                                        "PLAYER":  "OBSERVER",
+                                        "ASSISTANT":  "OWNER"
+                                    },
+                      "flags":  {
+
+                                }
+                  },
+                  {
+                      "label":  "Character Creation",
+                      "type":  "Item",
+                      "name":  "character-creation",
+                      "path":  "packs/character-creation",
+                      "system":  "atow-battletech",
+                      "ownership":  {
+                                        "PLAYER":  "OBSERVER",
+                                        "ASSISTANT":  "OWNER"
+                                    },
+                      "flags":  {
+
+                                }
+                  },
+                  {
+                      "label":  "Mech Equipment",
+                      "type":  "Item",
+                      "name":  "mech-equipment",
+                      "path":  "packs/mech-equipment",
+                      "system":  "atow-battletech",
+                      "ownership":  {
+                                        "PLAYER":  "OBSERVER",
+                                        "ASSISTANT":  "OWNER"
+                                    },
+                      "flags":  {
+
+                                }
+                  },
+                  {
+                      "label":  "Abominations",
+                      "type":  "Actor",
+                      "name":  "abominations",
+                      "path":  "packs/abominations",
+                      "system":  "atow-battletech",
+                      "ownership":  {
+                                        "PLAYER":  "OBSERVER",
+                                        "ASSISTANT":  "OWNER"
+                                    },
+                      "flags":  {
+
+                                }
+                  }
+              ],
+    "packFolders":  [
+
+                    ],
+    "socket":  false,
+    "gridDistance":  1,
+    "gridUnits":  "m",
+    "primaryTokenAttribute":  "health",
+    "secondaryTokenAttribute":  "fatigue",
+    "compatibility":  {
+                          "minimum":  "13",
+                          "verified":  "13.351"
+                      },
+    "manifest":  "https://raw.githubusercontent.com/yourname/atow-battletech-foundryvtt/main/system.json",
+    "download":  "https://github.com/yourname/atow-battletech-foundryvtt/releases/download/v0.1.0/atow-battletech-v0.1.0.zip"
+}

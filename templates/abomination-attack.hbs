@@ -1,0 +1,57 @@
+<form class="atow-attack-dialog">
+  <div class="form-group">
+    <label>Target</label>
+    <div><b>{{targetName}}</b></div>
+  </div>
+
+  <div class="form-group">
+    <label>Alive Attackers</label>
+    <div><b>{{aliveCount}}</b> / {{trackCount}}</div>
+  </div>
+
+  <div class="form-group">
+    <label>Distance</label>
+    <div>{{distance}} ({{band}})</div>
+    <input type="hidden" name="distance" value="{{distance}}"/>
+  </div>
+
+  <div class="form-group">
+    <label>Target Hexes Moved</label>
+    <input type="number" name="targetHexes" value="{{autoTargetMove}}" min="0"/>
+  </div>
+
+  <div class="form-group">
+    <label>Terrain Mod</label>
+    <input type="number" name="terrainMod" value="0"/>
+  </div>
+
+  <div class="form-group">
+    <label>Other Mod</label>
+    <input type="number" name="otherMod" value="0"/>
+  </div>
+
+  <div class="form-group">
+    <label>Hit Side (auto-detected)</label>
+    <select name="side">
+      <option value="front" {{#ifEq computedSide "front"}}selected{{/ifEq}}>Front</option>
+      <option value="rear" {{#ifEq computedSide "rear"}}selected{{/ifEq}}>Rear</option>
+      <option value="left" {{#ifEq computedSide "left"}}selected{{/ifEq}}>Left</option>
+      <option value="right" {{#ifEq computedSide "right"}}selected{{/ifEq}}>Right</option>
+    </select>
+    <small>{{arcNote}}</small>
+  </div>
+
+  <div class="form-group">
+    {{#if canApplyDamage}}
+      <label><input type="checkbox" name="applyDamage" {{#if applyDamageDefault}}checked{{/if}}/> Apply Damage (auto)</label>
+      <small>Automatically applies damage to mech targets if you have permission.</small>
+    {{else}}
+      <label><input type="checkbox" disabled/> Apply Damage (auto)</label>
+      <small>Auto damage applies only to mech targets.</small>
+    {{/if}}
+  </div>
+
+  <div class="form-group">
+    <label><input type="checkbox" name="showLocation" {{#if showLocationDefault}}checked{{/if}}/> Roll Hit Location on Hit</label>
+  </div>
+</form>
