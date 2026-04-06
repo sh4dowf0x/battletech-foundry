@@ -8,7 +8,7 @@
                         "name":  "Your Name"
                     }
                 ],
-    "url":  "https://github.com/yourname/atow-battletech-foundryvtt",
+    "url":  "https://github.com/sh4dowf0x/battletech-foundry",
     "license":  "LICENSE",
     "esmodules":  [
                       "atow-battletech.js"
@@ -136,6 +136,6 @@
                           "minimum":  "13",
                           "verified":  "13.351"
                       },
-    "manifest":  "https://raw.githubusercontent.com/yourname/atow-battletech-foundryvtt/main/system.json",
-    "download":  "https://github.com/yourname/atow-battletech-foundryvtt/releases/download/v0.1.0/atow-battletech-v0.1.0.zip"
+    "manifest":  "https://raw.githubusercontent.com/sh4dowf0x/battletech-foundry/main/system.json",
+    "download":  "https://github.com/sh4dowf0x/battletech-foundry/archive/refs/heads/main.zip"
 }
