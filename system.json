@@ -137,8 +137,8 @@
                           "minimum":  "13",
                           "verified":  "13.351"
                       },
-    "manifest":  "https://raw.githubusercontent.com/sh4dowf0x/battletech-foundry/main/system.json",
-    "download":  "https://github.com/sh4dowf0x/battletech-foundry/archive/refs/heads/main.zip"
+    "manifest":  "https://github.com/sh4dowf0x/battletech-foundry/releases/latest/download/system.json",
+    "download":  "https://github.com/sh4dowf0x/battletech-foundry/releases/latest/download/atow-battletech.zip"
     ,
     "media":  [
                   {
