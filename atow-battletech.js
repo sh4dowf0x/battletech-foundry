@@ -1,5 +1,5 @@
 // atow-battletech.js (ROOT)
-// version 0.8.5
+// version 0.0.2
 
 import { ATOWCharacterSheet } from "./module/character-sheet.js";
 import { ATOWAbominationSheet } from "./module/abomination-sheet.js";
@@ -1152,6 +1152,47 @@ Hooks.once("ready", async () => {
     return Math.max(dx, dy, dz);
   };
 
+  const offsetToCubeByGridType = (q, r, gridType) => {
+    if (gridType === CONST?.GRID_TYPES?.HEXODDQ) {
+      const x = q;
+      const z = r - (q + (q & 1)) / 2;
+      const y = -x - z;
+      return { x, y, z };
+    }
+    if (gridType === CONST?.GRID_TYPES?.HEXEVENQ) {
+      const x = q;
+      const z = r - (q - (q & 1)) / 2;
+      const y = -x - z;
+      return { x, y, z };
+    }
+    if (gridType === CONST?.GRID_TYPES?.HEXODDR) {
+      const z = r;
+      const x = q - (r - (r & 1)) / 2;
+      const y = -x - z;
+      return { x, y, z };
+    }
+    if (gridType === CONST?.GRID_TYPES?.HEXEVENR) {
+      const z = r;
+      const x = q - (r + (r & 1)) / 2;
+      const y = -x - z;
+      return { x, y, z };
+    }
+    return null;
+  };
+
+  const getHexMovementFacingAngleCW = (fromXY, toXY) => {
+    try {
+      const aCenter = getCenterPointFromTopLeft(fromXY.x, fromXY.y);
+      const bCenter = getCenterPointFromTopLeft(toXY.x, toXY.y);
+      const dx = bCenter.x - aCenter.x;
+      const dy = bCenter.y - aCenter.y;
+      if (Math.hypot(dx, dy) < 0.0001) return null;
+      return normalizeDegrees(Math.atan2(dy, dx) * 180 / Math.PI);
+    } catch (_) {
+      return null;
+    }
+  };
+
 
 /**
  * Prefer token drag ruler waypoints (actual path) when available.
@@ -1285,10 +1326,80 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
 
   const getFacingStepDegrees = () => (isHexGrid() ? 60 : 90);
 
+  const getHexFacingOffsetDegrees = () => {
+    try {
+      const t = canvas?.grid?.type ?? canvas?.scene?.grid?.type;
+      if (t === CONST?.GRID_TYPES?.HEXODDQ || t === CONST?.GRID_TYPES?.HEXEVENQ) return 30;
+    } catch (_) {}
+    return 0;
+  };
+
+  const getFacingOffsetDegrees = () => (isHexGrid() ? getHexFacingOffsetDegrees() : 0);
+
+  const getRotationToFacingOffsetDegrees = () => {
+    try {
+      const t = canvas?.grid?.type ?? canvas?.scene?.grid?.type;
+      if (t === CONST?.GRID_TYPES?.HEXODDQ || t === CONST?.GRID_TYPES?.HEXEVENQ) return 90;
+    } catch (_) {}
+    return 0;
+  };
+
+  const facingIndexToDegrees = (index) => {
+    const step = getFacingStepDegrees();
+    const offset = getFacingOffsetDegrees();
+    return normalizeDegrees((Number(index ?? 0) || 0) * step + offset);
+  };
+
   const normalizeDegrees = (deg) => {
     let d = Number(deg ?? 0) || 0;
     d = ((d % 360) + 360) % 360;
     return d;
+  };
+
+  const getNativeFacingFlagPath = () => `flags.${SYSTEM_ID}.facing`;
+
+  const _quantizeToFacingStep = (deg, step = getFacingStepDegrees()) => {
+    const d = normalizeDegrees(deg);
+    const s = Number(step ?? 0) || 0;
+    if (s <= 0) return d;
+    const offset = getFacingOffsetDegrees();
+    return normalizeDegrees(Math.round((d - offset) / s) * s + offset);
+  };
+
+  const _nativeFacingArtRotationEnabled = () => {
+    try {
+      return !!game.settings.get(SYSTEM_ID, "rotateTokenArtWithFacing");
+    } catch (_) {
+      return false;
+    }
+  };
+
+  const _normalizeNativeFacing = (v) => {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return null;
+    const maxDir = isHexGrid() ? 5 : 7;
+    if (Number.isInteger(n) && n >= 0 && n <= maxDir) {
+      return facingIndexToDegrees(n);
+    }
+    return _quantizeToFacingStep(n);
+  };
+
+  const _getNativeFacing = (tokenDoc) => {
+    try {
+      const v = tokenDoc?.getFlag?.(SYSTEM_ID, "facing");
+      return _normalizeNativeFacing(v);
+    } catch (_) {
+      return null;
+    }
+  };
+
+  const _getNativeFacingFromChanges = (changes) => {
+    try {
+      const v = foundry.utils.getProperty(changes, getNativeFacingFlagPath());
+      return _normalizeNativeFacing(v);
+    } catch (_) {
+      return null;
+    }
   };
 
   // ------------------------------------------------
@@ -1310,7 +1421,7 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
     if (!Number.isFinite(n)) return null;
     const maxDir = isHexGrid() ? 5 : 7;
     if (Number.isInteger(n) && n >= 0 && n <= maxDir) {
-      return normalizeDegrees(n * getFacingStepDegrees());
+      return facingIndexToDegrees(n);
     }
     return normalizeDegrees(n);
   };
@@ -1334,6 +1445,9 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
   };
 
   const getTokenFacingDegrees = (tokenDoc) => {
+    const nativeDir = _getNativeFacing(tokenDoc);
+    if (nativeDir != null) return normalizeDegrees(nativeDir);
+
     if (_aboutFaceActive()) {
       const dir = _getAboutFaceDir(tokenDoc);
       if (dir != null) return normalizeDegrees(dir);
@@ -1342,6 +1456,12 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
   };
 
   const getTokenFacingDegreesAfterChanges = (tokenDoc, changes) => {
+    const nativeDirChg = _getNativeFacingFromChanges(changes);
+    if (nativeDirChg != null) return normalizeDegrees(nativeDirChg);
+
+    const nativeDir = _getNativeFacing(tokenDoc);
+    if (nativeDir != null) return normalizeDegrees(nativeDir);
+
     if (_aboutFaceActive()) {
       const dirChg = _getAboutFaceDirFromChanges(changes);
       if (dirChg != null) return normalizeDegrees(dirChg);
@@ -1364,6 +1484,43 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
     if (d >= 180) d -= 360;
     if (d < -180) d += 360;
     return d;
+  };
+
+  const snapToNearestLegalFacing = (deg, { currentFacing = null } = {}) => {
+    const count = isHexGrid() ? 6 : 4;
+    const candidates = Array.from({ length: count }, (_, i) => facingIndexToDegrees(i));
+    const angle = normalizeDegrees(deg);
+
+    let best = candidates[0];
+    let bestDelta = Infinity;
+    const ties = [];
+
+    for (const candidate of candidates) {
+      const delta = Math.abs(signedAngleDelta(angle, candidate));
+      if (delta + 0.0001 < bestDelta) {
+        best = candidate;
+        bestDelta = delta;
+        ties.length = 0;
+        ties.push(candidate);
+      } else if (Math.abs(delta - bestDelta) <= 0.0001) {
+        ties.push(candidate);
+      }
+    }
+
+    if (ties.length > 1 && currentFacing != null) {
+      let tieBest = ties[0];
+      let tieDelta = Infinity;
+      for (const candidate of ties) {
+        const delta = Math.abs(signedAngleDelta(currentFacing, candidate));
+        if (delta < tieDelta) {
+          tieBest = candidate;
+          tieDelta = delta;
+        }
+      }
+      return normalizeDegrees(tieBest);
+    }
+
+    return normalizeDegrees(best);
   };
 
   // Converts a rotation change to "facing steps" (hexsides or square facings)
@@ -1396,13 +1553,6 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
 
   // Quantize an angle to the nearest facing step (60° on hex, 90° on square).
   // This makes forward/back checks stable on hex grids and avoids pixel-rounding noise.
-  const _quantizeToFacingStep = (deg, step) => {
-    const d = normalizeDegrees(deg);
-    const s = Number(step ?? 0) || 0;
-    if (s <= 0) return d;
-    return normalizeDegrees(Math.round(d / s) * s);
-  };
-
   const _isForwardOrBackwardTranslation = (tokenDoc, fromXY, toXY, { facingDeg = null } = {}) => {
     const ang = _movementVectorAngleCW(fromXY, toXY);
     if (ang == null) return true;
@@ -1421,6 +1571,171 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
 
     return (steps === 0) || (steps === backSteps);
   };
+
+  const ensureNativeFacingForToken = async (tokenDoc, { force = false } = {}) => {
+    if (!tokenDoc) return null;
+    const existing = _getNativeFacing(tokenDoc);
+    if (!force && existing != null) return existing;
+
+    const seeded = _quantizeToFacingStep((tokenDoc?.rotation ?? 0) + getRotationToFacingOffsetDegrees());
+    try {
+      await tokenDoc.setFlag(SYSTEM_ID, "facing", seeded);
+    } catch (_) {
+      return seeded;
+    }
+    return seeded;
+  };
+
+  Hooks.on("preCreateToken", (tokenDoc, data) => {
+    try {
+      const existing = tokenDoc?.getFlag?.(SYSTEM_ID, "facing");
+      const incoming = foundry.utils.getProperty(data, getNativeFacingFlagPath());
+      if (existing != null || incoming != null) return;
+
+      const seeded = _quantizeToFacingStep((data?.rotation ?? tokenDoc?.rotation ?? 0) + getRotationToFacingOffsetDegrees());
+      tokenDoc.updateSource({ flags: { [SYSTEM_ID]: { facing: seeded } } });
+    } catch (_) {}
+  });
+
+  Hooks.on("preUpdateToken", (tokenDoc, changes, options) => {
+    if (options?.atowFacingSync) return;
+
+    const incomingFacing = _getNativeFacingFromChanges(changes);
+    const hasRotationChange = Object.prototype.hasOwnProperty.call(changes ?? {}, "rotation");
+    const hasTranslationChange =
+      Object.prototype.hasOwnProperty.call(changes ?? {}, "x") ||
+      Object.prototype.hasOwnProperty.call(changes ?? {}, "y");
+    if (incomingFacing == null && !hasRotationChange && !hasTranslationChange) return;
+
+    let desiredFacing = incomingFacing;
+    if (desiredFacing == null) {
+      const currentFacing =
+        _getNativeFacing(tokenDoc) ??
+        _quantizeToFacingStep((tokenDoc?.rotation ?? 0) + getRotationToFacingOffsetDegrees());
+
+      if (hasTranslationChange) {
+        const nextX = Object.prototype.hasOwnProperty.call(changes ?? {}, "x") ? changes.x : tokenDoc?.x;
+        const nextY = Object.prototype.hasOwnProperty.call(changes ?? {}, "y") ? changes.y : tokenDoc?.y;
+        let moveFacing = getHexMovementFacingAngleCW(
+          { x: tokenDoc?.x ?? 0, y: tokenDoc?.y ?? 0 },
+          { x: nextX ?? 0, y: nextY ?? 0 }
+        );
+
+        if (moveFacing == null) {
+          moveFacing = _movementVectorAngleCW(
+            { x: tokenDoc?.x ?? 0, y: tokenDoc?.y ?? 0 },
+            { x: nextX ?? 0, y: nextY ?? 0 }
+          );
+        }
+
+        desiredFacing = moveFacing == null
+          ? currentFacing
+          : snapToNearestLegalFacing(moveFacing, { currentFacing });
+      } else {
+        const rotationDelta = signedAngleDelta(tokenDoc?.rotation ?? 0, changes.rotation ?? tokenDoc?.rotation ?? 0);
+        desiredFacing = _quantizeToFacingStep(currentFacing + rotationDelta);
+      }
+    }
+
+    foundry.utils.setProperty(changes, getNativeFacingFlagPath(), desiredFacing);
+
+    if (hasRotationChange || (incomingFacing != null && _nativeFacingArtRotationEnabled())) {
+      changes.rotation = _nativeFacingArtRotationEnabled()
+        ? desiredFacing
+        : (tokenDoc?.rotation ?? 0);
+    }
+  });
+
+  const FACING_INDICATOR_NAME = `${SYSTEM_ID}-facing-indicator`;
+
+  const destroyFacingIndicator = (token) => {
+    try {
+      const existing = token?.getChildByName?.(FACING_INDICATOR_NAME);
+      if (existing && !existing.destroyed) existing.destroy({ children: true });
+    } catch (_) {}
+  };
+
+  const drawFacingIndicator = async (token) => {
+    if (!token?.document) return;
+
+    if (!game.settings.get(SYSTEM_ID, "showFacingIndicator")) {
+      destroyFacingIndicator(token);
+      return;
+    }
+
+    let facing = getTokenFacingDegrees(token.document);
+    if (facing == null) {
+      facing = await ensureNativeFacingForToken(token.document);
+    }
+    if (facing == null) return;
+
+    const colorHex = String(game.settings.get(SYSTEM_ID, "facingIndicatorColor") ?? "#ff9f1c");
+    const indicatorScale = Number(game.settings.get(SYSTEM_ID, "facingIndicatorScale") ?? 1) || 1;
+    const color = Number.parseInt(colorHex.replace(/^#/, ""), 16);
+    const width = Number(token.w ?? token.document.width ?? 0) || 0;
+    const height = Number(token.h ?? token.document.height ?? 0) || 0;
+    const maxSize = Math.max(width, height, 1);
+    const distance = maxSize * 0.36;
+    const scale = Math.max(0.35, indicatorScale) * Math.max(0.4, maxSize / 100);
+
+    let container = token.getChildByName?.(FACING_INDICATOR_NAME) ?? null;
+    if (!container || container.destroyed) {
+      container = new PIXI.Container();
+      container.name = FACING_INDICATOR_NAME;
+      token.addChild(container);
+    } else {
+      container.removeChildren().forEach(child => child.destroy?.());
+    }
+
+    const graphics = new PIXI.Graphics();
+    graphics.lineStyle(2, color, 0.95);
+    graphics.beginFill(color, 0.55);
+    graphics.moveTo(distance, 0);
+    graphics.lineTo(distance - 14, -8);
+    graphics.lineTo(distance - 14, 8);
+    graphics.lineTo(distance, 0);
+    graphics.endFill();
+    graphics.moveTo(0, 0);
+    graphics.lineTo(distance - 12, 0);
+    graphics.scale.set(scale, scale);
+
+    container.addChild(graphics);
+    container.x = width / 2;
+    container.y = height / 2;
+    container.angle = facing;
+    container.eventMode = "none";
+    container.sortableChildren = false;
+    container.visible = true;
+  };
+
+  ATOW.api.getTokenFacingDegrees = getTokenFacingDegrees;
+  ATOW.api.ensureTokenFacing = ensureNativeFacingForToken;
+  ATOW.api.drawFacingIndicator = drawFacingIndicator;
+
+  Hooks.on("canvasReady", async () => {
+    const tokens = Array.from(canvas?.tokens?.placeables ?? []);
+    for (const token of tokens) {
+      await ensureNativeFacingForToken(token.document);
+      await drawFacingIndicator(token);
+    }
+  });
+
+  Hooks.on("createToken", async (tokenDoc) => {
+    if (!tokenDoc?.object) return;
+    await ensureNativeFacingForToken(tokenDoc);
+    await drawFacingIndicator(tokenDoc.object);
+  });
+
+  Hooks.on("updateToken", async (tokenDoc) => {
+    if (!tokenDoc?.object) return;
+    await ensureNativeFacingForToken(tokenDoc);
+    await drawFacingIndicator(tokenDoc.object);
+  });
+
+  Hooks.on("refreshToken", (token) => {
+    if (!token?.document) return;
+    drawFacingIndicator(token);
+  });
 
 
 
@@ -1794,8 +2109,9 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
     const isMove = ("x" in changes || "y" in changes);
     if (isMove && (("x" in changes) !== ("y" in changes))) return;
     const isTurn = ("rotation" in changes);
+    const isNativeFacingTurn = (_getNativeFacingFromChanges(changes) != null);
     const isAboutFaceTurn = _aboutFaceActive() && (_getAboutFaceDirFromChanges(changes) != null);
-    const isFacingTurn = isTurn || isAboutFaceTurn;
+    const isFacingTurn = isTurn || isNativeFacingTurn || isAboutFaceTurn;
     if (!isMove && !isFacingTurn) return;
 
     // If movement has been explicitly ended (e.g., after a Jump), disallow further turning or translation.
@@ -1806,6 +2122,9 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
         changes.y = tokenDoc.y;
       }
       if (isTurn) changes.rotation = tokenDoc.rotation;
+      if (isNativeFacingTurn) {
+        foundry.utils.setProperty(changes, getNativeFacingFlagPath(), _getNativeFacing(tokenDoc) ?? 0);
+      }
       if (isAboutFaceTurn) {
         changes.flags = changes.flags ?? {};
         changes.flags["about-face"] = changes.flags["about-face"] ?? {};
@@ -1857,6 +2176,9 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
       if (maxRun > 0 && (spentNow + deltaTurns) > maxRun) {
         // No MP remaining for turns, revert the facing change.
         if (isTurn) changes.rotation = tokenDoc.rotation;
+        if (isNativeFacingTurn) {
+          foundry.utils.setProperty(changes, getNativeFacingFlagPath(), _getNativeFacing(tokenDoc) ?? 0);
+        }
         if (isAboutFaceTurn) {
           changes.flags = changes.flags ?? {};
           changes.flags["about-face"] = changes.flags["about-face"] ?? {};
@@ -2996,6 +3318,47 @@ function registerSystemSettings() {
     config: true,
     type: Boolean,
     default: false
+  });
+
+  game.settings.register(SYSTEM_ID, "rotateTokenArtWithFacing", {
+    name: "Rotate Token Art With Facing",
+    hint: "If enabled, token artwork rotates when facing changes. If disabled, the system tracks facing separately and shows it with the facing indicator.",
+    scope: "world",
+    config: true,
+    type: Boolean,
+    default: false
+  });
+
+  game.settings.register(SYSTEM_ID, "showFacingIndicator", {
+    name: "Show Facing Indicator",
+    hint: "Display a built-in facing arrow on tokens using the system's native Battletech facing.",
+    scope: "world",
+    config: true,
+    type: Boolean,
+    default: true
+  });
+
+  game.settings.register(SYSTEM_ID, "facingIndicatorColor", {
+    name: "Facing Indicator Color",
+    hint: "Choose the color used by the built-in facing arrow.",
+    scope: "world",
+    config: true,
+    type: new foundry.data.fields.ColorField({ nullable: false, initial: "#ff9f1c" }),
+    default: "#ff9f1c"
+  });
+
+  game.settings.register(SYSTEM_ID, "facingIndicatorScale", {
+    name: "Facing Indicator Scale",
+    hint: "Adjust the size of the built-in facing arrow.",
+    scope: "world",
+    config: true,
+    type: Number,
+    default: 1,
+    range: {
+      min: 0.5,
+      max: 2,
+      step: 0.05
+    }
   });
 }
 

@@ -1109,6 +1109,41 @@ function normalizeDeg(d) {
   return x;
 }
 
+function getHexFacingOffsetDeg() {
+  try {
+    const t = canvas?.grid?.type ?? canvas?.scene?.grid?.type;
+    if (t === CONST?.GRID_TYPES?.HEXODDQ || t === CONST?.GRID_TYPES?.HEXEVENQ) return 30;
+  } catch (_) {
+    // ignore
+  }
+  return 0;
+}
+
+function facingIndexToDeg(index, isHex = true) {
+  const step = isHex ? 60 : 45;
+  const offset = isHex ? getHexFacingOffsetDeg() : 0;
+  return normalizeDeg((Number(index ?? 0) || 0) * step + offset);
+}
+
+function buildAttackResultBanner({ hit = false, label = null, detail = "" } = {}) {
+  const isHit = !!hit;
+  const title = label ?? (isHit ? "HIT" : "MISS");
+  const bg = isHit ? "linear-gradient(135deg, #1f7a45, #2ca85f)" : "linear-gradient(135deg, #8a1f2d, #c53b4c)";
+  const border = isHit ? "#8df0b2" : "#ff9aa5";
+  const shadow = isHit ? "rgba(44,168,95,0.25)" : "rgba(197,59,76,0.22)";
+  const detailHtml = detail ? `<div style="font-size:12px; font-weight:600; opacity:0.92; margin-top:2px;">${detail}</div>` : "";
+  return `<div style="margin:8px 0 10px; padding:10px 12px; border-radius:10px; background:${bg}; border:1px solid ${border}; box-shadow:0 6px 18px ${shadow}; color:#fff; text-align:center;">
+    <div style="font-size:18px; font-weight:800; letter-spacing:0.08em;">${title}</div>
+    ${detailHtml}
+  </div>`;
+}
+
+function buildAttackDetailsOpen(summary = "Show Details") {
+  return `<details style="margin-top:8px;">
+    <summary style="cursor:pointer; font-weight:700; color:#b7c9ff; user-select:none;">${summary}</summary>
+    <div style="margin-top:8px;">`;
+}
+
 // ------------------------------------------------------------
 // About Face integration helpers
 // ------------------------------------------------------------
@@ -1236,7 +1271,15 @@ function _aboutFaceFacingStringToDeg(dir) {
 function getTokenFacingDeg(token) {
   if (!token?.document) return null;
 
-  // 0) If About Face is installed and tracking facing without rotating token art,
+  // 0) Prefer the system's native facing flag when present.
+  try {
+    const nativeFacing = token.document.getFlag?.(SYSTEM_ID, "facing");
+    if (Number.isFinite(Number(nativeFacing))) return normalizeDeg(Number(nativeFacing));
+  } catch (_) {
+    // ignore
+  }
+
+  // 1) If About Face is installed and tracking facing without rotating token art,
   //    prefer its stored direction (in degrees). This avoids relying on token.rotation,
   //    which may remain 0 even when the mech has a real facing.
   try {
@@ -1251,22 +1294,20 @@ function getTokenFacingDeg(token) {
     // ignore
   }
 
-  // 1) Prefer a snapped facing direction index (especially when About Face is used).
+  // 2) Prefer a snapped facing direction index (especially when About Face is used).
   //    We only use this for a best-effort degree display and as a fallback for non-grid arc math.
   const snapped = _extractSnappedFacingDir(token);
   if (Number.isFinite(snapped)) {
-    // NOTE: This is an approximation because Foundry's direction indexing differs by grid type/orientation.
-    // It is good enough for our *fallback* math and chat diagnostics.
     const grid = canvas?.grid;
     const isHex = Boolean(grid?.isHexagonal || grid?.grid?.isHexagonal);
-    return normalizeDeg(snapped * (isHex ? 60 : 45));
+    return facingIndexToDeg(snapped, isHex);
   }
 
-  // 2) Otherwise try to extract degrees from module flags.
+  // 3) Otherwise try to extract degrees from module flags.
   const flagged = _extractFacingDegFromFlags(token);
   if (flagged !== null) return flagged;
 
-  // 3) Fallback: if the token actually rotates, use Foundry's built-in rotation value.
+  // 4) Fallback: if the token actually rotates, use Foundry's built-in rotation value.
   const rot = token.document.rotation;
   if (Number.isFinite(rot)) return normalizeDeg(rot);
 
@@ -1302,8 +1343,8 @@ function getTokenFacingDir(token) {
     // fall through
   }
 
-  // Fallback: snap degrees to 6 directions.
-  return (Math.round(normalizeDeg(deg) / 60) % 6 + 6) % 6;
+  // Fallback: snap degrees to 6 directions, respecting the current hex orientation offset.
+  return (Math.round((normalizeDeg(deg) - getHexFacingOffsetDeg()) / 60) % 6 + 6) % 6;
 }
 
 /**
@@ -3095,10 +3136,15 @@ const jamInfoLine = (jam && !isAbomChat && !rack && rapidShots > 1)
     `<div class="atow-chat-card atow-mech-attack">`,
     `<header><b>${weaponMeta.name}</b> — Attack</header>`,
     (weaponMeta.rawName && weaponMeta.rawName !== weaponMeta.name) ? `<div><small>Mounted as: ${weaponMeta.rawName}</small></div>` : "",
+    buildAttackResultBanner({
+      hit,
+      detail: `Roll ${toHit.total} vs TN ${tn}`
+    }),
     `<div><b>Attacker:</b> ${attackerName} | <b>Target:</b> ${targetName}</div>`,
     facingLine,
     `<div><b>Distance:</b> ${distance} (${band})</div>`,
     `<div><b>Roll:</b> ${toHit.total} (2d6 + ${skillLabel} ${gunnery}) vs <b>TN:</b> ${tn} → <b>${hit ? "HIT" : "MISS"}</b></div>`,
+    buildAttackDetailsOpen(),
     `<hr/>`,
     `<div><b>Breakdown</b></div>`,
     `<ul>`,
@@ -3255,7 +3301,7 @@ const jamInfoLine = (jam && !isAbomChat && !rack && rapidShots > 1)
     }
   }
 
-  parts.push(`</div>`);
+  parts.push(`</div></details></div>`);
 
   try {
     await ChatMessage.create({
@@ -3511,11 +3557,16 @@ export async function rollMeleeWeaponAttack(actor, weaponItem, opts = {}) {
     const lines = [
       `<div class="atow-chat-card atow-mech-attack">`,
       header,
+      buildAttackResultBanner({
+        hit,
+        detail: `Roll ${toHit.total} vs TN ${tn}`
+      }),
       `<div><b>Attacker:</b> ${attackerName} | <b>Target:</b> ${targetName}</div>`,
       facingLine,
       `<div><b>Distance:</b> ${distance} (adjacent)</div>`,
       `<div><b>Hit Location:</b> ${isVehicleTarget ? "Vehicle Hit Location Table" : (usePunchTable ? `Punch Table (+${punchTableMod} TN)` : "Normal (Shooting) Table")}</div>`,
       `<div><b>Roll:</b> ${toHit.total} (2d6 + Piloting ${piloting}) vs <b>TN:</b> ${tn} → <b>${hit ? "HIT" : "MISS"}</b></div>`,
+      buildAttackDetailsOpen(),
       `<hr/>`,
       `<div><b>Breakdown</b></div>`,
       `<ul>`,
@@ -3537,7 +3588,7 @@ export async function rollMeleeWeaponAttack(actor, weaponItem, opts = {}) {
                 : `<div><b>Applied:</b> Armor ${damageApplied.armorApplied}, Structure ${damageApplied.structureApplied}</div>`)
             : `<div style="color:#c00"><b>NOT applied:</b> ${damageApplied.reason}</div>`)
         : ""}`,
-      `</div>`
+      `</div></details></div>`
     ];
 
     await ChatMessage.create({
@@ -4262,6 +4313,7 @@ export async function rollPunchAttack(actor, opts = {}) {
 	  try {
 	    const attackerName = attackerToken?.name ?? actor.name;
 	    const targetName = targetToken?.name ?? "Target";
+      const anyHit = (results ?? []).some(r => r?.hit);
 
 	    const header = `<header><b>${weaponMeta.name}</b> — Physical Attack</header>`;
     const facingLine = arc
@@ -4271,6 +4323,11 @@ export async function rollPunchAttack(actor, opts = {}) {
     const lines = [
       `<div class="atow-chat-card atow-mech-attack">`,
       header,
+      buildAttackResultBanner({
+        hit: anyHit,
+        label: anyHit ? "HIT" : "MISS",
+        detail: anyHit ? "At least one punch connected" : "No punches connected"
+      }),
       `<div><b>Attacker:</b> ${attackerName} | <b>Target:</b> ${targetName}</div>`,
       facingLine,
       `<div><b>Distance:</b> ${distance} (adjacent)</div>`,
@@ -4311,7 +4368,7 @@ export async function rollPunchAttack(actor, opts = {}) {
       );
     }
 
-    lines.push(`</ul></div>`);
+    lines.push(`</ul></div></details></div>`);
 
     await ChatMessage.create({
       speaker: ChatMessage.getSpeaker({ actor }),
@@ -4326,7 +4383,6 @@ export async function rollPunchAttack(actor, opts = {}) {
   }
 
   // Trigger Automated Animations directly (if installed)
-  const anyHit = (results ?? []).some(r => r?.hit);
   await _maybePlayAutomatedAnimation(attackerToken, null, _getWeaponAutomationMeta({ name: "Punch" }), { targetToken, hit: anyHit });
 
   return {
@@ -4600,6 +4656,10 @@ export async function rollKickAttack(actor, opts = {}) {
     const lines = [
       `<div class="atow-chat-card atow-mech-attack">`,
       header,
+      buildAttackResultBanner({
+        hit,
+        detail: hipsOk ? `Roll ${toHit?.total ?? "—"} vs TN ${tn}` : "Kick could not be made"
+      }),
       `<div><b>Attacker:</b> ${attackerName} | <b>Target:</b> ${targetName}</div>`,
       facingLine,
       `<div><b>Distance:</b> ${distance} (adjacent)</div>`,
@@ -4627,7 +4687,7 @@ export async function rollKickAttack(actor, opts = {}) {
         : "",
       psrNote,
       ...notes,
-      `</div>`
+      `</div></details></div>`
     ];
 
     await ChatMessage.create({

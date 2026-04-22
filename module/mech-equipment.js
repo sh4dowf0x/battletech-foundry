@@ -1,58 +1,92 @@
-// systems/atow-battletech/mech-equipment.js
+// module/mech-equipment.js
+// AToW Battletech (Foundry VTT v13) - Mech Equipment Item Sheet (ItemSheetV2)
 
-export class AToWMechEquipmentSheet extends ItemSheet {
-  /** @override */
-  static get defaultOptions() {
-    return foundry.utils.mergeObject(super.defaultOptions, {
-      classes: ["atow", "battletech", "sheet", "item", "mech-equipment"],
-      template: "systems/atow-battletech/templates/mech-equipment.hbs",
-      width: 520,
-      height: "auto"
-    });
-  }
+const SYSTEM_ID = "atow-battletech";
+const TEMPLATE = `systems/${SYSTEM_ID}/templates/mech-equipment.hbs`;
 
-  /** @override */
+const { HandlebarsApplicationMixin } = foundry.applications.api;
+const { ItemSheetV2 } = foundry.applications.sheets;
+
+function toNumber(value, fallback = 0) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+export class AToWMechEquipmentSheet extends HandlebarsApplicationMixin(ItemSheetV2) {
+  static DEFAULT_OPTIONS = foundry.utils.mergeObject(
+    super.DEFAULT_OPTIONS,
+    {
+      classes: ["atow", "sheet", "item", "atow-item-sheet", "mech-equipment"],
+      position: { width: 620, height: 500 },
+      window: { resizable: true },
+      form: {
+        submitOnChange: true,
+        closeOnSubmit: false
+      }
+    },
+    { inplace: false }
+  );
+
+  static PARTS = {
+    form: { template: TEMPLATE }
+  };
+
   get title() {
-    return `${this.item.name} — Equipment`;
+    return `${this.item.name} - Mech Equipment`;
   }
 
-  /** @override */
-  async getData(options) {
-    const context = await super.getData(options);
+  async _prepareContext(options) {
+    const context = await super._prepareContext(options);
 
-    context.system = context.system ?? this.item.system ?? {};
+    const item = this.item;
+    const system = foundry.utils.deepClone(item.system ?? {});
 
-    // Normalize numbers so the template can't break and drag/drop spans work reliably.
-    context.system.critSlots = Number(context.system.critSlots ?? 1);
-    if (Number.isNaN(context.system.critSlots) || context.system.critSlots < 1) context.system.critSlots = 1;
+    system.notes ??= "";
+    system.ammoType ??= "";
+    system.critSlots = Math.max(1, Math.floor(toNumber(system.critSlots, 1)));
+    system.ammoAmount = Math.max(0, toNumber(system.ammoAmount, 0));
+    system.heatDissipation = Math.max(0, toNumber(system.heatDissipation, 0));
+    system.tonnage = Math.max(0, toNumber(system.tonnage ?? system.tons ?? system.weight, 0));
 
-    context.system.ammoAmount = Number(context.system.ammoAmount ?? 0);
-    if (Number.isNaN(context.system.ammoAmount) || context.system.ammoAmount < 0) context.system.ammoAmount = 0;
-
-    context.system.heatDissipation = Number(context.system.heatDissipation ?? 0);
-    if (Number.isNaN(context.system.heatDissipation) || context.system.heatDissipation < 0) context.system.heatDissipation = 0;
-
-    // Tonnage (for mech weight calculations)
-    context.system.tonnage = Number(context.system.tonnage ?? context.system.tons ?? context.system.weight ?? 0);
-    if (Number.isNaN(context.system.tonnage) || context.system.tonnage < 0) context.system.tonnage = 0;
-
-    // Dropdown options
-    context.ammoTypeOptions = {
-      "": "—",
-      "AC-2": "AC-2",
-      "AC-5": "AC-5",
-      "AC-10": "AC-10",
-      "AC-20": "AC-20",
-      "LRM": "LRM",
-      "SRM": "SRM",
-      "Gauss": "Gauss"
-    };
+    context.item = item;
+    context.system = system;
 
     return context;
   }
 
-  /** @override */
-  activateListeners(html) {
-    super.activateListeners(html);
+  _onRender(context, options) {
+    super._onRender(context, options);
+
+    const root = this.element;
+    const portrait = root?.querySelector?.('[data-edit="img"]');
+    if (!portrait || portrait.dataset.atowImgBound === "1") return;
+
+    portrait.dataset.atowImgBound = "1";
+    portrait.addEventListener("click", async (event) => {
+      if (!this.isEditable) return;
+      event.preventDefault();
+
+      const FilePickerCtor =
+        globalThis.FilePicker ??
+        foundry?.applications?.forms?.FilePicker ??
+        foundry?.applications?.api?.FilePicker;
+
+      if (!FilePickerCtor) {
+        ui.notifications?.warn?.("FilePicker is not available.");
+        return;
+      }
+
+      const fp = new FilePickerCtor({
+        type: "image",
+        current: this.item?.img ?? "",
+        callback: async (path) => {
+          if (!path) return;
+          await this.item.update({ img: path });
+        }
+      });
+
+      try { fp.browse(); } catch (_) {}
+      fp.render(true);
+    });
   }
 }

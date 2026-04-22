@@ -1,48 +1,61 @@
-<form class="{{cssClass}} mech-equipment" autocomplete="off">
-  <header class="sheet-header">
-    <img class="profile" src="{{item.img}}" data-edit="img" title="{{item.name}}" height="64" width="64"/>
-    <div class="header-fields">
-      <h1 class="charname">
-        <input name="name" type="text" value="{{item.name}}" placeholder="Equipment Name"/>
-      </h1>
+<div class="{{cssClass}} atow-item-shell" autocomplete="off">
+  <section
+    class="atow-item-hero"
+    role="presentation"
+    style="display:grid; grid-template-columns:minmax(96px, 25%) minmax(0, 1fr); gap:12px; align-items:start;">
+    <div style="min-width:96px; max-width:120px;">
+      <img
+        class="atow-item-art"
+        src="{{item.img}}"
+        data-edit="img"
+        title="{{item.name}}"
+        style="width:100%; aspect-ratio:1 / 1; height:auto; display:block;" />
     </div>
-  </header>
 
-  <section class="sheet-body">
-    <fieldset>
-      <legend>Mech Equipment</legend>
+    <div class="atow-item-hero-main" style="display:flex; flex-direction:column; gap:8px; min-width:0;">
+      <div class="atow-item-kicker">BattleMech Equipment Profile</div>
 
-      <div class="form-group">
-        <label>Crit Slots</label>
-        <input name="system.critSlots" type="number" value="{{system.critSlots}}" min="1" />
+      <div class="atow-item-title">
+        <input name="name" type="text" value="{{item.name}}" placeholder="Equipment Name" />
       </div>
 
-      <div class="form-group">
-        <label>Tonnage (tons)</label>
-        <input name="system.tonnage" type="number" value="{{system.tonnage}}" min="0" step="0.5" />
-      </div>
+      <div class="atow-item-meta-grid" style="display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:6px;">
+        <div class="atow-field">
+          <label>Ammo Type</label>
+          <input name="system.ammoType" type="text" value="{{system.ammoType}}" placeholder="Empty / LRM / SRM / AC / Gauss" />
+        </div>
 
-      <div class="form-group">
-        <label>Ammo Type</label>
-        <select name="system.ammoType">
-          {{selectOptions ammoTypeOptions selected=system.ammoType}}
-        </select>
+        <div class="atow-field">
+          <label>Heat Dissipation</label>
+          <input name="system.heatDissipation" type="number" value="{{system.heatDissipation}}" min="0" />
+        </div>
       </div>
-
-      <div class="form-group">
-        <label>Ammo Amount</label>
-        <input name="system.ammoAmount" type="number" value="{{system.ammoAmount}}" min="0" />
-      </div>
-
-      <div class="form-group">
-        <label>Heat Dissipation</label>
-        <input name="system.heatDissipation" type="number" value="{{system.heatDissipation}}" min="0" />
-      </div>
-    </fieldset>
-
-    <fieldset>
-      <legend>Notes</legend>
-      <textarea name="system.notes" rows="6">{{system.notes}}</textarea>
-    </fieldset>
+    </div>
   </section>
-</form>
+
+  <section class="atow-card atow-stat-card">
+    <div class="atow-stat-table-wrap">
+      <table class="atow-stat-table">
+        <tr>
+          <th>Crits</th>
+          <th>Tons</th>
+          <th>Ammo</th>
+          <th>Heat Diss</th>
+        </tr>
+        <tr>
+          <td><input name="system.critSlots" type="number" value="{{system.critSlots}}" min="1" /></td>
+          <td><input name="system.tonnage" type="number" value="{{system.tonnage}}" min="0" step="0.5" /></td>
+          <td><input name="system.ammoAmount" type="number" value="{{system.ammoAmount}}" min="0" /></td>
+          <td><input name="system.heatDissipation" type="number" value="{{system.heatDissipation}}" min="0" /></td>
+        </tr>
+      </table>
+    </div>
+  </section>
+
+  <section class="atow-card">
+    <div class="atow-field">
+      <label class="atow-compact-label">Notes</label>
+      <textarea class="short" name="system.notes" rows="5">{{system.notes}}</textarea>
+    </div>
+  </section>
+</div>

@@ -1,0 +1,294 @@
+.atow.atow-item-sheet {
+  --atow-item-bg: linear-gradient(180deg, rgba(23, 29, 34, 0.96) 0%, rgba(16, 20, 25, 0.98) 100%);
+  --atow-item-panel: linear-gradient(180deg, rgba(46, 55, 63, 0.28) 0%, rgba(22, 28, 35, 0.52) 100%);
+  --atow-item-panel-strong: linear-gradient(180deg, rgba(91, 109, 117, 0.2) 0%, rgba(26, 33, 40, 0.82) 100%);
+  --atow-item-border: rgba(177, 196, 208, 0.18);
+  --atow-item-border-strong: rgba(225, 118, 53, 0.45);
+  --atow-item-text: #eef3f7;
+  --atow-item-muted: rgba(230, 238, 244, 0.72);
+  --atow-item-accent: #f08b49;
+  --atow-item-accent-soft: rgba(240, 139, 73, 0.16);
+  --atow-item-shadow: 0 14px 28px rgba(0, 0, 0, 0.24);
+  color: var(--atow-item-text);
+}
+
+.atow.atow-item-sheet .window-content,
+.atow.atow-item-sheet.application .window-content {
+  background: var(--atow-item-bg);
+}
+
+.atow.atow-item-sheet input,
+.atow.atow-item-sheet select,
+.atow.atow-item-sheet textarea {
+  color: var(--atow-item-text);
+  background: rgba(8, 11, 15, 0.58);
+  border: 1px solid var(--atow-item-border);
+  border-radius: 10px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  transition: border-color 120ms ease, box-shadow 120ms ease, background 120ms ease;
+}
+
+.atow.atow-item-sheet input:focus,
+.atow.atow-item-sheet select:focus,
+.atow.atow-item-sheet textarea:focus {
+  border-color: var(--atow-item-border-strong);
+  box-shadow: 0 0 0 1px rgba(240, 139, 73, 0.22);
+  outline: none;
+}
+
+.atow.atow-item-sheet .atow-item-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+}
+
+.atow.atow-item-sheet .atow-item-hero {
+  display: grid;
+  grid-template-columns: minmax(96px, 25%) minmax(0, 1fr);
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--atow-item-border-strong);
+  border-radius: 18px;
+  background:
+    radial-gradient(circle at top right, rgba(240, 139, 73, 0.18), transparent 38%),
+    var(--atow-item-panel-strong);
+  box-shadow: var(--atow-item-shadow);
+}
+
+.atow.atow-item-sheet section.atow-item-hero {
+  align-items: start;
+}
+
+.atow.atow-item-sheet .atow-item-art {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  height: auto;
+  max-width: 120px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  object-fit: cover;
+  background: rgba(0, 0, 0, 0.25);
+  align-self: stretch;
+  cursor: pointer;
+}
+
+.atow.atow-item-sheet .atow-item-hero-main {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.atow.atow-item-sheet .atow-item-kicker {
+  font-size: 0.74rem;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--atow-item-muted);
+}
+
+.atow.atow-item-sheet .atow-item-title input {
+  width: 100%;
+  padding: 0;
+  border: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 0;
+  background: transparent;
+  color: var(--atow-item-text);
+  font-size: 1.45rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.atow.atow-item-sheet .atow-item-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.atow.atow-item-sheet .atow-item-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(280px, 0.95fr);
+  gap: 10px;
+  align-items: start;
+}
+
+.atow.atow-item-sheet .atow-item-layout.compact {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.atow.atow-item-sheet .atow-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.atow.atow-item-sheet .atow-card {
+  padding: 9px 10px;
+  border: 1px solid var(--atow-item-border);
+  border-radius: 16px;
+  background: var(--atow-item-panel);
+  box-shadow: var(--atow-item-shadow);
+}
+
+.atow.atow-item-sheet .atow-card-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.atow.atow-item-sheet .atow-card-title {
+  margin: 0;
+  font-size: 0.94rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #fff4ea;
+}
+
+.atow.atow-item-sheet .atow-card-hint {
+  font-size: 0.74rem;
+  color: var(--atow-item-muted);
+}
+
+.atow.atow-item-sheet .atow-stat-card {
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+
+.atow.atow-item-sheet .atow-stat-table-wrap {
+  overflow-x: auto;
+}
+
+.atow.atow-item-sheet .atow-stat-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 1px 0;
+}
+
+.atow.atow-item-sheet .atow-stat-table th {
+  padding: 0 0 3px;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--atow-item-muted);
+  text-align: left;
+}
+
+.atow.atow-item-sheet .atow-stat-table td {
+  padding: 0;
+}
+
+.atow.atow-item-sheet .atow-stat-table input,
+.atow.atow-item-sheet .atow-stat-table select {
+  min-width: 0;
+  width: 100%;
+  height: 27px;
+  padding: 2px 4px;
+  border-radius: 6px;
+  font-size: 0.86rem;
+}
+
+.atow.atow-item-sheet .atow-field-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.atow.atow-item-sheet .atow-field-grid.compact-2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.atow.atow-item-sheet .atow-field-grid.compact-3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.atow.atow-item-sheet .atow-field-grid.compact-4 {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.atow.atow-item-sheet .atow-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.atow.atow-item-sheet .atow-field.wide {
+  grid-column: 1 / -1;
+}
+
+.atow.atow-item-sheet .atow-field label {
+  font-size: 0.78rem;
+  color: var(--atow-item-muted);
+  letter-spacing: 0.04em;
+}
+
+.atow.atow-item-sheet .atow-item-meta-grid .atow-field label {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.atow.atow-item-sheet .atow-item-meta-grid .atow-field input {
+  height: 30px;
+  padding: 4px 7px;
+}
+
+.atow.atow-item-sheet .atow-field textarea {
+  min-height: 96px;
+  resize: vertical;
+}
+
+.atow.atow-item-sheet .atow-field textarea.short {
+  min-height: 78px;
+}
+
+.atow.atow-item-sheet .atow-inline-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.atow.atow-item-sheet .atow-inline-field label {
+  margin: 0;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--atow-item-muted);
+  white-space: nowrap;
+}
+
+.atow.atow-item-sheet .atow-inline-field-input {
+  width: 72px;
+}
+
+.atow.atow-item-sheet .atow-inline-field-input input {
+  height: 28px;
+  text-align: center;
+}
+
+.atow.atow-item-sheet .atow-compact-label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--atow-item-muted);
+}
+
+@media (max-width: 760px) {
+  .atow.atow-item-sheet .atow-item-hero {
+    grid-template-columns: 1fr;
+  }
+
+  .atow.atow-item-sheet .atow-item-layout,
+  .atow.atow-item-sheet .atow-item-layout.compact,
+  .atow.atow-item-sheet .atow-item-meta-grid,
+  .atow.atow-item-sheet .atow-field-grid,
+  .atow.atow-item-sheet .atow-field-grid.compact-2,
+  .atow.atow-item-sheet .atow-field-grid.compact-3,
+  .atow.atow-item-sheet .atow-field-grid.compact-4 {
+    grid-template-columns: 1fr;
+  }
+}
