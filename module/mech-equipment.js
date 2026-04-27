@@ -42,6 +42,7 @@ export class AToWMechEquipmentSheet extends HandlebarsApplicationMixin(ItemSheet
     const system = foundry.utils.deepClone(item.system ?? {});
 
     system.notes ??= "";
+    system.specialRules ??= "";
     system.ammoType ??= "";
     system.critSlots = Math.max(1, Math.floor(toNumber(system.critSlots, 1)));
     system.ammoAmount = Math.max(0, toNumber(system.ammoAmount, 0));

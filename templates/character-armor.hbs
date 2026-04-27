@@ -1,98 +1,100 @@
-<div class="atow-item-sheet atow-character-armor">
-  <header class="sheet-header" style="display:flex; gap:12px; align-items:center;">
-    <img
-      class="profile-img"
-      src="{{item.img}}"
-      data-edit="img"
-      title="{{item.name}}"
-      style="width:72px; height:72px; object-fit:cover; border-radius:10px;" />
+<div class="{{cssClass}} atow-item-shell" autocomplete="off">
+  <section
+    class="atow-item-hero"
+    role="presentation"
+    style="display:grid; grid-template-columns:minmax(96px, 25%) minmax(0, 1fr); gap:12px; align-items:start;">
+    <div style="min-width:96px; max-width:120px;">
+      <img
+        class="atow-item-art"
+        src="{{item.img}}"
+        data-edit="img"
+        title="{{item.name}}"
+        style="width:100%; aspect-ratio:1 / 1; height:auto; display:block;" />
+    </div>
 
-    <div style="flex:1; display:flex; flex-direction:column; gap:6px;">
-      <input
-        name="name"
-        type="text"
-        value="{{item.name}}"
-        placeholder="Armor Name"
-        style="font-size:1.3em; font-weight:700;" />
+    <div class="atow-item-hero-main" style="display:flex; flex-direction:column; gap:8px; min-width:0;">
+      <div class="atow-item-kicker">Character Armor Profile</div>
 
-      <div style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap:8px;">
-        <div>
-          <label style="display:block; opacity:0.8;">Tech</label>
-          <input type="text" name="system.ratings.tech" value="{{system.ratings.tech}}" placeholder="A" />
+      <div class="atow-item-title">
+        <input name="name" type="text" value="{{item.name}}" placeholder="Armor Name" />
+      </div>
+
+      <div class="atow-item-meta-grid" style="display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:6px;">
+        <div class="atow-field">
+          <label>Type</label>
+          <select name="system.type">
+            {{selectOptions armorTypes selected=system.type localize=false}}
+          </select>
         </div>
-        <div>
-          <label style="display:block; opacity:0.8;">Legality</label>
-          <input type="text" name="system.ratings.legality" value="{{system.ratings.legality}}" placeholder="A" />
+
+        <div class="atow-field">
+          <label>Affiliation</label>
+          <input type="text" name="system.affiliation" value="{{system.affiliation}}" placeholder="Faction / Manufacturer" />
         </div>
-        <div>
-          <label style="display:block; opacity:0.8;">Availability</label>
-          <input type="text" name="system.ratings.availability" value="{{system.ratings.availability}}" placeholder="A" />
+
+        <div class="atow-field">
+          <label>Mass (kg)</label>
+          <input type="number" step="0.01" name="system.massKg" value="{{system.massKg}}" placeholder="10" />
         </div>
       </div>
     </div>
-  </header>
+  </section>
 
-  <hr />
-
-  <section style="display:grid; grid-template-columns: 1fr 1fr; gap:12px;">
-    <div>
-      <label style="display:block; opacity:0.8;">BAR (M / B / E / X)</label>
-      <div style="display:flex; gap:6px; align-items:center;">
-        <input type="text" name="system.bar.m" value="{{system.bar.m}}" placeholder="M" style="max-width:80px;" />
-        <span style="opacity:0.7;">/</span>
-        <input type="text" name="system.bar.b" value="{{system.bar.b}}" placeholder="B" style="max-width:80px;" />
-        <span style="opacity:0.7;">/</span>
-        <input type="text" name="system.bar.e" value="{{system.bar.e}}" placeholder="E" style="max-width:80px;" />
-        <span style="opacity:0.7;">/</span>
-        <input type="text" name="system.bar.x" value="{{system.bar.x}}" placeholder="X" style="max-width:80px;" />
-      </div>
-    </div>
-
-    <div>
-      <label style="display:block; opacity:0.8;">Cost / Patch</label>
-      <input type="text" name="system.costPatch" value="{{system.costPatch}}" placeholder="e.g. 150 / 10" />
-    </div>
-
-    <div>
-      <label style="display:block; opacity:0.8;">Type</label>
-      <select name="system.type" style="width:100%;">
-        {{selectOptions armorTypes selected=system.type}}
-      </select>
-    </div>
-
-    <div>
-      <label style="display:block; opacity:0.8;">AFF</label>
-      <input type="text" name="system.affiliation" value="{{system.affiliation}}" placeholder="Faction / Manufacturer" />
-    </div>
-
-    <div>
-      <label style="display:block; opacity:0.8;">Mass (kg)</label>
-      <input type="number" step="0.01" name="system.massKg" value="{{system.massKg}}" placeholder="10" />
+  <section class="atow-card atow-stat-card">
+    <div class="atow-stat-table-wrap">
+      <table class="atow-stat-table">
+        <tr>
+          <th>Tech</th>
+          <th>Avail</th>
+          <th>Legal</th>
+          <th>BAR M</th>
+          <th>BAR B</th>
+          <th>BAR E</th>
+          <th>BAR X</th>
+          <th>Cost / Patch</th>
+        </tr>
+        <tr>
+          <td><input type="text" name="system.ratings.tech" value="{{system.ratings.tech}}" placeholder="A" /></td>
+          <td><input type="text" name="system.ratings.availability" value="{{system.ratings.availability}}" placeholder="A" /></td>
+          <td><input type="text" name="system.ratings.legality" value="{{system.ratings.legality}}" placeholder="L" /></td>
+          <td><input type="text" name="system.bar.m" value="{{system.bar.m}}" placeholder="M" /></td>
+          <td><input type="text" name="system.bar.b" value="{{system.bar.b}}" placeholder="B" /></td>
+          <td><input type="text" name="system.bar.e" value="{{system.bar.e}}" placeholder="E" /></td>
+          <td><input type="text" name="system.bar.x" value="{{system.bar.x}}" placeholder="X" /></td>
+          <td><input type="text" name="system.costPatch" value="{{system.costPatch}}" placeholder="150 / 10" /></td>
+        </tr>
+      </table>
     </div>
   </section>
 
-  <hr />
-
-  <section>
-    <label style="display:block; opacity:0.8; margin-bottom:6px;">Coverage</label>
-    <div style="display:grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap:6px;">
-      <label style="display:flex; gap:8px; align-items:center;"><input type="checkbox" name="system.coverage.head" {{checked system.coverage.head}} /> Head</label>
-      <label style="display:flex; gap:8px; align-items:center;"><input type="checkbox" name="system.coverage.torso" {{checked system.coverage.torso}} /> Torso</label>
-      <label style="display:flex; gap:8px; align-items:center;"><input type="checkbox" name="system.coverage.arms" {{checked system.coverage.arms}} /> Arms</label>
-      <label style="display:flex; gap:8px; align-items:center;"><input type="checkbox" name="system.coverage.legs" {{checked system.coverage.legs}} /> Legs</label>
-      <label style="display:flex; gap:8px; align-items:center;"><input type="checkbox" name="system.coverage.hands" {{checked system.coverage.hands}} /> Hands</label>
-      <label style="display:flex; gap:8px; align-items:center;"><input type="checkbox" name="system.coverage.feet" {{checked system.coverage.feet}} /> Feet</label>
+  <section class="atow-item-layout compact">
+    <div class="atow-stack">
+      <section class="atow-card">
+        <div class="atow-field">
+          <label class="atow-compact-label">Coverage</label>
+          <div class="atow-field-grid compact-2">
+            <label class="atow-inline-field"><input type="checkbox" name="system.coverage.head" {{checked system.coverage.head}} /> <span>Head</span></label>
+            <label class="atow-inline-field"><input type="checkbox" name="system.coverage.torso" {{checked system.coverage.torso}} /> <span>Torso</span></label>
+            <label class="atow-inline-field"><input type="checkbox" name="system.coverage.arms" {{checked system.coverage.arms}} /> <span>Arms</span></label>
+            <label class="atow-inline-field"><input type="checkbox" name="system.coverage.legs" {{checked system.coverage.legs}} /> <span>Legs</span></label>
+            <label class="atow-inline-field"><input type="checkbox" name="system.coverage.hands" {{checked system.coverage.hands}} /> <span>Hands</span></label>
+            <label class="atow-inline-field"><input type="checkbox" name="system.coverage.feet" {{checked system.coverage.feet}} /> <span>Feet</span></label>
+          </div>
+        </div>
+      </section>
     </div>
-  </section>
 
-  <hr />
-
-  <section>
-    <label style="display:block; opacity:0.8; margin-bottom:6px;">Notes</label>
-    <textarea
-      name="system.notes"
-      rows="6"
-      style="width:100%;"
-      placeholder="Special rules / effects / limitations">{{system.notes}}</textarea>
+    <div class="atow-stack">
+      <section class="atow-card">
+        <div class="atow-field">
+          <label class="atow-compact-label">Notes</label>
+          <textarea
+            class="short"
+            name="system.notes"
+            rows="6"
+            placeholder="Special rules / effects / limitations">{{system.notes}}</textarea>
+        </div>
+      </section>
+    </div>
   </section>
 </div>

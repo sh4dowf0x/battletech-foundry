@@ -1,0 +1,714 @@
+/* styles/combat-vehicle.css */
+
+.atow.sheet.actor.combat-vehicle {
+  --cv-text: #ecf1f5;
+  --cv-muted: rgba(231, 239, 245, 0.68);
+  --cv-accent: #df7b3e;
+  --cv-border: rgba(201, 220, 231, 0.16);
+  --cv-border-strong: rgba(223, 123, 62, 0.42);
+  --cv-panel: linear-gradient(180deg, rgba(45, 54, 62, 0.36) 0%, rgba(19, 24, 29, 0.88) 100%);
+  --cv-panel-strong: linear-gradient(180deg, rgba(78, 94, 102, 0.28) 0%, rgba(21, 28, 34, 0.94) 100%);
+  --cv-shadow: 0 18px 34px rgba(0, 0, 0, 0.28);
+  color: var(--cv-text);
+}
+
+.atow.sheet.actor.combat-vehicle .window-content {
+  background:
+    radial-gradient(circle at top right, rgba(223, 123, 62, 0.12), transparent 34%),
+    linear-gradient(180deg, rgba(20, 25, 31, 0.98) 0%, rgba(13, 17, 21, 1) 100%);
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.atow.sheet.actor.combat-vehicle .window-header .atow-toggle-third-column,
+.combat-vehicle-sheet .window-header .atow-toggle-third-column {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.combat-vehicle-sheet {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0;
+  color: var(--cv-text);
+  min-height: 100%;
+}
+
+.combat-vehicle-sheet *,
+.combat-vehicle-sheet *::before,
+.combat-vehicle-sheet *::after {
+  box-sizing: border-box;
+}
+
+.combat-vehicle-sheet input,
+.combat-vehicle-sheet select,
+.combat-vehicle-sheet textarea {
+  width: 100%;
+  border: 1px solid var(--cv-border);
+  border-radius: 10px;
+  background: rgba(7, 10, 14, 0.58);
+  color: var(--cv-text);
+  padding: 3px 6px;
+  font-size: 0.84rem;
+  transition: border-color 120ms ease, box-shadow 120ms ease, background 120ms ease;
+}
+
+.combat-vehicle-sheet input[type="text"],
+.combat-vehicle-sheet input[type="number"],
+.combat-vehicle-sheet select {
+  height: 22px;
+}
+
+.combat-vehicle-sheet .cv-name-input,
+.combat-vehicle-sheet input[type="text"].cv-name-input {
+  height: auto;
+}
+
+.combat-vehicle-sheet textarea {
+  min-height: 96px;
+  resize: vertical;
+}
+
+.combat-vehicle-sheet input:focus,
+.combat-vehicle-sheet select:focus,
+.combat-vehicle-sheet textarea:focus {
+  outline: none;
+  border-color: var(--cv-border-strong);
+  box-shadow: 0 0 0 1px rgba(223, 123, 62, 0.22);
+}
+
+.combat-vehicle-sheet input[type="number"] {
+  text-align: center;
+}
+
+.combat-vehicle-sheet .sheet-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 16px 8px;
+  margin: 0;
+  border-bottom: 1px solid var(--cv-border-strong);
+  background:
+    radial-gradient(circle at top right, rgba(223, 123, 62, 0.18), transparent 38%),
+    var(--cv-panel-strong);
+}
+
+.combat-vehicle-sheet .header-left {
+  min-width: 0;
+}
+
+.combat-vehicle-sheet .cv-name-input {
+  height: auto;
+  min-height: 0;
+  padding: 4px 0 5px;
+  margin-top: 0;
+  border: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 0;
+  background: transparent;
+  font-size: 1.85rem;
+  font-weight: 800;
+  line-height: 1.1;
+  letter-spacing: 0.01em;
+}
+
+.combat-vehicle-sheet .sheet-header .name {
+  color: var(--cv-text);
+}
+
+.combat-vehicle-sheet .cv-header-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 0;
+}
+
+.combat-vehicle-sheet .cv-header-meta span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 0 9px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--cv-muted);
+}
+
+.combat-vehicle-sheet .header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.combat-vehicle-sheet .cv-header-actions {
+  justify-content: flex-end;
+}
+
+.combat-vehicle-sheet .header-action-btn {
+  height: 22px;
+  padding: 0 9px;
+  border: 1px solid rgba(223, 123, 62, 0.28);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--cv-text);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: grab;
+  transition: border-color 120ms ease, background 120ms ease, transform 120ms ease;
+}
+
+.combat-vehicle-sheet .header-action-btn:hover {
+  border-color: rgba(223, 123, 62, 0.52);
+  background: rgba(223, 123, 62, 0.12);
+}
+
+.combat-vehicle-sheet .header-action-btn.is-active {
+  border-color: rgba(223, 123, 62, 0.68);
+  background: rgba(223, 123, 62, 0.18);
+  color: #ffd8bf;
+}
+
+.combat-vehicle-sheet .header-action-btn:active {
+  cursor: grabbing;
+  transform: translateY(1px);
+}
+
+.combat-vehicle-sheet .cv-mini-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.combat-vehicle-sheet .cv-mini-stat span {
+  font-size: 0.69rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--cv-muted);
+}
+
+.combat-vehicle-sheet .cv-body,
+.combat-vehicle-sheet .cv-main {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.combat-vehicle-sheet .cv-body {
+  margin-top: 0;
+  padding: 14px;
+}
+
+.combat-vehicle-sheet .cv-main-top {
+  display: grid;
+  grid-template-columns: minmax(0, 35fr) minmax(0, 25fr) minmax(0, 40fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.combat-vehicle-sheet.third-column-hidden .cv-main-top {
+  grid-template-columns: minmax(0, 35fr) minmax(0, 25fr);
+}
+
+.combat-vehicle-sheet.third-column-hidden .cv-col-right {
+  display: none;
+}
+
+.combat-vehicle-sheet .cv-col {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+  min-width: 0;
+}
+
+.combat-vehicle-sheet .cv-col-left {
+  min-width: 0;
+}
+
+.combat-vehicle-sheet .cv-col-mid {
+  min-width: 0;
+}
+
+.combat-vehicle-sheet .cv-col-right {
+  min-width: 0;
+}
+
+.combat-vehicle-sheet .cv-panel {
+  padding: 14px;
+  border: 1px solid var(--cv-border);
+  border-radius: 18px;
+  background: var(--cv-panel);
+  box-shadow: var(--cv-shadow);
+}
+
+.combat-vehicle-sheet .cv-panel h3 {
+  position: relative;
+  margin: 0 0 8px;
+  padding-bottom: 0;
+  color: #fff4ea;
+  font-size: 0.74rem;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.combat-vehicle-sheet .cv-panel h3::after {
+  content: "";
+  display: block;
+  width: 100%;
+  height: 1px;
+  margin-top: 4px;
+  border-radius: 0;
+  background: rgba(190, 74, 60, 0.95);
+}
+
+.combat-vehicle-sheet .cv-grid {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.combat-vehicle-sheet .cv-grid:last-child {
+  margin-bottom: 0;
+}
+
+.combat-vehicle-sheet .cv-grid-2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.combat-vehicle-sheet .cv-field label {
+  display: block;
+  margin-bottom: 3px;
+  font-size: 0.69rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--cv-muted);
+}
+
+.combat-vehicle-sheet .cv-inline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.combat-vehicle-sheet .cv-movement-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.combat-vehicle-sheet .cv-movement-inline {
+  gap: 6px;
+}
+
+.combat-vehicle-sheet .cv-mini-label {
+  font-size: 0.69rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--cv-muted);
+}
+
+.combat-vehicle-sheet .cv-mini-inline-input {
+  width: 48px;
+}
+
+.combat-vehicle-sheet .cv-movement-status-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.combat-vehicle-sheet .cv-move-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 42px;
+  min-height: 24px;
+  padding: 0 8px;
+  border: 1px solid rgba(223, 123, 62, 0.32);
+  border-radius: 999px;
+  background: rgba(223, 123, 62, 0.14);
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: #fff2e6;
+}
+
+.combat-vehicle-sheet .cv-inline-checks {
+  gap: 10px;
+}
+
+.combat-vehicle-sheet .cv-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.76rem;
+  color: var(--cv-muted);
+  position: relative;
+}
+
+.combat-vehicle-sheet .cv-check input[type="checkbox"] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.combat-vehicle-sheet .cv-check span {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  min-height: 14px;
+  padding-left: 20px;
+}
+
+.combat-vehicle-sheet .cv-check span::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 14px;
+  height: 14px;
+  transform: translateY(-50%);
+  border: 1px solid rgba(223, 123, 62, 0.38);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.04);
+  box-sizing: border-box;
+}
+
+.combat-vehicle-sheet .cv-check input[type="checkbox"]:checked + span::before {
+  background: rgba(223, 123, 62, 0.22);
+  border-color: rgba(223, 123, 62, 0.62);
+}
+
+.combat-vehicle-sheet .cv-check input[type="checkbox"]:checked + span::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 4px;
+  width: 6px;
+  height: 6px;
+  transform: translateY(-50%);
+  border-radius: 2px;
+  background: #fff4ea;
+}
+
+.combat-vehicle-sheet .cv-track {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  gap: 5px;
+}
+
+.combat-vehicle-sheet .cv-track-box {
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--cv-border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  font-size: 0.74rem;
+  font-weight: 700;
+  cursor: pointer;
+  user-select: none;
+}
+
+.combat-vehicle-sheet .cv-track-box.filled {
+  background: rgba(223, 123, 62, 0.22);
+  border-color: rgba(223, 123, 62, 0.52);
+  color: #fff4ea;
+}
+
+.combat-vehicle-sheet .cv-drop-zone {
+  border: 1px dashed rgba(223, 123, 62, 0.34);
+  border-radius: 14px;
+  padding: 10px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.combat-vehicle-sheet .cv-drop-hint {
+  margin-bottom: 8px;
+  font-size: 0.72rem;
+  color: var(--cv-muted);
+}
+
+.combat-vehicle-sheet .cv-we-table {
+  display: grid;
+  gap: 2px;
+}
+
+.combat-vehicle-sheet .cv-we-row {
+  display: grid;
+  grid-template-columns: minmax(0, 2.2fr) 0.7fr 0.7fr 1.3fr 0.35fr;
+  gap: 4px;
+  align-items: center;
+  padding: 4px 5px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  font-size: 0.72rem;
+}
+
+.combat-vehicle-sheet .cv-we-row:not(.cv-we-header) {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.combat-vehicle-sheet .cv-we-row:not(.cv-we-header):hover {
+  background: rgba(223, 123, 62, 0.08);
+  border-color: rgba(223, 123, 62, 0.2);
+}
+
+.combat-vehicle-sheet .cv-we-header {
+  padding-bottom: 6px;
+  border-bottom: 0;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--cv-muted);
+}
+
+.combat-vehicle-sheet .cv-we-col.type {
+  font-weight: 700;
+  color: var(--cv-text);
+}
+
+.combat-vehicle-sheet .cv-we-col {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.combat-vehicle-sheet .cv-we-col.range {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.combat-vehicle-sheet .cv-we-col.ctrl {
+  text-align: center;
+}
+
+.combat-vehicle-sheet .item-delete {
+  cursor: pointer;
+  font-weight: 800;
+  opacity: 0.7;
+}
+
+.combat-vehicle-sheet .item-delete:hover {
+  opacity: 1;
+  color: #fff2e6;
+}
+
+.combat-vehicle-sheet .cv-panel-portrait,
+.combat-vehicle-sheet .cv-panel-crit-grid {
+  flex: 1 1 auto;
+}
+
+.combat-vehicle-sheet .cv-portrait {
+  width: 100%;
+  display: block;
+  max-height: 320px;
+  object-fit: contain;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.18);
+  cursor: pointer;
+}
+
+.combat-vehicle-sheet .cv-crit-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.combat-vehicle-sheet .cv-armor-controls {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.combat-vehicle-sheet .cv-armor-control label {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--cv-muted);
+}
+
+.combat-vehicle-sheet .cv-armor-diagram {
+  position: relative;
+  display: block;
+  padding: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.02), rgba(0, 0, 0, 0.08)),
+    url("../assets/armor-diagram-wv.png") center / contain no-repeat;
+  aspect-ratio: 420 / 679;
+  min-height: 440px;
+}
+
+.combat-vehicle-sheet .cv-armor-loc,
+.combat-vehicle-sheet .cv-structure-loc {
+  position: absolute;
+  display: grid;
+  grid-template-columns: repeat(var(--cols, 6), 8px);
+  grid-auto-rows: 8px;
+  gap: 2px;
+  padding: 2px;
+  justify-content: center;
+  align-content: start;
+  pointer-events: none;
+}
+
+.combat-vehicle-sheet .cv-armor-pips {
+  display: contents;
+}
+
+.combat-vehicle-sheet .cv-armor-pip,
+.combat-vehicle-sheet .cv-structure-pip {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.combat-vehicle-sheet .cv-armor-pip {
+  border: 1px solid rgba(236, 241, 245, 0.72);
+  background: transparent;
+}
+
+.combat-vehicle-sheet .cv-armor-pip.filled {
+  background: rgba(223, 123, 62, 0.92);
+  border-color: rgba(223, 123, 62, 0.98);
+}
+
+.combat-vehicle-sheet .cv-structure-pip {
+  border: 1px solid rgba(236, 241, 245, 0.88);
+  background: transparent;
+}
+
+.combat-vehicle-sheet .cv-structure-pip.filled {
+  background: rgba(236, 241, 245, 0.88);
+}
+
+.combat-vehicle-sheet .cv-structure-front {
+  top: 34.5%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  --cols: 5;
+}
+
+.combat-vehicle-sheet .cv-structure-left {
+  top: 51%;
+  left: 24%;
+  transform: translate(-50%, -50%);
+  --cols: 2;
+}
+
+.combat-vehicle-sheet .cv-structure-right {
+  top: 51%;
+  left: 76%;
+  transform: translate(-50%, -50%);
+  --cols: 2;
+}
+
+.combat-vehicle-sheet .cv-structure-turret {
+  top: 58%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  --cols: 5;
+}
+
+.combat-vehicle-sheet .cv-structure-rear {
+  top: 85.5%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  --cols: 5;
+}
+
+.combat-vehicle-sheet .cv-armor-front {
+  top: 20%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  --cols: 8;
+}
+
+.combat-vehicle-sheet .cv-armor-left {
+  top: 50%;
+  left: 10%;
+  transform: translate(-50%, -50%);
+  --cols: 2;
+}
+
+.combat-vehicle-sheet .cv-armor-turret {
+  top: 70%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  --cols: 8;
+}
+
+.combat-vehicle-sheet .cv-armor-right {
+  top: 50%;
+  left: 90%;
+  transform: translate(-50%, -50%);
+  --cols: 2;
+}
+
+.combat-vehicle-sheet .cv-armor-rear {
+  top: 93%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  --cols: 12;
+}
+
+@media (max-width: 1180px) {
+  .combat-vehicle-sheet .cv-main-top {
+    grid-template-columns: 1fr;
+  }
+
+  .combat-vehicle-sheet .cv-armor-controls {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .combat-vehicle-sheet .cv-header {
+    grid-template-columns: 1fr;
+  }
+
+  .combat-vehicle-sheet .cv-header-stats,
+  .combat-vehicle-sheet .cv-grid-2,
+  .combat-vehicle-sheet .cv-crit-grid,
+  .combat-vehicle-sheet .cv-armor-controls {
+    grid-template-columns: 1fr;
+  }
+
+  .combat-vehicle-sheet .cv-we-row {
+    grid-template-columns: minmax(0, 1.4fr) 0.6fr 0.6fr 1fr 0.35fr;
+    gap: 6px;
+    font-size: 0.72rem;
+  }
+}

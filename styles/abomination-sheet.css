@@ -1,364 +1,434 @@
 /* styles/abomination-sheet.css */
 
-.atow-abomination-sheet {
-  --abom-ink: #2b241c;
-  --abom-ash: #6b5b49;
-  --abom-border: #b06b2d;
-  --abom-panel: #cfd2c2;
-  --abom-panel-light: #d7dacb;
-  --abom-title: #1e1b18;
-  --abom-highlight: #f1e1cd;
-  --abom-portrait-size: 180px;
-  font-family: "Franklin Gothic Medium", "Trebuchet MS", "Tahoma", sans-serif;
-  color: var(--abom-ink);
-  background: linear-gradient(180deg, #bfc2b1 0%, #c9ccbe 50%, #b8bbac 100%);
-  border: 2px solid var(--abom-border);
-  border-radius: 10px;
-  padding: 8px 10px;
-  box-shadow: inset 0 0 0 1px rgba(43, 36, 28, 0.2);
+.atow.sheet.actor.abomination .window-content {
+  background:
+    radial-gradient(circle at top right, rgba(223, 123, 62, 0.12), transparent 34%),
+    linear-gradient(180deg, rgba(20, 25, 31, 0.98) 0%, rgba(13, 17, 21, 1) 100%);
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
-.atow-abomination-sheet * {
+.atow.sheet.actor.abomination .window-header .atow-toggle-third-column,
+.atow-abomination-sheet .window-header .atow-toggle-third-column {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.atow-abomination-sheet {
+  --abom-text: #edf2f5;
+  --abom-muted: rgba(226, 235, 241, 0.68);
+  --abom-accent: #df7b3e;
+  --abom-line: rgba(176, 193, 204, 0.14);
+  --abom-line-strong: rgba(223, 123, 62, 0.42);
+  --abom-panel: linear-gradient(180deg, rgba(38, 46, 54, 0.84) 0%, rgba(18, 23, 29, 0.94) 100%);
+  --abom-panel-soft: linear-gradient(180deg, rgba(54, 63, 73, 0.62) 0%, rgba(24, 30, 37, 0.88) 100%);
+  --abom-shadow: 0 20px 36px rgba(0, 0, 0, 0.26);
+  color: var(--abom-text);
+  min-height: 100%;
+}
+
+.atow-abomination-sheet,
+.atow-abomination-sheet *,
+.atow-abomination-sheet *::before,
+.atow-abomination-sheet *::after {
   box-sizing: border-box;
 }
 
-.atow-abomination-sheet .abom-titlebar {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  background: linear-gradient(90deg, #1b1815, #33251d);
-  border: 1px solid #5a3b26;
-  border-radius: 6px;
-  padding: 6px 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.12em;
-  color: #f0e0c8;
+.atow-abomination-sheet .sheet-header {
+  display: block;
+  padding: 10px 16px 8px;
+  border-bottom: 1px solid var(--abom-line-strong);
+  background:
+    radial-gradient(circle at top right, rgba(223, 123, 62, 0.18), transparent 32%),
+    linear-gradient(180deg, rgba(36, 44, 52, 0.92) 0%, rgba(19, 25, 32, 0.96) 100%);
 }
 
-.atow-abomination-sheet .abom-titlebar .abom-name {
-  flex: 1;
+.atow-abomination-sheet .header-left {
+  min-width: 0;
+}
+
+.atow-abomination-sheet .abom-name {
+  width: 100%;
+  height: auto;
+  padding: 4px 0 5px;
+  border: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 0;
   background: transparent;
-  border: none;
-  color: #f0e0c8;
-  font-size: 14px;
-  font-weight: 600;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  padding: 0;
+  color: var(--abom-text);
+  font-size: 1.85rem;
+  font-weight: 800;
+  letter-spacing: 0.01em;
 }
 
-.atow-abomination-sheet .abom-titlebar .abom-name:focus {
+.atow-abomination-sheet .abom-name:focus {
   outline: none;
+  box-shadow: none;
 }
 
-.atow-abomination-sheet .abom-titlebar .abom-title-suffix {
-  font-size: 12px;
-  font-weight: 600;
+.atow-abomination-sheet .abom-header-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 0;
 }
 
-.atow-abomination-sheet label {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--abom-ash);
-  margin-right: 6px;
+.atow-abomination-sheet .abom-header-meta span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 0 9px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--abom-muted);
 }
 
-.atow-abomination-sheet input {
-  font-family: inherit;
-  font-size: 12px;
-  padding: 2px 6px;
-  border-radius: 4px;
-  border: 1px solid rgba(43, 36, 28, 0.35);
-  background: var(--abom-panel-light);
-  color: var(--abom-ink);
+.atow-abomination-sheet .abom-body {
+  padding: 14px;
+}
+
+.atow-abomination-sheet .abom-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 60%) minmax(0, 40%);
+  gap: 12px;
+  align-items: start;
+}
+
+.atow-abomination-sheet.third-column-hidden .abom-layout {
+  grid-template-columns: minmax(0, 100%);
+}
+
+.atow-abomination-sheet.third-column-hidden .abom-col-right {
+  display: none;
+}
+
+.atow-abomination-sheet .abom-main {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.atow-abomination-sheet .abom-main-top {
+  display: grid;
+  grid-template-columns: minmax(0, 35fr) minmax(0, 25fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.atow-abomination-sheet .abom-col {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.atow-abomination-sheet .abom-panel {
+  padding: 14px;
+  border: 1px solid var(--abom-line);
+  border-radius: 18px;
+  background: var(--abom-panel);
+  box-shadow: var(--abom-shadow);
+  color: var(--abom-text);
+}
+
+.atow-abomination-sheet .abom-panel-portrait {
+  background: var(--abom-panel-soft);
+}
+
+.atow-abomination-sheet .abom-panel h3 {
+  margin: 0 0 8px;
+  color: #fff4ea;
+  font-size: 0.74rem;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.atow-abomination-sheet .abom-panel h3::after {
+  content: "";
+  display: block;
+  width: 100%;
+  height: 1px;
+  margin-top: 4px;
+  background: rgba(190, 74, 60, 0.95);
+}
+
+.atow-abomination-sheet input,
+.atow-abomination-sheet select,
+.atow-abomination-sheet textarea {
+  width: 100%;
+  border: 1px solid var(--abom-line);
+  border-radius: 10px;
+  background: rgba(7, 10, 14, 0.52);
+  color: var(--abom-text);
+  padding: 3px 6px;
+  font-size: 0.84rem;
+}
+
+.atow-abomination-sheet input[type="text"],
+.atow-abomination-sheet input[type="number"],
+.atow-abomination-sheet select {
+  height: 22px;
 }
 
 .atow-abomination-sheet input[type="number"] {
   text-align: center;
 }
 
-.atow-abomination-sheet .abom-body {
+.atow-abomination-sheet .abom-grid {
   display: grid;
-  grid-template-columns: var(--abom-portrait-size) 1fr;
-  gap: 12px;
-  margin-top: 8px;
+  gap: 10px;
+  margin-bottom: 10px;
 }
 
-.atow-abomination-sheet .abom-portrait-column {
-  display: flex;
-  align-items: stretch;
+.atow-abomination-sheet .abom-grid:last-child {
+  margin-bottom: 0;
 }
 
-.atow-abomination-sheet .abom-left {
-  display: grid;
+.atow-abomination-sheet .abom-grid-2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.atow-abomination-sheet .abom-inline-move {
+  display: inline-flex;
+  align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
 }
 
-.atow-abomination-sheet .abom-content {
-  display: grid;
-  grid-template-columns: 1.4fr 0.9fr;
-  gap: 12px;
+.atow-abomination-sheet .abom-mini-label {
+  color: var(--abom-muted);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.atow-abomination-sheet .abom-mini-inline-input {
+  width: 64px;
+  min-width: 64px;
+  text-align: center;
+}
+
+.atow-abomination-sheet .abom-grid-3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.atow-abomination-sheet .abom-field label {
+  display: block;
+  margin-bottom: 3px;
+  font-size: 0.69rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--abom-muted);
 }
 
 .atow-abomination-sheet .abom-portrait {
-  width: var(--abom-portrait-size);
-  height: var(--abom-portrait-size);
-  object-fit: cover;
-  border-radius: 6px;
-  border: 1px solid rgba(43, 36, 28, 0.4);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.2);
+  width: 100%;
+  display: block;
+  max-height: 320px;
+  object-fit: contain;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.18);
   cursor: pointer;
 }
 
-.atow-abomination-sheet .abom-row {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.atow-abomination-sheet .abom-type-row {
-  gap: 12px;
-}
-
-.atow-abomination-sheet .abom-type-row .abom-inline-field {
-  flex: 1 1 auto;
-}
-
-.atow-abomination-sheet .abom-type-row input,
-.atow-abomination-sheet .abom-type-row select {
-  min-width: 140px;
-}
-
-.atow-abomination-sheet .abom-row input:not(.skill-number):not(.mp-number):not(.mini-number) {
-  min-width: 140px;
-}
-
-.atow-abomination-sheet .abom-skill-row {
+.atow-abomination-sheet .abom-tracks {
   display: grid;
-  grid-template-columns: 1fr 1fr;
   gap: 10px;
 }
 
-.atow-abomination-sheet .abom-skill {
-  display: flex;
+.atow-abomination-sheet .abom-track {
+  display: grid;
+  grid-template-columns: 28px 1fr;
+  gap: 10px;
+  align-items: start;
+}
+
+.atow-abomination-sheet .track-number {
+  display: inline-flex;
   align-items: center;
-  gap: 6px;
-}
-
-.atow-abomination-sheet .skill-number {
-  width: 34px;
-  height: 22px;
-  padding: 0 4px;
-  font-size: 12px;
-  line-height: 1;
-  min-width: 0;
-}
-
-.atow-abomination-sheet .abom-mp-row {
-  align-items: center;
-  gap: 6px;
-}
-
-.atow-abomination-sheet .mp-number {
-  width: 34px;
-  height: 22px;
-  padding: 0 4px;
-  font-size: 12px;
-  line-height: 1;
-  min-width: 0;
-}
-
-.atow-abomination-sheet .abom-weapons {
-  border: 1px solid rgba(43, 36, 28, 0.3);
-  border-radius: 6px;
-  padding: 6px;
-  background: var(--abom-panel);
-}
-
-.atow-abomination-sheet .abom-weapons-title {
-  font-size: 11px;
+  justify-content: center;
+  min-height: 24px;
+  border: 1px solid rgba(223, 123, 62, 0.32);
+  border-radius: 999px;
+  background: rgba(223, 123, 62, 0.14);
+  color: #fff1e6;
+  font-size: 0.72rem;
   font-weight: 700;
-  text-transform: uppercase;
-  color: var(--abom-title);
-  margin-bottom: 4px;
+}
+
+.atow-abomination-sheet .track-pips {
+  display: grid;
+  gap: 6px;
+}
+
+.atow-abomination-sheet .track-row {
+  display: grid;
+  grid-template-columns: repeat(19, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.atow-abomination-sheet .abom-pip {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border-radius: 50%;
+  border: 1px solid rgba(236, 241, 245, 0.72);
+  background: transparent;
+  cursor: pointer;
+}
+
+.atow-abomination-sheet .abom-pip.filled {
+  background: rgba(223, 123, 62, 0.92);
+  border-color: rgba(223, 123, 62, 0.98);
 }
 
 .atow-abomination-sheet .abom-weapons-drop {
-  border: 1px dashed rgba(43, 36, 28, 0.35);
-  border-radius: 6px;
-  padding: 6px;
-  background: var(--abom-panel-light);
+  border: 1px dashed rgba(223, 123, 62, 0.34);
+  border-radius: 14px;
+  padding: 10px;
+  background: rgba(255, 255, 255, 0.025);
 }
 
-.atow-abomination-sheet .abom-weapons-hint {
-  font-size: 11px;
-  color: var(--abom-ash);
-  margin-bottom: 6px;
+.atow-abomination-sheet .abom-we-table {
+  display: grid;
+  gap: 2px;
 }
 
 .atow-abomination-sheet .abom-we-row {
   display: grid;
-  grid-template-columns: 1.6fr 0.5fr 0.4fr 0.5fr 0.5fr 0.5fr 0.5fr 0.5fr 32px;
-  gap: 6px;
+  grid-template-columns: minmax(0, 2.35fr) 0.6fr 0.5fr 0.6fr 1.35fr 0.35fr;
+  gap: 4px;
   align-items: center;
-  font-size: 11px;
+  padding: 4px 5px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  font-size: 0.72rem;
   margin: 0;
-  padding: 0;
+}
+
+.atow-abomination-sheet .abom-we-row.item {
+  margin: 0;
+}
+
+.atow-abomination-sheet .abom-we-row:not(.abom-we-header) {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.atow-abomination-sheet .abom-we-row:not(.abom-we-header):hover {
+  background: rgba(223, 123, 62, 0.08);
+  border-color: rgba(223, 123, 62, 0.2);
 }
 
 .atow-abomination-sheet .abom-we-header {
-  font-size: 11px;
-  font-weight: 700;
+  padding-bottom: 6px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--abom-muted);
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
-  color: var(--abom-title);
-  margin-bottom: 4px;
 }
 
-.atow-abomination-sheet .abom-we-row .col-name {
-  text-align: left;
+.atow-abomination-sheet .abom-we-row > div {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.atow-abomination-sheet .abom-we-row .col-name a {
+  color: #fff5ec;
+  text-decoration: none;
+  font-weight: 700;
+}
+
+.atow-abomination-sheet .abom-we-row .col-range {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 
 .atow-abomination-sheet .abom-we-row .col-ctrl {
   text-align: center;
 }
 
-.atow-abomination-sheet .abom-we-row .col-ctrl a {
-  color: var(--abom-title);
+.atow-abomination-sheet .abom-panel-reference {
+  gap: 10px;
 }
 
-.atow-abomination-sheet .abom-we-attack {
-  margin-right: 6px;
+.atow-abomination-sheet .abom-ref-subtitle {
+  margin: 10px 0 6px;
+  color: #fff4ea;
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
-.atow-abomination-sheet .abom-physical {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
+.atow-abomination-sheet .abom-ref-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
 }
 
-.atow-abomination-sheet .abom-physical .physical-label {
-  font-weight: 700;
-  color: var(--abom-title);
-  margin-right: 4px;
+.atow-abomination-sheet .abom-ref-table th,
+.atow-abomination-sheet .abom-ref-table td {
+  padding: 5px 6px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  text-align: left;
 }
 
-.atow-abomination-sheet .physical-field {
-  display: flex;
-  align-items: center;
-  gap: 4px;
+.atow-abomination-sheet .abom-ref-table th {
+  color: var(--abom-muted);
+  font-size: 0.66rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
-.atow-abomination-sheet .physical-field input {
-  width: 42px;
+.atow-abomination-sheet .abom-ref-table tbody tr:nth-child(odd) {
+  background: rgba(255, 255, 255, 0.03);
 }
 
-.atow-abomination-sheet .abom-right {
-  display: grid;
-  gap: 8px;
+.atow-abomination-sheet .abom-we-row .item-delete {
+  color: var(--abom-text);
+  font-weight: 800;
+  opacity: 0.7;
+  text-decoration: none;
 }
 
-.atow-abomination-sheet .abom-inline-field {
-  display: flex;
-  align-items: center;
-  gap: 4px;
+.atow-abomination-sheet .abom-we-row .item-delete:hover {
+  opacity: 1;
+  color: #fff2e6;
 }
 
-.atow-abomination-sheet .abom-inline-field label {
-  margin-right: 2px;
-}
-
-.atow-abomination-sheet .abom-inline-field .mini-number {
-  width: 34px;
-  height: 22px;
-  padding: 0 4px;
-  font-size: 12px;
-  line-height: 1;
-  min-width: 0;
-}
-
-.atow-abomination-sheet .abom-readonly {
-  background: #ebe6d8;
-}
-
-.atow-abomination-sheet .abom-track {
-  display: grid;
-  grid-template-columns: 26px 1fr;
-  gap: 6px;
-  align-items: center;
-  background: var(--abom-panel);
-  border: 1px solid rgba(43, 36, 28, 0.3);
-  border-radius: 6px;
-  padding: 6px;
-}
-
-.atow-abomination-sheet .track-number {
-  font-weight: 700;
-  text-align: center;
-  background: var(--abom-highlight);
-  border: 1px solid rgba(43, 36, 28, 0.3);
-  border-radius: 4px;
-  padding: 2px 0;
-}
-
-.atow-abomination-sheet .track-pips {
-  display: grid;
-  gap: 4px;
-}
-
-.atow-abomination-sheet .track-row {
-  display: grid;
-  grid-template-columns: repeat(19, 1fr);
-  gap: 3px;
-}
-
-.atow-abomination-sheet .abom-pip {
-  width: 10px;
-  height: 10px;
-  border: 1px solid rgba(43, 36, 28, 0.5);
-  border-radius: 50%;
-  background: #ebe6d8;
-  cursor: pointer;
-}
-
-.atow-abomination-sheet .abom-pip.filled {
-  background: #3a2a22;
-}
-
-.atow-abomination-sheet .abom-footer {
-  display: flex;
-  justify-content: flex-end;
-  gap: 16px;
-  margin-top: 8px;
-}
-
-.atow-abomination-sheet .abom-footer label {
-  margin-right: 4px;
-}
-
-.atow-abomination-sheet .abom-handler,
-.atow-abomination-sheet .abom-bonus {
-  display: flex;
-  align-items: center;
-}
-
-.atow-abomination-sheet .abom-handler input,
-.atow-abomination-sheet .abom-bonus input {
-  min-width: 120px;
-}
-
-@media (max-width: 900px) {
-  .atow-abomination-sheet .abom-body {
+@media (max-width: 1200px) {
+  .atow-abomination-sheet .abom-layout {
     grid-template-columns: 1fr;
   }
 
-  .atow-abomination-sheet .abom-content {
+  .atow-abomination-sheet .abom-main-top {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 800px) {
+  .atow-abomination-sheet .abom-grid-2,
+  .atow-abomination-sheet .abom-grid-3 {
     grid-template-columns: 1fr;
   }
 
-  .atow-abomination-sheet .abom-footer {
-    justify-content: flex-start;
-    flex-wrap: wrap;
+  .atow-abomination-sheet .track-row {
+    grid-template-columns: repeat(10, minmax(0, 1fr));
   }
 }

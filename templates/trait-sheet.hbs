@@ -1,65 +1,84 @@
-<div class="atow-sheet atow-trait-sheet">
-  <header class="sheet-header">
-    <div class="header-left">
-      <img class="profile-img" src="{{item.img}}" data-edit="img" title="{{item.name}}" />
+<div class="{{cssClass}} atow-item-shell" autocomplete="off">
+  <section
+    class="atow-item-hero"
+    role="presentation"
+    style="display:grid; grid-template-columns:minmax(96px, 25%) minmax(0, 1fr); gap:12px; align-items:start;">
+    <div style="min-width:96px; max-width:120px;">
+      <img
+        class="atow-item-art"
+        src="{{item.img}}"
+        data-edit="img"
+        title="{{item.name}}"
+        style="width:100%; aspect-ratio:1 / 1; height:auto; display:block;" />
     </div>
 
-    <div class="header-right">
-      <div class="title-row" style="display:flex; align-items:center; justify-content:space-between; gap:0.75rem;">
-        <h1 class="itemname" style="flex:1;">
-          <input name="name" type="text" value="{{item.name}}" placeholder="Trait Name" />
-        </h1>
+    <div class="atow-item-hero-main" style="display:flex; flex-direction:column; gap:8px; min-width:0;">
+      <div class="atow-item-kicker">Character Trait Profile</div>
 
-        {{#if trait.active}}
-          <span class="badge" title="Trait is active" style="display:inline-flex; align-items:center; gap:0.35rem; padding:0.25rem 0.5rem; border:1px solid var(--color-border-light-primary); border-radius:6px;">
-            <i class="fas fa-check-circle"></i> Active
-          </span>
-        {{else}}
-          <span class="badge" title="Trait is not active" style="display:inline-flex; align-items:center; gap:0.35rem; padding:0.25rem 0.5rem; border:1px solid var(--color-border-light-primary); border-radius:6px; opacity:0.75;">
-            <i class="far fa-circle"></i> Inactive
-          </span>
-        {{/if}}
+      <div class="atow-item-title">
+        <input name="name" type="text" value="{{item.name}}" placeholder="Trait Name" />
       </div>
 
-      <div class="header-fields" style="margin-top:0.5rem;">
-        <div class="field">
-          <label>Trait Points (TP)</label>
-          <input name="system.tp" type="number" value="{{trait.tp}}" />
-          <small style="opacity:0.75;">Activates at TP × 100 XP</small>
+      <div class="atow-item-meta-grid" style="display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:6px;">
+        <div class="atow-field">
+          <label>Category</label>
+          <input name="system.category" type="text" value="{{system.category}}" placeholder="Advantage / Disadvantage" />
         </div>
 
-        <div class="field">
-          <label>Trait XP</label>
-          <input name="system.cost" type="number" value="{{trait.xp}}" />
-          <small style="opacity:0.75;">Positive spends XP, negative grants XP</small>
-        </div>
-
-        <div class="field">
-          <label>Activation Threshold</label>
-          <input type="number" value="{{trait.threshold}}" disabled />
-          <small style="opacity:0.75;">Active when Trait XP reaches this value</small>
+        <div class="atow-field">
+          <label>Status</label>
+          <input type="text" value="{{#if trait.active}}Active{{else}}Inactive{{/if}}" disabled />
         </div>
       </div>
     </div>
-  </header>
-
-  <section class="panel">
-    <h2>Description</h2>
-    <textarea name="system.description" rows="10">{{system.description}}</textarea>
   </section>
 
-  <section class="panel">
-    <h2>Details</h2>
-    <div class="grid grid-2col" style="margin-top: 0.5rem;">
-      <div class="field">
-        <label>Category</label>
-        <input name="system.category" type="text" value="{{system.category}}" placeholder="e.g. Advantage / Disadvantage" />
-      </div>
+  <section class="atow-card atow-stat-card">
+    <div class="atow-stat-table-wrap">
+      <table class="atow-stat-table">
+        <tr>
+          <th>TP</th>
+          <th>Trait XP</th>
+          <th>Threshold</th>
+          <th>Notes</th>
+        </tr>
+        <tr>
+          <td><input name="system.tp" type="number" value="{{trait.tp}}" /></td>
+          <td><input name="system.cost" type="number" value="{{trait.xp}}" /></td>
+          <td><input type="number" value="{{trait.threshold}}" disabled /></td>
+          <td><input name="system.notes" type="text" value="{{system.notes}}" placeholder="Optional" /></td>
+        </tr>
+      </table>
+    </div>
+  </section>
 
-      <div class="field">
-        <label>Notes</label>
-        <input name="system.notes" type="text" value="{{system.notes}}" placeholder="Optional" />
-      </div>
+  <section class="atow-item-layout compact">
+    <div class="atow-stack">
+      <section class="atow-card">
+        <div class="atow-field">
+          <label class="atow-compact-label">Description</label>
+          <textarea
+            name="system.description"
+            rows="8"
+            placeholder="Trait rules text, activation details, and narrative context.">{{system.description}}</textarea>
+        </div>
+      </section>
+    </div>
+
+    <div class="atow-stack">
+      <section class="atow-card">
+        <div class="atow-field-grid compact-2">
+          <div class="atow-field">
+            <label class="atow-compact-label">Activation</label>
+            <input type="text" value="{{#if trait.active}}Threshold reached{{else}}Threshold not reached{{/if}}" disabled />
+          </div>
+
+          <div class="atow-field">
+            <label class="atow-compact-label">Rule</label>
+            <input type="text" value="Active at TP × 100 XP" disabled />
+          </div>
+        </div>
+      </section>
     </div>
   </section>
 </div>

@@ -1,19 +1,20 @@
 // atow-battletech.js (ROOT)
-// version 0.0.2
+// version 0.0.3
 
 import { ATOWCharacterSheet } from "./module/character-sheet.js";
 import { ATOWAbominationSheet } from "./module/abomination-sheet.js";
 import { ATOWSkillSheet } from "./module/skill-sheet.js";
 import { ATOWTraitSheet } from "./module/trait-sheet.js";
 import { ATOWCharacterEquipmentSheet } from "./module/character-equipment.js";
-import { ATOWCharacterModuleSheet } from "./module/character-module.js";
-import { AToWMechSheet } from "./module/mech-sheet.js";
+import { AToWMechSheetV2, ensureActorCritMountIds } from "./module/mech-sheet-v2.js";
 import { AToWMechWeaponSheet} from "./module/mech-weapon.js";
-import { ATOWWheeledVehicleSheet } from "./module/wheeledvehicle-sheet.js";
+import { ATOWCombatVehicleSheet } from "./module/combat-vehicle.js";
 
 import { AToWMechEquipmentSheet } from "./module/mech-equipment.js";
 import { registerATOWCharacterWeaponSheet } from "./module/character-weapon.js";
 import { registerATOWCharacterArmorSheet } from "./module/character-armor.js";
+import { registerATOWAttackSockets } from "./module/mech-attack.js";
+import { registerAtowAudioHooks, playActorJumpjetEffect, playActorPowerRestoredAnnouncement, playActorShutdownAnnouncement } from "./module/audio-helper.js";
 
 export const SYSTEM_ID = "atow-battletech";
 
@@ -27,16 +28,25 @@ export const ATOW = {
   config: {}
 };
 
-const JUMP_JET_SFX = `systems/${SYSTEM_ID}/assets/jumpjet.mp3`;
+const HEADER_ACTION_DRAG_TYPE = "ATOWHeaderAction";
 
-async function playSystemSfx(src, { volume = 0.8 } = {}) {
-  try {
-    const helper = foundry?.audio?.AudioHelper ?? null;
-    if (!helper?.play || !src) return;
-    await helper.play({ src, volume, autoplay: true, loop: false }, false);
-  } catch (err) {
-    console.warn(`${SYSTEM_ID} | Failed to play SFX`, err);
-  }
+function getSingleControlledMechTokenDoc() {
+  const controlled = canvas?.tokens?.controlled ?? [];
+  if (controlled.length !== 1) return null;
+  const tokenDoc = controlled[0]?.document ?? controlled[0] ?? null;
+  const actorType = String(tokenDoc?.actor?.type ?? "").toLowerCase();
+  if (!["mech", "wheeledvehicle"].includes(actorType)) return null;
+  return tokenDoc;
+}
+
+function getActorById(actorId) {
+  if (!actorId) return null;
+  return game.actors?.get?.(actorId) ?? null;
+}
+
+function getTokenDocById(tokenId) {
+  if (!tokenId) return null;
+  return canvas?.tokens?.get?.(tokenId)?.document ?? null;
 }
 
 // Simple clamp helper (Math.clamp is not standard)
@@ -52,6 +62,18 @@ Hooks.once("init", async () => {
   // Expose a stable namespace
   game[SYSTEM_ID] = ATOW;
 
+  const tryRegisterSystemSocket = () => {
+    try {
+      registerATOWAttackSockets();
+    } catch (err) {
+      console.warn(`${SYSTEM_ID} | Failed to register socketlib handlers`, err);
+    }
+  };
+
+  registerAtowAudioHooks();
+  if (globalThis.socketlib?.registerSystem) tryRegisterSystemSocket();
+  Hooks.once("socketlib.ready", tryRegisterSystemSocket);
+
   // Combat initiative defaults for AToW (personal scale): 2d6
   // This is used by the Combat Tracker "Roll" / "Reroll" buttons.
   CONFIG.Combat.initiative = CONFIG.Combat.initiative ?? { decimals: 0, formula: null };
@@ -66,7 +88,7 @@ Hooks.once("init", async () => {
   CONFIG.Actor.typeLabels.npc = "NPC";
   CONFIG.Actor.typeLabels.mech = "Mech";
   CONFIG.Actor.typeLabels.vehicle = "Vehicle";
-  CONFIG.Actor.typeLabels.wheeledvehicle = "Wheeled Vehicle";
+  CONFIG.Actor.typeLabels.wheeledvehicle = "Combat Vehicle";
   CONFIG.Actor.typeLabels.abomination = "Abomination";
 
   CONFIG.Item.typeLabels = CONFIG.Item.typeLabels ?? {};
@@ -74,7 +96,6 @@ Hooks.once("init", async () => {
   CONFIG.Item.typeLabels.characterTrait = "Trait";
   CONFIG.Item.typeLabels.mechWeapon = "Mech Weapon";
   CONFIG.Item.typeLabels.mechEquipment = "Mech Equipment";
-  CONFIG.Item.typeLabels.characterModule = "Character Module";
 
   
   CONFIG.Item.typeLabels.characterWeapon = "Character Weapon";
@@ -83,15 +104,33 @@ Hooks.once("init", async () => {
 registerSystemSettings();
   registerHandlebarsHelpers();
 
+  const registerRelativeMovementKeybinding = (name, key, handler) => {
+    game.keybindings?.register?.(SYSTEM_ID, name, {
+      name,
+      editable: [{ key }],
+      restricted: false,
+      precedence: CONST.KEYBINDING_PRECEDENCE.NORMAL,
+      onDown: () => {
+        if (!game.settings.get(SYSTEM_ID, "relativeMovementKeys")) return false;
+        const tokenDoc = getControlledMechTokenDocForKeybind();
+        if (!tokenDoc) return false;
+        handler(tokenDoc).catch?.(err => console.warn(`AToW Battletech | ${name} keybind failed`, err));
+        return true;
+      }
+    });
+  };
+
+  registerRelativeMovementKeybinding("moveForward", "KeyW", (tokenDoc) => relativeMoveTokenOneStep(tokenDoc, { backward: false }));
+  registerRelativeMovementKeybinding("moveBackward", "KeyS", (tokenDoc) => relativeMoveTokenOneStep(tokenDoc, { backward: true }));
+  registerRelativeMovementKeybinding("turnLeft", "KeyA", (tokenDoc) => relativeTurnTokenOneStep(tokenDoc, { clockwise: false }));
+  registerRelativeMovementKeybinding("turnRight", "KeyD", (tokenDoc) => relativeTurnTokenOneStep(tokenDoc, { clockwise: true }));
+
   // ------------------------------------------------
   // Status Effects (Token HUD list)
   // ------------------------------------------------
   // Keep Foundry's special/built-in combat statuses (e.g. "defeated"),
   // but replace the rest of the default list with Battletech-focused effects.
   function registerAToWStatusEffects() {
-    const existing = Array.isArray(CONFIG.statusEffects) ? CONFIG.statusEffects : [];
-    const specialIds = new Set(Object.values(CONFIG.specialStatusEffects ?? {}).filter(Boolean));
-
     // Create a stable 16-char ActiveEffect _id from a status id.
     // Foundry V13 status effect configs are Partial<ActiveEffectData>, whose default _id may be "".
     // If TokenHUD uses _id when toggling, an empty _id yields Actor#toggleStatusEffect("").
@@ -107,6 +146,7 @@ registerSystemSettings();
       if (!e || typeof e !== "object") return null;
       const id = String(e.id ?? "").trim();
       if (!id) return null;
+      e.id = id;
 
       // Prefer the V13 field names, but keep deprecated aliases for backwards compatibility.
       if (!e._id || String(e._id).trim() === "") e._id = stableEffectDocId(id);
@@ -121,13 +161,18 @@ registerSystemSettings();
       try {
         e.flags = e.flags ?? {};
         e.flags.core = e.flags.core ?? {};
-        if (!e.flags.core.statusId) e.flags.core.statusId = id;
+        const coreStatusId = String(e.flags.core.statusId ?? "").trim();
+        e.flags.core.statusId = coreStatusId || id;
       } catch (_) {}
 
       try {
         const st = e.statuses;
         if (Array.isArray(st)) {
-          if (!st.includes(id)) st.push(id);
+          const cleaned = st
+            .map(s => String(s ?? "").trim())
+            .filter(Boolean);
+          if (!cleaned.includes(id)) cleaned.push(id);
+          e.statuses = cleaned;
         } else if (st && typeof st === "object" && typeof st.has === "function" && typeof st.add === "function") {
           // Set-like
           if (!st.has(id)) st.add(id);
@@ -144,25 +189,17 @@ registerSystemSettings();
       return e;
     };
 
-    // Preserve any existing status entries that match a special status id (e.g. "defeated").
-    const preserved = existing
-      .filter(e => e && typeof e === "object" && e.id && specialIds.has(e.id))
-      .map(e => normalizeStatus(e))
-      .filter(Boolean);
-
-    // Ensure DEFEATED exists (combat features rely on this)
-    let defeatedId = CONFIG.specialStatusEffects?.DEFEATED;
-    if (!defeatedId || typeof defeatedId !== "string") defeatedId = "defeated";
-    defeatedId = String(defeatedId).trim() || "defeated";
-    if (!preserved.some(e => e.id === defeatedId)) {
-      preserved.push(normalizeStatus({
+    // Always normalize DEFEATED to the canonical Foundry id.
+    const defeatedId = "defeated";
+    const preserved = [
+      normalizeStatus({
         id: defeatedId,
         name: game.i18n?.localize?.("COMBAT.Defeated") ?? "Defeated",
         img: "icons/svg/skull.svg",
         icon: "icons/svg/skull.svg",
         _id: stableEffectDocId(defeatedId)
-      }));
-    }
+      })
+    ].filter(Boolean);
 
     const icon = (file) => `systems/${SYSTEM_ID}/assets/status/${file}.svg`;
 
@@ -190,8 +227,10 @@ registerSystemSettings();
       mk("partial-cover", "Partial Cover", icon("partial-cover")),
 
       // Core AToW conditions
-      mk("atow.shutdown",  "Shutdown", "icons/svg/lightning.svg"),
-      mk("atow.immobile",  "Immobile", "icons/svg/padlock.svg"),
+      mk("atow-shutdown",  "Shutdown", icon("shutdown")),
+      mk("atow-immobile",  "Immobile", icon("immobile")),
+      mk("mobbed",         "Mobbed",   icon("mobbed")),
+      mk("hobbled",        "Hobbled",  icon("hobbled")),
 
       // Location destruction (used by mech-sheet.js structure cascading)
       mk("left-arm-destroyed",    "Left Arm Destroyed",    icon("left-arm-destroyed")),
@@ -202,13 +241,178 @@ registerSystemSettings();
       mk("right-torso-destroyed", "Right Torso Destroyed", icon("right-torso-destroyed"))
     ].filter(Boolean);
 
-    CONFIG.statusEffects = [...preserved, ...bt].filter(e => e?.id);
+    const legacyAliases = [
+      normalizeStatus({
+        id: "dead",
+        name: game.i18n?.localize?.("COMBAT.Defeated") ?? "Defeated",
+        img: "icons/svg/skull.svg",
+        icon: "icons/svg/skull.svg",
+        label: game.i18n?.localize?.("COMBAT.Defeated") ?? "Defeated",
+        _id: stableEffectDocId("dead")
+      })
+    ].filter(Boolean);
 
-    // Ensure DEFEATED special status effect is never blank
-    if (!CONFIG.specialStatusEffects.DEFEATED) CONFIG.specialStatusEffects.DEFEATED = "defeated";
+    CONFIG.statusEffects = [...preserved, ...legacyAliases, ...bt]
+      .map(e => normalizeStatus(e))
+      .filter(e => {
+        const id = String(e?.id ?? "").trim();
+        const sid = String(e?.flags?.core?.statusId ?? "").trim();
+        return Boolean(id && sid);
+      });
+
+    // Keep special status mappings minimal. Leaving unmapped core special statuses
+    // like BLIND / BURROW / FLY / HOVER / INVISIBLE in place without corresponding
+    // CONFIG.statusEffects entries can produce blank ghost entries in the status menu.
+    CONFIG.specialStatusEffects = {
+      DEFEATED: defeatedId
+    };
   }
 
   registerAToWStatusEffects();
+
+  const sanitizeConfiguredStatusEffects = () => {
+    try {
+      const list = Array.isArray(CONFIG.statusEffects) ? CONFIG.statusEffects : [];
+      CONFIG.statusEffects = list
+        .map(e => normalizeStatus(e))
+        .filter(e => {
+          const id = String(e?.id ?? "").trim();
+          const sid = String(e?.flags?.core?.statusId ?? "").trim();
+          return Boolean(id && sid);
+        });
+    } catch (err) {
+      console.warn("AToW Battletech | Failed to sanitize CONFIG.statusEffects", err);
+    }
+  };
+
+
+  const getKnownStatusIdLookup = () => {
+    const byIcon = new Map();
+    const byName = new Map();
+    try {
+      for (const effect of Array.isArray(CONFIG.statusEffects) ? CONFIG.statusEffects : []) {
+        const id = String(effect?.id ?? "").trim();
+        if (!id) continue;
+
+        const iconPath = String(effect?.img ?? effect?.icon ?? "").trim();
+        if (iconPath) byIcon.set(iconPath, id);
+
+        const name = String(effect?.name ?? effect?.label ?? "").trim().toLowerCase();
+        if (name) byName.set(name, id);
+      }
+    } catch (_) {}
+
+    // Legacy move status from older builds.
+    byIcon.set(`systems/${SYSTEM_ID}/assets/status/jumped.svg`, "atow-jumped");
+    byName.set("jumped", "atow-jumped");
+
+    return { byIcon, byName };
+  };
+
+  const repairInvalidStatusEffectsOnDocument = async (doc) => {
+    if (!doc?.effects?.size) return 0;
+    const { byIcon, byName } = getKnownStatusIdLookup();
+    let repaired = 0;
+
+    for (const effect of doc.effects.contents ?? []) {
+      if (!effect) continue;
+
+      const currentId = String(effect.getFlag?.("core", "statusId") ?? effect.flags?.core?.statusId ?? "").trim();
+      const statusesRaw = effect.statuses?.size
+        ? Array.from(effect.statuses)
+        : (Array.isArray(effect.statuses) ? effect.statuses : []);
+      const statuses = statusesRaw.map(s => String(s ?? "").trim()).filter(Boolean);
+
+      if (currentId && statuses.length && statuses.includes(currentId)) continue;
+
+      let resolvedId = currentId || statuses[0] || "";
+      const iconPath = String(effect.img ?? effect.icon ?? "").trim();
+      const effectName = String(effect.name ?? "").trim();
+      if (!resolvedId) {
+        if (iconPath && byIcon.has(iconPath)) resolvedId = byIcon.get(iconPath);
+      }
+      if (!resolvedId) {
+        const name = effectName.toLowerCase();
+        if (name && byName.has(name)) resolvedId = byName.get(name);
+      }
+      resolvedId = String(resolvedId ?? "").trim();
+      if (!resolvedId) {
+        const hasChanges = Array.isArray(effect.changes) && effect.changes.length > 0;
+        const isTrulyBlank = !currentId && statuses.length === 0 && !iconPath && !effectName;
+        const isProbablyBrokenStatus = !currentId && statuses.length === 0 && !iconPath && !hasChanges;
+        if (isTrulyBlank || isProbablyBrokenStatus) {
+          try {
+            await effect.delete();
+            repaired += 1;
+          } catch (err) {
+            console.warn("AToW Battletech | Failed to delete malformed blank status effect", {
+              parent: doc?.uuid ?? doc?.id,
+              effectId: effect?.id,
+              effectName,
+              err
+            });
+          }
+        }
+        continue;
+      }
+
+      try {
+        await effect.update({
+          statuses: [resolvedId],
+          flags: {
+            ...(effect.flags ?? {}),
+            core: {
+              ...(effect.flags?.core ?? {}),
+              statusId: resolvedId
+            }
+          }
+        });
+        repaired += 1;
+      } catch (err) {
+        console.warn("AToW Battletech | Failed to repair invalid status effect", {
+          parent: doc?.uuid ?? doc?.id,
+          effectId: effect?.id,
+          effectName: effect?.name,
+          err
+        });
+      }
+    }
+
+    return repaired;
+  };
+
+  Hooks.once("ready", async () => {
+    sanitizeConfiguredStatusEffects();
+
+    try {
+      await migrateCritMountIds();
+    } catch (err) {
+      console.warn("AToW Battletech | Crit mountId migration failed", err);
+    }
+
+    try {
+      let repaired = 0;
+      const actors = game.actors?.contents ?? [];
+      for (const actor of actors) {
+        repaired += await repairInvalidStatusEffectsOnDocument(actor);
+      }
+
+      const scenes = game.scenes?.contents ?? [];
+      for (const scene of scenes) {
+        for (const tokenDoc of scene.tokens?.contents ?? []) {
+          const actor = tokenDoc?.actor;
+          if (!actor) continue;
+          repaired += await repairInvalidStatusEffectsOnDocument(actor);
+        }
+      }
+
+      if (repaired > 0) {
+        console.info(`AToW Battletech | Repaired ${repaired} invalid status effect(s).`);
+      }
+    } catch (err) {
+      console.warn("AToW Battletech | Invalid status effect repair failed", err);
+    }
+  });
 
 
   // ------------------------------------------------
@@ -411,15 +615,16 @@ registerSystemSettings();
     label: "AToW Abomination Sheet"
   });
 
-  Actors.registerSheet(SYSTEM_ID, AToWMechSheet, {
+  Actors.registerSheet(SYSTEM_ID, AToWMechSheetV2, {
     types: ["mech"],
-    makeDefault: true
+    makeDefault: true,
+    label: "AToW Mech Sheet"
   });
 
-  Actors.registerSheet(SYSTEM_ID, ATOWWheeledVehicleSheet, {
+  Actors.registerSheet(SYSTEM_ID, ATOWCombatVehicleSheet, {
     types: ["wheeledvehicle"],
     makeDefault: true,
-    label: "AToW Wheeled Vehicle Sheet"
+    label: "AToW Combat Vehicle Sheet"
   });
 
   // Register the Skill item sheet
@@ -445,16 +650,6 @@ registerSystemSettings();
   // Register Character Weapon/Armor item sheets
   registerATOWCharacterWeaponSheet();
   registerATOWCharacterArmorSheet();
-
-
-
-  // Register the Character Module item sheet
-  Items.registerSheet(SYSTEM_ID, ATOWCharacterModuleSheet, {
-    types: ["characterModule"],
-    makeDefault: true,
-    label: "AToW Character Module Sheet"
-  });
-
 // Register the Trait item sheet
   Items.registerSheet(SYSTEM_ID, ATOWTraitSheet, {
     types: ["characterTrait"],
@@ -529,6 +724,33 @@ const setTokenStatusEffect = async (tokenLike, statusId, active = false) => {
   const iconPath = def?.icon ?? null;
 
   const actor = tokenDoc?.actor ?? tokenObj?.actor;
+
+  // Prefer actor-side effect management whenever we have an actor.
+  // On token actors / ActorDelta documents, Foundry's token-level status toggle path can
+  // thrash configured status _ids and produce duplicate/not-found errors in v13.
+  if (actor) {
+    await _setActorStatusEffectDirect(actor, statusId, active);
+
+    // Best-effort token icon cleanup for any legacy icon-path entries left behind.
+    if (tokenDoc && iconPath && Array.isArray(tokenDoc.effects)) {
+      try {
+        const inEffects = Array.from(tokenDoc.effects);
+        let seen = false;
+        const next = [];
+        for (const e of inEffects) {
+          if (e === iconPath) {
+            if (!active) continue;
+            if (seen) continue;
+            seen = true;
+          }
+          next.push(e);
+        }
+        const changed = next.length !== inEffects.length || next.some((v, i) => v !== inEffects[i]);
+        if (changed) await tokenDoc.update({ effects: next }).catch(() => {});
+      } catch (_) {}
+    }
+    return;
+  }
 
   const _statusIsActive = () => {
     try {
@@ -736,10 +958,11 @@ const _isAllFourLimbsDestroyed = (actor) => {
 // -----------------------------------
 // Shutdown + Immobile status ids
 // -----------------------------------
-const SHUTDOWN_STATUS_ID = "atow.shutdown";
-const IMMOBILE_STATUS_ID = "atow.immobile";
+const SHUTDOWN_STATUS_ID = "atow-shutdown";
+const IMMOBILE_STATUS_ID = "atow-immobile";
 // Legacy + core ids we purge (no longer used by rules).
-const LEGACY_IMMOBILE_STATUS_ID = "atow-immobile";
+const LEGACY_SHUTDOWN_STATUS_ID = "atow.shutdown";
+const LEGACY_IMMOBILE_STATUS_ID = "atow.immobile";
 const CORE_IMMOBILE_STATUS_ID = "immobile";
 
 // Guard to prevent our own internal status churn from being interpreted as a manual toggle.
@@ -778,6 +1001,27 @@ const _actorHasStatus = (actor, statusId) => {
   return false;
 };
 
+const _actorHasAnyStatus = (actor, statusIds) => {
+  for (const statusId of statusIds ?? []) {
+    if (_actorHasStatus(actor, statusId)) return true;
+  }
+  return false;
+};
+
+const _findActorStatusEffects = (actor, statusId) => {
+  if (!actor || !statusId) return [];
+  try {
+    return Array.from(actor.effects ?? []).filter(e => {
+      const sid = (e.getFlag?.("core", "statusId") ?? e.flags?.core?.statusId) ?? null;
+      if (sid === statusId) return true;
+      if (e.statuses?.has && e.statuses.has(statusId)) return true;
+      if (Array.isArray(e.statuses) && e.statuses.includes(statusId)) return true;
+      return false;
+    });
+  } catch (_) {}
+  return [];
+};
+
 const _isHeatShutdown = (actor) => {
   return Boolean(actor?.system?.heat?.shutdown) || Boolean(actor?.system?.heat?.effects?.shutdown?.active);
 };
@@ -798,9 +1042,9 @@ const _shouldBeShutdown = (actor) => {
   if (!actor) return false;
   // "Shutdown" state is derived from:
   //  - heat-driven shutdown markers (system.heat.shutdown / system.heat.effects.shutdown.active)
-  //  - an explicit manual shutdown flag set by the user toggling the atow.shutdown status
+  //  - an explicit manual shutdown flag set by the user toggling the shutdown status
   //
-  // IMPORTANT: Do NOT include actorHasStatus(atow.shutdown) here, or the status becomes self-sticky
+  // IMPORTANT: Do NOT include actorHasStatus(shutdown) here, or the status becomes self-sticky
   // and prevents auto-startup / clearing from working correctly.
   return _isHeatShutdown(actor) || _getManualShutdown(actor);
 };
@@ -888,8 +1132,9 @@ const _syncShutdownAndImmobileOnActorTokens = async (actor) => {
   await _withStatusSyncGuard(actor, async () => {
     await _setActorStatusEffect(actor, SHUTDOWN_STATUS_ID, desiredShutdown);
     await _setActorStatusEffect(actor, IMMOBILE_STATUS_ID, desiredImmobile);
-    // Back-compat effect id
-    await _setActorStatusEffect(actor, LEGACY_IMMOBILE_STATUS_ID, false); // purge legacy status
+    // Back-compat effect ids
+    await _setActorStatusEffect(actor, LEGACY_SHUTDOWN_STATUS_ID, false); // purge legacy dotted shutdown
+    await _setActorStatusEffect(actor, LEGACY_IMMOBILE_STATUS_ID, false); // purge legacy dotted immobile
     await _setActorStatusEffect(actor, CORE_IMMOBILE_STATUS_ID, false); // purge core immobile status
   });
 
@@ -902,14 +1147,64 @@ const _syncShutdownAndImmobileOnActorTokens = async (actor) => {
     try {
       if (doc?.setFlag) await doc.setFlag(SYSTEM_ID, "shutdown", desiredShutdown);
     } catch (_) {}
-    // NOTE: We intentionally do NOT call TokenDocument.toggleStatusEffect for atow.shutdown/atow.immobile here.
+    // NOTE: We intentionally do NOT call TokenDocument.toggleStatusEffect for shutdown/immobile here.
     // Doing both actor.toggleStatusEffect and token.toggleStatusEffect can create duplicate ActiveEffects (double icons).
     // Actor-level effects already propagate to linked tokens.
 
-    // Still purge legacy/core immobile that might exist on the token HUD.
+    // Still purge legacy/core statuses that might exist on the token HUD.
+    await setTokenStatusEffect(doc, LEGACY_SHUTDOWN_STATUS_ID, false);
     await setTokenStatusEffect(doc, LEGACY_IMMOBILE_STATUS_ID, false);
     await setTokenStatusEffect(doc, CORE_IMMOBILE_STATUS_ID, false);
   }
+};
+
+const _setActorStatusEffectDirect = async (actor, statusId, active) => {
+  if (!actor || !statusId) return;
+
+  const desired = !!active;
+  const def = getStatusDef(statusId);
+  const name = def?.name ?? def?.label ?? statusId;
+  const icon = def?.icon ?? "icons/svg/wing.svg";
+
+  const matches = _findActorStatusEffects(actor, statusId);
+
+  const _disableEffect = async (e) => {
+    try {
+      if (!e) return;
+      if (!e.disabled && typeof e.update === "function") await e.update({ disabled: true });
+      else if (typeof e.delete === "function") await e.delete();
+    } catch (_) {}
+  };
+
+  const _enableEffect = async (e) => {
+    try {
+      if (!e) return;
+      if (e.disabled && typeof e.update === "function") await e.update({ disabled: false });
+    } catch (_) {}
+  };
+
+  if (desired) {
+    if (matches.length) {
+      const keep = matches.find(e => !e.disabled) ?? matches[0];
+      await _enableEffect(keep);
+      for (const e of matches) {
+        if (!e || e.id === keep?.id) continue;
+        await _disableEffect(e);
+      }
+      return;
+    }
+
+    await actor.createEmbeddedDocuments("ActiveEffect", [{
+      name,
+      icon,
+      disabled: false,
+      statuses: [statusId],
+      flags: { core: { statusId } }
+    }]).catch(() => {});
+    return;
+  }
+
+  for (const e of matches) await _disableEffect(e);
 };
 
 
@@ -921,6 +1216,7 @@ if (!globalThis.__ATOW_BT_IMMOBILE_SYNC_REGISTERED__) {
   // (We no longer apply the legacy "atow-immobile" status; we only purge it if present.)
   Hooks.on("updateActor", async (actor, changed, options) => {
     try {
+      if (!game.user?.isGM) return;
       if (actor?.type && actor.type !== "mech") return;
 
       // Avoid reacting to token/effect churn that doesn't touch our relevant data.
@@ -949,13 +1245,17 @@ const _isShutdownEffect = (effect) => {
   try {
     const sid = (effect?.getFlag?.("core", "statusId") ?? effect?.flags?.core?.statusId) ?? null;
     if (sid === SHUTDOWN_STATUS_ID) return true;
+    if (sid === LEGACY_SHUTDOWN_STATUS_ID) return true;
     if (effect?.statuses?.has && effect.statuses.has(SHUTDOWN_STATUS_ID)) return true;
+    if (effect?.statuses?.has && effect.statuses.has(LEGACY_SHUTDOWN_STATUS_ID)) return true;
     if (Array.isArray(effect?.statuses) && effect.statuses.includes(SHUTDOWN_STATUS_ID)) return true;
+    if (Array.isArray(effect?.statuses) && effect.statuses.includes(LEGACY_SHUTDOWN_STATUS_ID)) return true;
   } catch (_) {}
   return false;
 };
 
 const _onShutdownEffectChange = async (effect) => {
+  if (!game.user?.isGM) return;
   const actor = effect?.parent;
   if (!actor || actor.type !== "mech") return;
   if (_isGuardedStatusSync(actor)) return;
@@ -973,6 +1273,7 @@ Hooks.on("createActiveEffect", async (effect) => {
 });
 Hooks.on("deleteActiveEffect", async (effect) => {
   try {
+    if (!game.user?.isGM) return;
     const actor = effect?.parent;
     if (!actor || actor.type !== "mech") return;
     if (_isGuardedStatusSync(actor)) return;
@@ -984,6 +1285,7 @@ Hooks.on("deleteActiveEffect", async (effect) => {
 });
 Hooks.on("updateActiveEffect", async (effect, changed) => {
   try {
+    if (!game.user?.isGM) return;
     // Only react if disabled changed (toggle)
     const flat = foundry.utils.flattenObject(changed ?? {});
     if (!("disabled" in flat) && !Object.keys(flat).some(k => k.endsWith(".disabled"))) return;
@@ -996,6 +1298,7 @@ Hooks.on("updateActiveEffect", async (effect, changed) => {
 // Purges the legacy "atow-immobile" status and ensures atow.shutdown / atow.immobile reflect current heat + limb-loss state.
 Hooks.once("ready", async () => {
   try {
+    if (!game.user?.isGM) return;
     const actors = (game.actors?.contents ?? Array.from(game.actors ?? [])) ?? [];
     for (const a of actors) {
       if (!a || a.type !== "mech") continue;
@@ -1020,8 +1323,10 @@ Hooks.once("ready", async () => {
     await setTokenStatusEffect(tokenDoc, "jumped", false);
     await tokenDoc.unsetFlag("atow-battletech", "moveMode");
     await tokenDoc.unsetFlag("atow-battletech", "movedThisTurn");
+    await tokenDoc.unsetFlag("atow-battletech", "displacementThisTurn");
     await tokenDoc.unsetFlag("atow-battletech", "jumpedThisTurn");
     await tokenDoc.unsetFlag("atow-battletech", "movementEndedThisTurn");
+    await tokenDoc.unsetFlag("atow-battletech", "backwardUsedThisTurn");
     if (!preserveTurnStart) await tokenDoc.unsetFlag("atow-battletech", "turnStart");
   };
 
@@ -1056,6 +1361,26 @@ Hooks.once("ready", async () => {
     const [tx, ty] = canvas.grid.getCenter(toXY.x, toXY.y);
     const ray = new Ray(new PIXI.Point(fx, fy), new PIXI.Point(tx, ty));
     return Number(canvas.grid.measureDistances([{ ray }], { gridSpaces: true })?.[0]) || 0;
+  };
+
+  const getTurnStartTopLeft = (tokenDoc) => {
+    const start = tokenDoc?.getFlag?.(SYSTEM_ID, "turnStart");
+    if (start && Number.isFinite(start.x) && Number.isFinite(start.y)) {
+      return { x: start.x, y: start.y };
+    }
+    return {
+      x: Number(tokenDoc?.x ?? 0) || 0,
+      y: Number(tokenDoc?.y ?? 0) || 0
+    };
+  };
+
+  const measureTurnDisplacementSpaces = (tokenDoc, toXY) => {
+    const from = getTurnStartTopLeft(tokenDoc);
+    const to = {
+      x: Number(toXY?.x ?? tokenDoc?.x ?? 0) || 0,
+      y: Number(toXY?.y ?? tokenDoc?.y ?? 0) || 0
+    };
+    return Math.max(0, Math.round(measureGridSpaces(from, to)));
   };
 
   const getGridPosFromPixels = (x, y) => {
@@ -1572,6 +1897,19 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
     return (steps === 0) || (steps === backSteps);
   };
 
+  const _isBackwardTranslation = (tokenDoc, fromXY, toXY, { facingDeg = null } = {}) => {
+    const ang = _movementVectorAngleCW(fromXY, toXY);
+    if (ang == null) return false;
+
+    const step = getFacingStepDegrees();
+    const moveFacing = _quantizeToFacingStep(ang, step);
+    const facing = (facingDeg == null) ? getTokenFacingDegrees(tokenDoc) : normalizeDegrees(facingDeg);
+    const steps = facingStepsFromRotationDelta(facing, moveFacing);
+    const backSteps = Math.round(180 / step);
+
+    return steps === backSteps;
+  };
+
   const ensureNativeFacingForToken = async (tokenDoc, { force = false } = {}) => {
     if (!tokenDoc) return null;
     const existing = _getNativeFacing(tokenDoc);
@@ -1584,6 +1922,127 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
       return seeded;
     }
     return seeded;
+  };
+
+  const getFacingIndexFromDegrees = (deg) => {
+    const step = getFacingStepDegrees();
+    const offset = getFacingOffsetDegrees();
+    return Math.round((normalizeDegrees(deg) - offset) / step);
+  };
+
+  const getControlledMechTokenDocForKeybind = () => {
+    const controlled = Array.from(canvas?.tokens?.controlled ?? []).filter(Boolean);
+    if (controlled.length !== 1) return null;
+    const tokenDoc = controlled[0]?.document ?? controlled[0] ?? null;
+    if (!tokenDoc?.actor || tokenDoc.actor.type !== "mech") return null;
+    return tokenDoc;
+  };
+
+  const _isTypingInField = () => {
+    const el = document?.activeElement ?? null;
+    if (!el) return false;
+    const tag = String(el.tagName ?? "").toUpperCase();
+    return tag === "INPUT" || tag === "TEXTAREA" || el.isContentEditable === true;
+  };
+
+  const _getAdjacentTopLeftForRelativeAngle = (tokenDoc, desiredAngle) => {
+    const origin = _getTokenGridOffset(tokenDoc);
+    if (!origin) return null;
+
+    const adjacent = canvas?.grid?.getAdjacentOffsets?.(origin) ?? [];
+    if (!adjacent.length) return null;
+
+    let best = null;
+    let bestDelta = Infinity;
+    for (const next of adjacent) {
+      const topLeft = _getGridTopLeftPoint(next);
+      if (!topLeft) continue;
+      const angle = getHexMovementFacingAngleCW(
+        { x: tokenDoc?.x ?? 0, y: tokenDoc?.y ?? 0 },
+        topLeft
+      );
+      if (angle == null) continue;
+      const delta = Math.abs(signedAngleDelta(desiredAngle, angle));
+      if (delta < bestDelta) {
+        best = topLeft;
+        bestDelta = delta;
+      }
+    }
+    return best;
+  };
+
+  const _getRelativeStepDestination = (tokenDoc, desiredAngle) => {
+    if (!tokenDoc) return null;
+
+    if (isHexGrid()) {
+      return _getAdjacentTopLeftForRelativeAngle(tokenDoc, desiredAngle);
+    }
+
+    const center = getCenterPointFromTopLeft(tokenDoc.x ?? 0, tokenDoc.y ?? 0);
+    const gridSizeX = Number(canvas?.grid?.sizeX ?? canvas?.grid?.size ?? 0) || 0;
+    const gridSizeY = Number(canvas?.grid?.sizeY ?? canvas?.grid?.size ?? 0) || 0;
+    if (!(gridSizeX > 0 && gridSizeY > 0)) return null;
+
+    const rad = normalizeDegrees(desiredAngle) * Math.PI / 180;
+    const probe = {
+      x: center.x + (Math.cos(rad) * gridSizeX),
+      y: center.y + (Math.sin(rad) * gridSizeY)
+    };
+    return _snapPointToGridTopLeft(probe);
+  };
+
+  const canUseRelativeMovementKeybind = (tokenDoc) => {
+    if (!canvas?.ready) return false;
+    if (!tokenDoc?.actor || tokenDoc.actor.type !== "mech") return false;
+    if (_isTypingInField()) return false;
+
+    if (game.combat?.started) {
+      const activeTokenId = game.combat?.combatant?.token?.id;
+      if (activeTokenId && tokenDoc.id !== activeTokenId) {
+        ui.notifications?.warn?.("Only the active combatant can use Battletech movement keys right now.");
+        return false;
+      }
+    }
+
+    return true;
+  };
+
+  const relativeMoveTokenOneStep = async (tokenDoc, { backward = false } = {}) => {
+    if (!canUseRelativeMovementKeybind(tokenDoc)) return false;
+
+    const currentFacing = await ensureNativeFacingForToken(tokenDoc);
+    const desiredAngle = normalizeDegrees(currentFacing + (backward ? 180 : 0));
+    const dest = _getRelativeStepDestination(tokenDoc, desiredAngle);
+    if (!dest) return false;
+
+    if (dest.x === tokenDoc.x && dest.y === tokenDoc.y) return false;
+
+    await tokenDoc.update({
+      x: dest.x,
+      y: dest.y,
+      flags: {
+        [SYSTEM_ID]: {
+          facing: currentFacing
+        }
+      }
+    });
+    return true;
+  };
+
+  const relativeTurnTokenOneStep = async (tokenDoc, { clockwise = false } = {}) => {
+    if (!canUseRelativeMovementKeybind(tokenDoc)) return false;
+
+    const currentFacing = await ensureNativeFacingForToken(tokenDoc);
+    const step = getFacingStepDegrees();
+    const nextFacing = normalizeDegrees(currentFacing + (clockwise ? step : -step));
+    await tokenDoc.update({
+      flags: {
+        [SYSTEM_ID]: {
+          facing: nextFacing
+        }
+      }
+    });
+    return true;
   };
 
   Hooks.on("preCreateToken", (tokenDoc, data) => {
@@ -1835,6 +2294,14 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
 
   const getMoveSpeeds = (actor) => {
     const sys = actor?.system ?? {};
+    const isCombatVehicle = actor?.type === "wheeledvehicle" || actor?.type === "vehicle";
+    if (isCombatVehicle) {
+      const vehicleMove = sys.vehicle?.movement ?? {};
+      const walk = Number(vehicleMove.cruise ?? vehicleMove.walk ?? vehicleMove.Walk ?? 0) || 0;
+      const run = Number(vehicleMove.flank ?? vehicleMove.run ?? vehicleMove.Run ?? 0) || 0;
+      return { walk, run, jump: 0 };
+    }
+
     const mv = sys.movement ?? sys.move ?? sys.derived?.move ?? {};
     const baseWalk = Number(mv.walk ?? mv.Walk ?? mv.w ?? 0) || 0;
     const baseRun  = Number(mv.run  ?? mv.Run  ?? mv.r ?? 0) || 0;
@@ -1936,6 +2403,235 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
     });
   };
 
+  const JUMP_HIGHLIGHT_LAYER_ID = `${SYSTEM_ID}-jump-range`;
+
+  const _packGridOffset = ({ i, j } = {}) => `${Number(i ?? 0) || 0},${Number(j ?? 0) || 0}`;
+
+  const _getTokenGridOffset = (tokenDoc) => {
+    try {
+      const direct = tokenDoc?._positionToGridOffset?.();
+      if (direct && Number.isFinite(direct.i) && Number.isFinite(direct.j)) return { i: direct.i, j: direct.j };
+    } catch (_) {}
+
+    const center = getCenterPointFromTopLeft(tokenDoc?.x ?? 0, tokenDoc?.y ?? 0);
+    const pos = getGridPosFromPixels(center.x, center.y);
+    if (Array.isArray(pos) && pos.length >= 2) {
+      const [i, j] = pos;
+      if (Number.isFinite(i) && Number.isFinite(j)) return { i, j };
+    }
+    return null;
+  };
+
+  const _getGridTopLeftPoint = ({ i, j } = {}) => {
+    try {
+      if (typeof canvas?.grid?.getTopLeftPoint === "function") {
+        const pt = canvas.grid.getTopLeftPoint({ i, j });
+        if (pt && Number.isFinite(pt.x) && Number.isFinite(pt.y)) return { x: pt.x, y: pt.y };
+      }
+    } catch (_) {}
+    return null;
+  };
+
+  const _clearJumpRangeHighlights = () => {
+    try {
+      const hl = canvas?.interface?.grid?.getHighlightLayer?.(JUMP_HIGHLIGHT_LAYER_ID);
+      hl?.clear?.();
+    } catch (_) {}
+  };
+
+  const _showJumpRangeHighlights = (tokenDoc, maxRange) => {
+    try {
+      if (!canvas?.ready || maxRange <= 0) return;
+
+      canvas.interface?.grid?.addHighlightLayer?.(JUMP_HIGHLIGHT_LAYER_ID);
+      const hl = canvas.interface?.grid?.getHighlightLayer?.(JUMP_HIGHLIGHT_LAYER_ID);
+      if (!hl) return;
+      hl.clear();
+
+      const origin = _getTokenGridOffset(tokenDoc);
+      if (!origin) return;
+
+      const occupied = new Set();
+      for (const other of canvas?.tokens?.placeables ?? []) {
+        const otherDoc = other?.document ?? null;
+        if (!otherDoc || otherDoc.id === tokenDoc?.id) continue;
+        const offset = _getTokenGridOffset(otherDoc);
+        if (offset) occupied.add(_packGridOffset(offset));
+      }
+
+      const cellShape = (typeof canvas?.grid?.getShape === "function") ? canvas.grid.getShape() : null;
+      const vertices = Array.isArray(cellShape)
+        ? cellShape.map((v) => ({
+            x: (Number(v?.x ?? 0) || 0) * 0.78 + ((Number(canvas?.grid?.sizeX ?? canvas?.grid?.size ?? 0) || 0) / 2),
+            y: (Number(v?.y ?? 0) || 0) * 0.78 + ((Number(canvas?.grid?.sizeY ?? canvas?.grid?.size ?? 0) || 0) / 2)
+          }))
+        : null;
+
+      const queue = [{ offset: origin, dist: 0 }];
+      const seen = new Set([_packGridOffset(origin)]);
+      const sceneW = Number(canvas?.dimensions?.width ?? 0) || 0;
+      const sceneH = Number(canvas?.dimensions?.height ?? 0) || 0;
+      const cellW = Number(canvas?.grid?.sizeX ?? canvas?.grid?.size ?? 0) || 0;
+      const cellH = Number(canvas?.grid?.sizeY ?? canvas?.grid?.size ?? 0) || 0;
+
+      while (queue.length) {
+        const current = queue.shift();
+        if (!current || current.dist >= maxRange) continue;
+
+        const adjacent = canvas?.grid?.getAdjacentOffsets?.(current.offset) ?? [];
+        for (const next of adjacent) {
+          if (!next || !Number.isFinite(next.i) || !Number.isFinite(next.j)) continue;
+          const key = _packGridOffset(next);
+          if (seen.has(key)) continue;
+          seen.add(key);
+
+          const dist = current.dist + 1;
+          queue.push({ offset: next, dist });
+
+          if (occupied.has(key)) continue;
+
+          const topLeft = _getGridTopLeftPoint(next);
+          if (!topLeft) continue;
+          if (topLeft.x >= sceneW || topLeft.y >= sceneH || topLeft.x + cellW <= 0 || topLeft.y + cellH <= 0) continue;
+          if (!hl.highlight?.(topLeft.x, topLeft.y)) continue;
+
+          hl.lineStyle?.(2, 0x66d9ff, 0.45);
+          hl.beginFill?.(0x1f8bff, 0.18);
+          if (vertices?.length) {
+            hl.drawShape?.(new PIXI.Polygon(vertices.map((p) => ({ x: p.x + topLeft.x, y: p.y + topLeft.y }))));
+          } else {
+            hl.drawRect?.(topLeft.x, topLeft.y, cellW, cellH);
+          }
+          hl.endFill?.();
+        }
+      }
+    } catch (err) {
+      console.warn("AToW Battletech | Failed to draw jump range highlights", err);
+    }
+  };
+
+  const _snapPointToGridTopLeft = (point) => {
+    if (!point) return null;
+    try {
+      if (typeof canvas?.grid?.getTopLeft === "function") {
+        const [x, y] = canvas.grid.getTopLeft(point.x, point.y);
+        return { x, y };
+      }
+    } catch (_) {}
+    return {
+      x: Math.round(Number(point.x ?? 0) || 0),
+      y: Math.round(Number(point.y ?? 0) || 0)
+    };
+  };
+
+  const _getFacingChoiceLabel = (deg) => {
+    const candidates = [
+      { deg: 270, label: "North" },
+      { deg: 315, label: "North-East" },
+      { deg: 0, label: "East" },
+      { deg: 45, label: "South-East" },
+      { deg: 90, label: "South" },
+      { deg: 135, label: "South-West" },
+      { deg: 180, label: "West" },
+      { deg: 225, label: "North-West" }
+    ];
+
+    const angle = normalizeDegrees(deg);
+    let best = candidates[0];
+    let bestDelta = Infinity;
+    for (const candidate of candidates) {
+      const delta = Math.abs(signedAngleDelta(angle, candidate.deg));
+      if (delta < bestDelta) {
+        best = candidate;
+        bestDelta = delta;
+      }
+    }
+    return best?.label ?? `${Math.round(angle)}°`;
+  };
+
+  const _chooseJumpLandingFacing = async (tokenDoc, { currentFacing = null } = {}) => {
+    const count = isHexGrid() ? 6 : 4;
+    const legalFacings = Array.from({ length: count }, (_, i) => facingIndexToDegrees(i));
+    const selectedFacing = snapToNearestLegalFacing(
+      currentFacing == null ? getTokenFacingDegrees(tokenDoc) : currentFacing,
+      { currentFacing: currentFacing == null ? getTokenFacingDegrees(tokenDoc) : currentFacing }
+    );
+
+    const optionsHtml = legalFacings.map((deg) => {
+      const label = _getFacingChoiceLabel(deg);
+      const selected = normalizeDegrees(deg) === normalizeDegrees(selectedFacing) ? " selected" : "";
+      return `<option value="${deg}"${selected}>${label}</option>`;
+    }).join("");
+
+    const content = `
+      <div class="atow-jump-facing-dialog">
+        <p>Choose your landing facing. Turning after a jump is free.</p>
+        <div class="form-group">
+          <label>Facing</label>
+          <select name="jump-facing">${optionsHtml}</select>
+        </div>
+      </div>
+    `;
+
+    return new Promise((resolve) => {
+      new Dialog({
+        title: "Choose Landing Facing",
+        content,
+        buttons: {
+          apply: {
+            label: "Apply",
+            callback: (html) => {
+              const chosen = Number(html?.[0]?.querySelector?.("select[name='jump-facing']")?.value);
+              resolve(Number.isFinite(chosen) ? normalizeDegrees(chosen) : selectedFacing);
+            }
+          },
+          keep: {
+            label: "Keep Current",
+            callback: () => resolve(selectedFacing)
+          }
+        },
+        default: "apply",
+        close: () => resolve(selectedFacing)
+      }).render(true);
+    });
+  };
+
+  const _animateJumpDrift = async (tokenDoc, dest, { duration = 1400 } = {}) => {
+    const token = tokenDoc?._object ?? canvas?.tokens?.get?.(tokenDoc?.id) ?? null;
+    if (!token || !dest) return false;
+
+    const fromX = Number(token.x ?? tokenDoc?.x ?? 0) || 0;
+    const fromY = Number(token.y ?? tokenDoc?.y ?? 0) || 0;
+    const toX = Number(dest.x ?? fromX) || fromX;
+    const toY = Number(dest.y ?? fromY) || fromY;
+
+    if (Math.abs(fromX - toX) < 0.5 && Math.abs(fromY - toY) < 0.5) return true;
+
+    const easeOut = (t) => 1 - Math.pow(1 - t, 3);
+
+    return new Promise((resolve) => {
+      const start = performance.now();
+
+      const step = (now) => {
+        const raw = Math.min(1, Math.max(0, (now - start) / Math.max(1, duration)));
+        const t = easeOut(raw);
+
+        try {
+          token.position.set(
+            fromX + ((toX - fromX) * t),
+            fromY + ((toY - fromY) * t)
+          );
+          token.renderFlags?.set?.({ refreshPosition: true });
+        } catch (_) {}
+
+        if (raw >= 1) return resolve(true);
+        requestAnimationFrame(step);
+      };
+
+      requestAnimationFrame(step);
+    });
+  };
+
   /**
    * Jump movement:
    * - Prompts the user to click a destination.
@@ -1988,59 +2684,96 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
         return;
       }
 
-      // If the mech already moved/turned, jumping would create weird mixed states.
-      const alreadySpent = Number(tokenDoc.getFlag(SYSTEM_ID, "mpSpentThisTurn") ?? 0) || 0;
-      if (alreadySpent > 0) {
-        ui.notifications?.warn?.("You have already spent movement this turn. Jump must be your full movement (use it before moving/turning).");
+      const stamp = getCombatStamp(game.combat);
+      const priorStamp = tokenDoc.getFlag(SYSTEM_ID, "turnStamp") ?? null;
+      const sameTurn = (priorStamp === stamp);
+      const movedHexesThisTurn = sameTurn ? (Number(tokenDoc.getFlag(SYSTEM_ID, "movedHexesThisTurn") ?? 0) || 0) : 0;
+      const turnedThisTurn = sameTurn ? (Number(tokenDoc.getFlag(SYSTEM_ID, "turnedThisTurn") ?? 0) || 0) : 0;
+      const mpSpentThisTurn = sameTurn ? (Number(tokenDoc.getFlag(SYSTEM_ID, "mpSpentThisTurn") ?? 0) || 0) : 0;
+      const movementEndedThisTurn = sameTurn ? Boolean(tokenDoc.getFlag(SYSTEM_ID, "movementEndedThisTurn")) : false;
+      const jumpedThisTurn = sameTurn ? Boolean(tokenDoc.getFlag(SYSTEM_ID, "jumpedThisTurn")) : false;
+
+      if (jumpedThisTurn || movementEndedThisTurn) {
+        ui.notifications?.warn?.("This mech has already completed its movement for the turn.");
         return;
       }
 
+      // Jump must be declared before any normal movement or turning this turn.
+      if (movedHexesThisTurn > 0 || turnedThisTurn > 0 || mpSpentThisTurn > 0) {
+        ui.notifications?.warn?.("Jump must be your full movement. Declare it before moving or changing facing this turn.");
+        return;
+      }
+
+      _showJumpRangeHighlights(tokenDoc, maxRange);
       ui.notifications?.info?.(`Jump: click a destination within ${maxRange} spaces (right-click to cancel).`);
 
-      // Loop until a legal destination is picked or user cancels.
-      while (true) {
-        const p = await _pickCanvasPointOnce();
-        if (!p) return; // cancelled
+      try {
+        // Loop until a legal destination is picked or user cancels.
+        while (true) {
+          const p = await _pickCanvasPointOnce();
+          if (!p) return; // cancelled
 
-        // Snap to a legal grid top-left
-        let gx = p.x, gy = p.y;
-        if (typeof canvas.grid.getTopLeft === "function") {
-          [gx, gy] = canvas.grid.getTopLeft(p.x, p.y);
-        } else {
-          gx = Math.round(p.x);
-          gy = Math.round(p.y);
-        }
+          const snapped = _snapPointToGridTopLeft(p);
+          const gx = snapped?.x ?? tokenDoc.x;
+          const gy = snapped?.y ?? tokenDoc.y;
 
-        const dist = measureGridSpaces({ x: tokenDoc.x, y: tokenDoc.y }, { x: gx, y: gy });
-        if (dist > maxRange) {
-          ui.notifications?.warn?.(`Destination is ${dist} spaces away (max ${maxRange}). Pick a closer hex.`);
-          continue;
-        }
-
-        // Update token position + movement flags in a single update.
-        const flags = {
-          [SYSTEM_ID]: {
-            moveMode: "jump",
-            jumpedThisTurn: true,
-            movementEndedThisTurn: true,
-
-            // Treat jump distance as "spaces moved" for this turn.
-            movedHexesThisTurn: dist,
-            turnedThisTurn: 0,
-            mpSpentThisTurn: dist,
-            movedThisTurn: dist,
-            spacesMovedThisTurn: dist
+          const dist = measureGridSpaces({ x: tokenDoc.x, y: tokenDoc.y }, { x: gx, y: gy });
+          if (dist <= 0) {
+            ui.notifications?.warn?.("Choose a different hex to jump to.");
+            continue;
           }
-        };
+          if (dist > maxRange) {
+            ui.notifications?.warn?.(`Destination is ${dist} spaces away (max ${maxRange}). Pick a closer hex.`);
+            continue;
+          }
 
-        await tokenDoc.update({ x: gx, y: gy, flags }, { atowJumpMove: true });
+          const jumpDuration = Math.max(700, Math.min(2600, 650 + (dist * 220)));
 
-        // Apply the core "Jumped" status effect so attack TN modifiers are automatic.
-        await setTokenStatusEffect(tokenDoc, "atow-jumped", true);
-        await playSystemSfx(JUMP_JET_SFX, { volume: 0.9 });
-        return;
+          await playActorJumpjetEffect(actor, { volume: 0.9 });
+          await _animateJumpDrift(tokenDoc, { x: gx, y: gy }, { duration: jumpDuration });
+          const currentFacing = getTokenFacingDegrees(tokenDoc);
+          const landingFacing = await _chooseJumpLandingFacing(tokenDoc, { currentFacing });
+
+          // Update token position + movement flags in a single update.
+          const flags = {
+            [SYSTEM_ID]: {
+              moveMode: "jump",
+              jumpedThisTurn: true,
+              movementEndedThisTurn: true,
+
+              // Treat jump distance as "spaces moved" for this turn.
+              movedHexesThisTurn: dist,
+              turnedThisTurn: 0,
+              mpSpentThisTurn: dist,
+              movedThisTurn: dist,
+              spacesMovedThisTurn: dist,
+              displacementThisTurn: dist,
+              backwardUsedThisTurn: false
+            }
+          };
+
+          await tokenDoc.update({
+            x: gx,
+            y: gy,
+            rotation: landingFacing,
+            flags: {
+              ...flags,
+              [SYSTEM_ID]: {
+                ...flags[SYSTEM_ID],
+                facing: landingFacing
+              }
+            }
+          }, { atowJumpMove: true, animate: false });
+
+          // Apply the core "Jumped" status effect so attack TN modifiers are automatic.
+          await setTokenStatusEffect(tokenDoc, "atow-jumped", true);
+          return;
+        }
+      } finally {
+        _clearJumpRangeHighlights();
       }
     } catch (err) {
+      _clearJumpRangeHighlights();
       console.warn("AToW Battletech | Jump move failed", err);
       ui.notifications?.error?.("Jump move failed (see console).");
     }
@@ -2049,19 +2782,343 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
   // Expose for the mech sheet button.
   ATOW.api.beginJumpMove = beginJumpMove;
 
+  const resolveHeaderActionContext = ({ actorId = null, tokenId = null, actor = null, token = null } = {}) => {
+    const scopedTokenDoc = token?.document ?? token ?? null;
+    const scopedActor = actor ?? scopedTokenDoc?.actor ?? null;
+    if (scopedActor || scopedTokenDoc) {
+      return {
+        actor: scopedActor ?? null,
+        tokenDoc: scopedTokenDoc ?? null
+      };
+    }
+
+    const controlledTokenDoc = getSingleControlledMechTokenDoc();
+    if (controlledTokenDoc) {
+      return {
+        actor: controlledTokenDoc.actor ?? null,
+        tokenDoc: controlledTokenDoc
+      };
+    }
+
+    const explicitTokenDoc = getTokenDocById(tokenId);
+    if (explicitTokenDoc?.actor) {
+      return {
+        actor: explicitTokenDoc.actor,
+        tokenDoc: explicitTokenDoc
+      };
+    }
+
+    const fallbackActor = getActorById(actorId);
+    const actorTokenDoc =
+      fallbackActor?.getActiveTokens?.(true, true)?.[0]?.document ??
+      fallbackActor?.getActiveTokens?.()?.[0]?.document ??
+      null;
+
+    return {
+      actor: fallbackActor ?? actorTokenDoc?.actor ?? null,
+      tokenDoc: actorTokenDoc
+    };
+  };
+
+  const executeHeaderAction = async ({ action, actorId = null, tokenId = null, actor = null, token = null } = {}) => {
+    const { actor: resolvedActor, tokenDoc } = resolveHeaderActionContext({ actorId, tokenId, actor, token });
+    const actorDoc = resolvedActor;
+    const normalized = String(action ?? "").trim().toLowerCase();
+
+    if (!normalized) {
+      ui.notifications?.warn?.("No action was provided.");
+      return false;
+    }
+
+    switch (normalized) {
+      case "jump":
+        if (!actorDoc || actorDoc.type !== "mech") {
+          ui.notifications?.warn?.("Select or open a mech to use this action.");
+          return false;
+        }
+        if (typeof beginJumpMove !== "function") {
+          ui.notifications?.warn?.("Jump automation is not available right now.");
+          return false;
+        }
+        await beginJumpMove({ actor: actorDoc, tokenDoc });
+        return true;
+
+      case "shutdown": {
+        if (!actorDoc || actorDoc.type !== "mech") {
+          ui.notifications?.warn?.("Select or open a mech to use this action.");
+          return false;
+        }
+        const next = !Boolean(actorDoc?.getFlag?.(SYSTEM_ID, "shutdownManual"));
+        await actorDoc.setFlag(SYSTEM_ID, "shutdownManual", next);
+        if (next) {
+          playActorShutdownAnnouncement(actorDoc, { volume: 1.0 });
+        } else {
+          playActorPowerRestoredAnnouncement(actorDoc, { volume: 0.9 });
+        }
+        if (game.user?.isGM) {
+          try { await _syncShutdownAndImmobileOnActorTokens(actorDoc); } catch (_) {}
+        }
+        return true;
+      }
+
+      case "dazzle": {
+        if (!actorDoc || !["mech", "wheeledvehicle"].includes(String(actorDoc.type ?? "").toLowerCase())) {
+          ui.notifications?.warn?.("Select or open a mech or combat vehicle to use Dazzle Mode.");
+          return false;
+        }
+        const next = !Boolean(actorDoc?.getFlag?.(SYSTEM_ID, "dazzleMode"));
+        await actorDoc.setFlag(SYSTEM_ID, "dazzleMode", next);
+        ui.notifications?.info?.(`${actorDoc.name}: Dazzle Mode ${next ? "enabled" : "disabled"}.`);
+        return true;
+      }
+
+      default:
+        ui.notifications?.warn?.(`Unknown action: ${normalized}`);
+        return false;
+    }
+  };
+
+  const buildHeaderActionMacroCommand = ({ action, actorId = null, tokenId = null } = {}) => {
+    const payload = JSON.stringify({
+      action: String(action ?? "").trim(),
+      actorId: actorId ? String(actorId) : null,
+      tokenId: tokenId ? String(tokenId) : null
+    });
+return `const base = ${payload};
+const scopedActorId = (typeof actor !== "undefined" && actor?.id) ? String(actor.id) : null;
+const scopedTokenId = (typeof token !== "undefined" && (token?.document?.id ?? token?.id)) ? String(token?.document?.id ?? token?.id) : null;
+const runner = game["${SYSTEM_ID}"]?.api?.runHeaderActionMacro;
+if (typeof runner !== "function") {
+  ui.notifications?.warn?.("AToW header action macro runner is unavailable.");
+  return false;
+}
+return await runner({
+  ...base,
+  actorId: scopedActorId ?? base.actorId,
+  tokenId: scopedTokenId ?? base.tokenId,
+  actor: (typeof actor !== "undefined") ? actor : null,
+  token: (typeof token !== "undefined") ? token : null
+});`;
+  };
+
+  const ensureHeaderActionMacro = async ({ action, label = null, img = null, actorId = null, tokenId = null } = {}) => {
+    const normalized = String(action ?? "").trim().toLowerCase();
+    if (!normalized) return null;
+
+    const macroLabel = String(label ?? normalized).trim() || normalized;
+    const macroImg = String(img ?? "icons/svg/dice-target.svg").trim() || "icons/svg/dice-target.svg";
+    const command = buildHeaderActionMacroCommand({ action: normalized, actorId, tokenId });
+    const macroName = `AToW: ${macroLabel}`;
+
+    let macro = game.macros?.find?.(m =>
+      m?.name === macroName &&
+      m?.type === "script" &&
+      String(m?.command ?? "").trim() === command.trim()
+    ) ?? null;
+
+    if (!macro) {
+      macro = await Macro.create({
+        name: macroName,
+        type: "script",
+        scope: "global",
+        command,
+        img: macroImg
+      }, { renderSheet: false });
+    }
+
+    return macro ?? null;
+  };
+
+  const executeWeaponAttack = async ({ actorId = null, tokenId = null, itemUuid = null, weaponFireKey = "", defaultSide = "front", actor = null, token = null } = {}) => {
+    const { actor: resolvedActor, tokenDoc } = resolveHeaderActionContext({ actorId, tokenId, actor, token });
+    const actorDoc = tokenDoc?.actor ?? resolvedActor;
+    if (!actorDoc || String(actorDoc.type ?? "").toLowerCase() !== "mech") {
+      ui.notifications?.warn?.("Select or open a mech to use this weapon action.");
+      return false;
+    }
+
+    const normalizedUuid = String(itemUuid ?? "").trim();
+    if (!normalizedUuid) {
+      ui.notifications?.warn?.("No weapon was provided for this action.");
+      return false;
+    }
+
+    let weapon = null;
+    try {
+      weapon = await fromUuid(normalizedUuid);
+    } catch (err) {
+      console.warn(`${SYSTEM_ID} | Failed to resolve mech weapon macro UUID`, err);
+    }
+
+    if (!weapon) {
+      ui.notifications?.warn?.("That weapon could not be resolved.");
+      return false;
+    }
+
+    const { promptAndRollWeaponAttack } = await import("./module/mech-attack.js");
+    await promptAndRollWeaponAttack(actorDoc, weapon, {
+      defaultSide: String(defaultSide ?? "front").trim().toLowerCase() || "front",
+      attackerToken: tokenDoc ?? null,
+      weaponFireKey: String(weaponFireKey ?? "").trim()
+    });
+    return true;
+  };
+
+  const buildWeaponAttackMacroCommand = ({ actorId = null, tokenId = null, itemUuid = null, weaponFireKey = "", defaultSide = "front" } = {}) => {
+    const payload = JSON.stringify({
+      actorId: actorId ? String(actorId) : null,
+      tokenId: tokenId ? String(tokenId) : null,
+      itemUuid: itemUuid ? String(itemUuid) : null,
+      weaponFireKey: String(weaponFireKey ?? "").trim(),
+      defaultSide: String(defaultSide ?? "front").trim().toLowerCase() || "front"
+    });
+    return `const base = ${payload};
+const scopedToken = (typeof token !== "undefined" && token) ? token : null;
+const scopedActor = (typeof actor !== "undefined" && actor) ? actor : null;
+const scopedTokenId = scopedToken ? String(scopedToken?.document?.id ?? scopedToken?.id ?? "") : null;
+const scopedActorId = scopedActor ? String(scopedActor?.id ?? "") : null;
+const tokenDoc = scopedToken?.document ?? canvas?.tokens?.get?.(scopedTokenId ?? "")?.document ?? canvas?.tokens?.get?.(base.tokenId ?? "")?.document ?? null;
+const actorDoc = tokenDoc?.actor ?? scopedActor ?? game.actors?.get?.(scopedActorId ?? "") ?? game.actors?.get?.(base.actorId ?? "") ?? null;
+if (!actorDoc || String(actorDoc.type ?? "").toLowerCase() !== "mech") {
+  ui.notifications?.warn?.("Select or open a mech to use this weapon action.");
+  return false;
+}
+let weapon = null;
+try {
+  weapon = await fromUuid(base.itemUuid);
+} catch (err) {
+  console.warn("${SYSTEM_ID} | Failed to resolve mech weapon macro UUID", err);
+}
+if (!weapon) {
+  ui.notifications?.warn?.("That weapon could not be resolved.");
+  return false;
+}
+const mod = await import("/systems/${SYSTEM_ID}/module/mech-attack.js");
+return await mod.promptAndRollWeaponAttack(actorDoc, weapon, {
+  defaultSide: base.defaultSide || "front",
+  attackerToken: tokenDoc ?? null,
+  weaponFireKey: String(base.weaponFireKey ?? "").trim()
+});`;
+  };
+
+  const ensureWeaponAttackMacro = async ({ label = null, img = null, actorId = null, tokenId = null, itemUuid = null, weaponFireKey = "", defaultSide = "front" } = {}) => {
+    const normalizedUuid = String(itemUuid ?? "").trim();
+    const normalizedKey = String(weaponFireKey ?? "").trim();
+    if (!normalizedUuid || !normalizedKey) return null;
+
+    const macroLabel = String(label ?? "Weapon Attack").trim() || "Weapon Attack";
+    const macroImg = String(img ?? "icons/svg/dice-target.svg").trim() || "icons/svg/dice-target.svg";
+    const command = buildWeaponAttackMacroCommand({ actorId, tokenId, itemUuid: normalizedUuid, weaponFireKey: normalizedKey, defaultSide });
+    const macroName = `AToW: ${macroLabel} [${normalizedKey}]`;
+
+    let macro = game.macros?.find?.(m =>
+      m?.name === macroName &&
+      m?.type === "script" &&
+      String(m?.command ?? "").trim() === command.trim()
+    ) ?? null;
+
+    if (!macro) {
+      const sameNameMacro = game.macros?.find?.(m =>
+        m?.name === macroName &&
+        m?.type === "script"
+      ) ?? null;
+
+      if (sameNameMacro) {
+        await sameNameMacro.update({
+          command,
+          img: macroImg
+        }, { renderSheet: false });
+        macro = sameNameMacro;
+      }
+    }
+
+    if (!macro) {
+      macro = await Macro.create({
+        name: macroName,
+        type: "script",
+        scope: "global",
+        command,
+        img: macroImg
+      }, { renderSheet: false });
+    }
+
+    return macro ?? null;
+  };
+
+  ATOW.api.executeHeaderAction = executeHeaderAction;
+  ATOW.api.runHeaderActionMacro = executeHeaderAction;
+  ATOW.api.buildHeaderActionMacroCommand = buildHeaderActionMacroCommand;
+  ATOW.api.ensureHeaderActionMacro = ensureHeaderActionMacro;
+  ATOW.api.executeWeaponAttack = executeWeaponAttack;
+  ATOW.api.runWeaponAttackMacro = executeWeaponAttack;
+  ATOW.api.buildWeaponAttackMacroCommand = buildWeaponAttackMacroCommand;
+  ATOW.api.ensureWeaponAttackMacro = ensureWeaponAttackMacro;
+
+  Hooks.on("hotbarDrop", async (bar, data, slot) => {
+    if (data?.type !== HEADER_ACTION_DRAG_TYPE) return;
+
+    const action = String(data?.action ?? "").trim().toLowerCase();
+    if (!action) return false;
+
+    const label = String(data?.label ?? action).trim() || action;
+    const actorId = data?.actorId ? String(data.actorId) : null;
+    const tokenId = data?.tokenId ? String(data.tokenId) : null;
+    const macro = await ensureHeaderActionMacro({
+      action,
+      label,
+      img: String(data?.img ?? "icons/svg/dice-target.svg"),
+      actorId,
+      tokenId
+    });
+
+    if (!macro) return false;
+
+    await game.user?.assignHotbarMacro?.(macro, slot);
+    return false;
+  });
+
 
   const getMovementHeatFromMode = (moved, mode) => {
     const n = Number(moved ?? 0) || 0;
     if (n <= 0) return 0;
     const m = String(mode ?? "").toLowerCase();
-    if (m === "jump" || m === "jumping") return 1;
+    if (m === "jump" || m === "jumping") return Math.max(3, n);
     if (m === "run" || m === "running") return 2; // walk +1 plus run +1
     return 1; // default to walk if unknown
   };
 
-  const getCombatStamp = (combat) => `${combat?.round ?? 0}:${combat?.turn ?? 0}`;
+  const getCombatStamp = (combat) => `${combat?.id ?? "no-combat"}:${combat?.round ?? 0}:${combat?.turn ?? 0}`;
+  const resetWeaponFireTrackingForCombatant = async (combatant, combat) => {
+    const stamp = getCombatStamp(combat);
+    const tracker = { stamp, keys: [] };
+    const docs = new Set();
+
+    const tokenDoc = combatant?.token ?? null;
+    const actor = combatant?.actor ?? null;
+    const tokenActor = tokenDoc?.actor ?? null;
+    const worldActor = actor?.id ? game.actors?.get?.(actor.id) ?? null : null;
+
+    if (tokenDoc?.setFlag) docs.add(tokenDoc);
+    if (actor?.setFlag) docs.add(actor);
+    if (tokenActor?.setFlag) docs.add(tokenActor);
+    if (worldActor?.setFlag) docs.add(worldActor);
+
+    for (const doc of docs) {
+      try {
+        await doc.unsetFlag?.(SYSTEM_ID, "weaponFireTracker").catch?.(() => {});
+        await doc.setFlag(SYSTEM_ID, "weaponFireTracker", tracker);
+      } catch (err) {
+        console.warn(`${SYSTEM_ID} | Failed to reset weapon fire tracker`, err);
+      }
+      try {
+        const key = String(doc?.uuid ?? doc?.id ?? "").trim();
+        if (key) globalThis.__ATOW_BT_WEAPON_FIRE_TRACKER__?.delete?.(key);
+      } catch (_) {}
+    }
+  };
 
   Hooks.on("updateCombat", async (combat, changed) => {
+    if (!game.user?.isGM) return;
     if (!("turn" in changed || "round" in changed)) return;
 
     const c = combat.combatant;
@@ -2080,7 +3137,9 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
     await tokenDoc.setFlag("atow-battletech", "turnedThisTurn", 0);
     await tokenDoc.setFlag("atow-battletech", "movedThisTurn", 0);      // spaces moved this turn (backwards-compat)
     await tokenDoc.setFlag("atow-battletech", "spacesMovedThisTurn", 0); // alias for spaces moved (preferred name)
+    await tokenDoc.setFlag("atow-battletech", "displacementThisTurn", 0); // net displacement from turn start (used for TMM)
     await tokenDoc.setFlag("atow-battletech", "mpSpentThisTurn", 0);     // total MP spent (preferred)
+    await tokenDoc.setFlag("atow-battletech", "backwardUsedThisTurn", false);
 
     // Facing bookkeeping
     await tokenDoc.setFlag("atow-battletech", "facingStart", getTokenFacingDegrees(tokenDoc));
@@ -2091,6 +3150,20 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
 
     // Stamp this token to the current combat turn, so preUpdateToken can self-heal if needed
     await tokenDoc.setFlag("atow-battletech", "turnStamp", getCombatStamp(combat));
+    await tokenDoc.setFlag("atow-battletech", "weaponFireConsumedThisTurn", false);
+    await resetWeaponFireTrackingForCombatant(c, combat);
+
+    try {
+      const heatResolvedStamp = String(tokenDoc.getFlag("atow-battletech", "heatResolvedStamp") ?? "");
+      const stamp = getCombatStamp(combat);
+      const heatActor = tokenDoc.actor ?? c.actor ?? null;
+      if (heatResolvedStamp !== stamp) {
+        await resolveActorHeatForTurn(heatActor);
+        await tokenDoc.setFlag("atow-battletech", "heatResolvedStamp", stamp);
+      }
+    } catch (err) {
+      console.warn(`${SYSTEM_ID} | Failed to resolve turn-start heat`, err);
+    }
   });
 
 
@@ -2117,6 +3190,7 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
     // If movement has been explicitly ended (e.g., after a Jump), disallow further turning or translation.
     const ended = Boolean(tokenDoc.getFlag(SYSTEM_ID, "movementEndedThisTurn"));
     if (ended) {
+      const jumped = Boolean(tokenDoc.getFlag(SYSTEM_ID, "jumpedThisTurn"));
       if (isMove) {
         changes.x = tokenDoc.x;
         changes.y = tokenDoc.y;
@@ -2131,7 +3205,9 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
         // Revert the About Face direction change.
         changes.flags["about-face"].direction = _getAboutFaceDir(tokenDoc) ?? 0;
       }
-      ui.notifications?.warn?.("Movement already ended for this turn.");
+      ui.notifications?.warn?.(jumped
+        ? "You cannot move or turn after jumping this turn."
+        : "Movement already ended for this turn.");
       return;
     }
 
@@ -2145,11 +3221,13 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
     let movedHexes = Number(tokenDoc.getFlag("atow-battletech", "movedHexesThisTurn") ?? 0) || 0;
     movedHexes = Math.max(0, Math.round(movedHexes));
     let turned = Number(tokenDoc.getFlag("atow-battletech", "turnedThisTurn") ?? 0) || 0;
+    let backwardUsedThisTurn = Boolean(tokenDoc.getFlag("atow-battletech", "backwardUsedThisTurn"));
 
     const resetForTurn = (priorStamp !== stamp);
     if (resetForTurn) {
       movedHexes = 0;
       turned = 0;
+      backwardUsedThisTurn = false;
       changes.flags = changes.flags ?? {};
       changes.flags["atow-battletech"] = changes.flags["atow-battletech"] ?? {};
       changes.flags["atow-battletech"].turnStamp = stamp;
@@ -2160,10 +3238,33 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
       changes.flags["atow-battletech"].mpSpentThisTurn = 0;
       changes.flags["atow-battletech"].movedThisTurn = 0;
       changes.flags["atow-battletech"].spacesMovedThisTurn = 0;
+      changes.flags["atow-battletech"].displacementThisTurn = 0;
+      changes.flags["atow-battletech"].backwardUsedThisTurn = false;
       changes.flags["atow-battletech"].facingStart = getTokenFacingDegrees(tokenDoc);
     }
     const { walk, run } = getMoveSpeeds(actor);
     const maxRun = Number(run ?? 0) || 0;
+    const maxWalk = Number(walk ?? 0) || 0;
+
+    let dest = null;
+    let backwardThisMove = false;
+    if (isMove) {
+      dest = {
+        x: ("x" in changes) ? changes.x : tokenDoc.x,
+        y: ("y" in changes) ? changes.y : tokenDoc.y
+      };
+
+      const facingForMove = getTokenFacingDegreesAfterChanges(tokenDoc, changes);
+      backwardThisMove = _isBackwardTranslation(
+        tokenDoc,
+        { x: tokenDoc.x, y: tokenDoc.y },
+        dest,
+        { facingDeg: facingForMove }
+      );
+    }
+
+    const walkOnlyThisUpdate = backwardUsedThisTurn || backwardThisMove;
+    const maxAllowedMp = walkOnlyThisUpdate ? maxWalk : maxRun;
 
     // 1) Turning cost (facing changes)
     let deltaTurns = 0;
@@ -2173,7 +3274,7 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
       deltaTurns = facingStepsFromRotationDelta(fromFacing, toFacing);
 
       const spentNow = movedHexes + turned;
-      if (maxRun > 0 && (spentNow + deltaTurns) > maxRun) {
+      if (maxAllowedMp > 0 && (spentNow + deltaTurns) > maxAllowedMp) {
         // No MP remaining for turns, revert the facing change.
         if (isTurn) changes.rotation = tokenDoc.rotation;
         if (isNativeFacingTurn) {
@@ -2191,14 +3292,8 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
 
     // 2) Translation cost (hexes moved)
     // 2) Translation cost (hexes moved) - only for clamp/forward-back checks.
-    let dest = null;
     let segmentThisMove = 0;
     if (isMove) {
-      dest = {
-        x: ("x" in changes) ? changes.x : tokenDoc.x,
-        y: ("y" in changes) ? changes.y : tokenDoc.y
-      };
-
       try {
         const restrictFB = game.settings.get(SYSTEM_ID, "restrictMoveForwardBackward");
         const facingForMove = getTokenFacingDegreesAfterChanges(tokenDoc, changes);
@@ -2213,7 +3308,14 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
       }
 
       const spentNow = movedHexes + turned + deltaTurns;
-      const remaining = Math.max(0, maxRun - spentNow);
+      if (backwardThisMove && (maxWalk <= 0 || spentNow >= maxWalk)) {
+        changes.x = tokenDoc.x;
+        changes.y = tokenDoc.y;
+        ui.notifications?.warn?.("Backward movement is only allowed while using Walking MP.");
+        return;
+      }
+
+      const remaining = Math.max(0, maxAllowedMp - spentNow);
       const from = { x: tokenDoc.x, y: tokenDoc.y };
       const rulerTotal = measureTokenRulerSpaces(tokenDoc, from, dest);
     let segment = measureGridSpaces(from, dest);
@@ -2262,7 +3364,7 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
         }
       } catch (_) {}
 
-      if (maxRun > 0 && segmentThisMove > remaining) {
+      if (maxAllowedMp > 0 && segmentThisMove > remaining) {
         if (segmentThisMove <= 0 || remaining <= 0) {
           changes.x = tokenDoc.x;
           changes.y = tokenDoc.y;
@@ -2285,7 +3387,9 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
             changes.y = Math.round(clamped.y);
           }
         }
-        ui.notifications?.warn?.("Movement limited to Run speed for this turn.");
+        ui.notifications?.warn?.(walkOnlyThisUpdate
+          ? "Movement limited to Walking MP after using backward movement."
+          : "Movement limited to Run speed for this turn.");
       }
     }
 
@@ -2296,12 +3400,16 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
 
       let movedHexesNext = movedHexes;
       let turnedNext = turned;
+      let backwardUsedNext = backwardUsedThisTurn;
+      let displacementNext = Number(tokenDoc.getFlag(SYSTEM_ID, "displacementThisTurn") ?? 0) || 0;
 
       if (isMove) {
         const finalDest = dest ?? { x: tokenDoc.x, y: tokenDoc.y };
         const segment = Math.max(0, segmentThisMove);
         movedHexesNext = Math.max(0, movedHexesNext + segment);
         sysFlags.lastPos = { x: finalDest.x, y: finalDest.y };
+        backwardUsedNext = backwardUsedNext || backwardThisMove;
+        displacementNext = measureTurnDisplacementSpaces(tokenDoc, finalDest);
       }
 
       if (isFacingTurn) {
@@ -2309,13 +3417,15 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
       }
 
       const mpSpentNext = Math.max(0, movedHexesNext + turnedNext);
-      const mode = (walk > 0 && mpSpentNext <= walk) ? "walk" : "run";
+      const mode = (backwardUsedNext || (walk > 0 && mpSpentNext <= walk)) ? "walk" : "run";
 
       sysFlags.movedHexesThisTurn = movedHexesNext;
       sysFlags.turnedThisTurn = turnedNext;
       sysFlags.mpSpentThisTurn = mpSpentNext;
       sysFlags.movedThisTurn = movedHexesNext;
       sysFlags.spacesMovedThisTurn = movedHexesNext;
+      sysFlags.displacementThisTurn = displacementNext;
+      sysFlags.backwardUsedThisTurn = backwardUsedNext;
       sysFlags.moveMode = mode;
 
       flags[SYSTEM_ID] = sysFlags;
@@ -2402,25 +3512,7 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
       const delta = Math.max(0, desired - applied);
 
       if (delta > 0) {
-        const curHeat = Number((actor.system?.heat?.value ?? actor.system?.heat?.current) ?? 0) || 0;
-        const nextHeat = clamp(curHeat + delta, 0, HEAT_HARD_CAP);
-
-        // Update heat values; recompute penalties. (We intentionally do NOT re-run shutdown checks mid-turn.)
-        const effects = computeHeatEffects(nextHeat);
-        const priorShutdown = Boolean(actor.system?.heat?.shutdown);
-        const priorShutdownInfo = actor.system?.heat?.effects?.shutdown ?? {};
-
-        await actor.update({
-          "system.heat.value": nextHeat,
-          "system.heat.current": nextHeat,
-          "system.heat.unvented": nextHeat,
-          "system.heat.effects.unvented": nextHeat,
-          "system.heat.effects.movePenalty": effects.movePenalty,
-          "system.heat.effects.fireMod": effects.fireMod,
-          "system.heat.shutdown": priorShutdown,
-          "system.heat.effects.shutdown": { ...priorShutdownInfo, heat: nextHeat }
-        });
-
+        await addActorPendingHeat(actor, delta);
         await tokenDoc.setFlag("atow-battletech", "moveHeatApplied", desired);
       }
       }
@@ -2472,6 +3564,39 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
     else if (h >= 14) shutdownAvoidTN = 4;
 
     return { unvented: h, movePenalty, fireMod, shutdownAuto, shutdownAvoidTN };
+  };
+
+  const getActorStoredHeat = (actor) => {
+    const heat = actor?.system?.heat ?? {};
+    const effects = heat.effects ?? {};
+    const v = heat.unvented ?? effects.unvented ?? heat.value ?? heat.current ?? 0;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  };
+
+  const addActorPendingHeat = async (actor, delta) => {
+    if (!actor || actor.type !== "mech") return 0;
+    const add = Number(delta ?? 0) || 0;
+    if (add <= 0) return getActorStoredHeat(actor);
+
+    const current = getActorStoredHeat(actor);
+    const next = clamp(current + add, 0, HEAT_HARD_CAP);
+    const max = Number(actor.system?.heat?.max ?? 30) || 30;
+    const priorEffects = actor.system?.heat?.effects ?? {};
+
+    await actor.update({
+      "system.heat.value": next,
+      "system.heat.current": next,
+      "system.heat.max": max,
+      "system.heat.unvented": next,
+      "system.heat.effects.unvented": next,
+      "system.heat.dissipation": Number(actor.system?.heat?.dissipation ?? 0) || 0,
+      "system.heat.effects.movePenalty": Number(priorEffects.movePenalty ?? 0) || 0,
+      "system.heat.effects.fireMod": Number(priorEffects.fireMod ?? 0) || 0,
+      "system.heat.effects.shutdown": priorEffects.shutdown ?? {}
+    });
+
+    return next;
   };
 
   // -----------------------------------
@@ -2550,10 +3675,22 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
 
     // Newer field is heat.engineSinks (number). Legacy field is heat.engineSinksUsed (number or "auto").
     let requestedRaw = heat.engineSinks;
-    if (!Number.isFinite(Number(requestedRaw))) requestedRaw = heat.engineSinksUsed;
-
-    const requestedNum = Number(requestedRaw);
-    const requested = Number.isFinite(requestedNum) ? requestedNum : auto;
+    const hasConcreteEngineSinks =
+      requestedRaw !== null &&
+      requestedRaw !== undefined &&
+      String(requestedRaw).trim?.() !== "" &&
+      String(requestedRaw).trim?.().toLowerCase?.() !== "auto";
+    let requested = hasConcreteEngineSinks && Number.isFinite(Number(requestedRaw)) ? Number(requestedRaw) : null;
+    if (!Number.isFinite(requested)) {
+      const legacyRaw = heat.engineSinksUsed;
+      const legacyNum = Number(legacyRaw);
+      if (Number.isFinite(legacyNum)) {
+        // Some older actors stored only the removable sinks above the base 10.
+        // Example: an auto value of 16 might have legacy engineSinksUsed=6.
+        requested = (auto > 10 && legacyNum <= (auto - 10)) ? (10 + legacyNum) : legacyNum;
+      }
+    }
+    if (!Number.isFinite(requested)) requested = auto;
 
     const min = (auto > 10) ? 10 : 0;
     return clamp(requested, min, auto);
@@ -2728,40 +3865,32 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
 
 
 
-  Hooks.on("updateCombat", async (combat, changed) => {
-    if (!("turn" in changed || "round" in changed)) return;
-
-    const c = combat.combatant;
-    const actor = c?.actor;
-    const tokenDoc = c?.token;
-
+  const resolveActorHeatForTurn = async (actor) => {
     if (!actor) return;
     if (actor.type && actor.type !== "mech") return;
 
-    const totalCooling = await calcTotalCooling(actor);
-    const cur = Number((actor.system?.heat?.value ?? actor.system?.heat?.current) ?? 0) || 0;
+    const storedCooling = Number(actor.system?.heat?.dissipation ?? NaN);
+    const computedCooling = await calcTotalCooling(actor);
+    const totalCooling = Number.isFinite(storedCooling) && storedCooling > 0 ? storedCooling : computedCooling;
+    const cur = getActorStoredHeat(actor);
     const max = Number(actor.system?.heat?.max ?? 30) || 30;
-
-    // Vent heat at start of turn
     const next = clamp(cur - totalCooling, 0, HEAT_HARD_CAP);
 
-    // Compute penalties based on remaining heat (unvented heat)
+    // Compute penalties based on remaining heat after the round-start vent step.
     const effects = computeHeatEffects(next);
 
     // Persistent shutdown state (until you add restart logic)
     let shutdown = Boolean(actor.system?.heat?.shutdown);
     let shutdownInfo = actor.system?.heat?.effects?.shutdown ?? {};
 
-    // AUTO-STARTUP (legacy behavior): if the mech is shut down from heat, attempt to start back up at the
-    // start of its turn. Manual shutdown (atow.shutdown flag) is not auto-cleared.
+    // If the shutdown was caused by heat, attempt auto-startup at the beginning of the round.
+    // Manual shutdown (atow.shutdown flag) is not auto-cleared.
     const manualShutdown = _getManualShutdown(actor);
     if (shutdown && !manualShutdown) {
       shutdown = false;
-      // Mark the shutdown effect payload as inactive so other parts of the system (e.g., SFX) see the transition.
       shutdownInfo = { ...(shutdownInfo ?? {}), type: "startup", heat: next, active: false, restarted: true };
     }
 
-    // Only attempt a shutdown check if not already shut down
     if (!shutdown) {
       if (effects.shutdownAuto) {
         shutdown = true;
@@ -2795,7 +3924,6 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
         });
       }
     } else {
-      // Keep shutdown info updated with current heat
       shutdownInfo = { ...shutdownInfo, heat: next, active: true };
     }
 
@@ -2803,358 +3931,24 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
       "system.heat.value": next,
       "system.heat.current": next,
       "system.heat.max": max,
-
-      // Remaining heat after venting
       "system.heat.unvented": next,
-
-      // Total cooling (heat vented this turn)
       "system.heat.dissipation": totalCooling,
-
-      // Store computed effects for the round/turn
       "system.heat.effects": {
         unvented: next,
         movePenalty: effects.movePenalty,
         fireMod: effects.fireMod,
         shutdown: shutdownInfo
       },
-
-      // Persistent shutdown marker
       "system.heat.shutdown": shutdown
     });
 
-    // Sync Shutdown + Immobile status effects (and purge legacy/core immobile) after heat processing.
     try { await _syncShutdownAndImmobileOnActorTokens(actor); } catch (_) {}
-
-  });
-
-
-  // ------------------------------------------------
-  // Character Modules (Life Modules / Packages)
-  // ------------------------------------------------
-
-  const ATTR_KEY_MAP = {
-    "STR": "str",
-    "BOD": "bod",
-    "RFL": "rfl",
-    "DEX": "dex",
-    "INT": "int",
-    "WIL": "wil",
-    "CHA": "cha"
   };
 
-  const _normDash = (s) => String(s ?? "").replace(/\u2013|\u2014/g, "-");
-
-  const _parseXpLines = (text) => {
-    const out = [];
-    const lines = String(text ?? "").split(/\r?\n/).map(l => l.trim()).filter(Boolean);
-    for (const raw of lines) {
-      const line = _normDash(raw);
-
-      // Grab the first signed integer in the line (e.g., "(+100 XP)", "-25", "+10")
-      const m = line.match(/([+\-]?\d+)/);
-      if (!m) continue;
-      const xp = Number(m[1]);
-      if (!Number.isFinite(xp)) continue;
-
-      // Key = line minus the number part and common punctuation/words
-      const key = line
-        .replace(m[1], "")
-        .replace(/[\(\)\[\]:;,]/g, "")
-        .replace(/\bXP\b/ig, "")
-        .trim();
-
-      if (!key) continue;
-      out.push({ key, xp });
-    }
-    return out;
-  };
-
-  const _parseAttrReqLines = (text) => {
-    const out = [];
-    const lines = String(text ?? "").split(/\r?\n/).map(l => l.trim()).filter(Boolean);
-    for (const raw of lines) {
-      const line = _normDash(raw).toUpperCase();
-      const m = line.match(/^([A-Z]{3})\s*(>=|>|=)?\s*(-?\d+)\s*$/);
-      if (!m) continue;
-      out.push({ attr: m[1], op: m[2] || ">=", value: Number(m[3]) });
-    }
-    return out;
-  };
-
-  const _meetsReq = (actor, req) => {
-    const attrs = actor?.system?.attributes ?? {};
-    const a = String(req.attr ?? "").toUpperCase();
-    const key = ATTR_KEY_MAP[a];
-    if (!key) return true; // ignore unknown requirement
-
-    const cur = Number(attrs?.[key]?.value ?? 0) || 0;
-    const v = Number(req.value ?? 0) || 0;
-    const op = req.op ?? ">=";
-
-    if (op === ">") return cur > v;
-    if (op === "=") return cur === v;
-    return cur >= v;
-  };
-
-  const _ensurePools = (xp) => {
-    const next = foundry.utils.duplicate(xp ?? {});
-    next.total = Number(next.total ?? 0) || 0;
-    next.spent = Number(next.spent ?? 0) || 0;
-
-    next.pools = next.pools ?? {};
-    next.pools.attributes = next.pools.attributes ?? { str: 0, bod: 0, rfl: 0, dex: 0, int: 0, wil: 0, cha: 0 };
-    for (const k of ["str","bod","rfl","dex","int","wil","cha"]) next.pools.attributes[k] = Number(next.pools.attributes[k] ?? 0) || 0;
-
-    next.pools.skills = next.pools.skills ?? {};
-    next.pools.traits = next.pools.traits ?? {};
-    next.pools.unallocated = Number(next.pools.unallocated ?? 0) || 0;
-    return next;
-  };
-
-  const _addToMap = (obj, key, delta) => {
-    const k = String(key ?? "").trim();
-    if (!k) return;
-    const cur = Number(obj[k] ?? 0) || 0;
-    obj[k] = cur + (Number(delta ?? 0) || 0);
-  };
-
-  const _applyBiographySlot = async (actor, moduleItem) => {
-    const t = String(moduleItem.system?.moduleType ?? "").toLowerCase();
-    const name = moduleItem.name ?? "";
-
-    // Ensure array exists
-    const mods = Array.isArray(actor.system?.biographyModules) ? [...actor.system.biographyModules] : Array.from({ length: 10 }, () => "");
-    while (mods.length < 10) mods.push("");
-
-    if (t === "affiliation") {
-      await actor.update({ "system.affiliation": name });
-      return;
-    }
-
-    const setAt = (idx) => {
-      const i = Math.max(0, Math.min(9, Number(idx)));
-      mods[i] = name;
-    };
-
-    if (t === "earlychildhood") setAt(0);
-    else if (t === "latechildhood") setAt(1);
-    else if (t === "highereducation") setAt(2);
-    else if (t === "reallife") setAt(3);
-    else {
-      const empty = mods.findIndex((v, i) => i >= 2 && !String(v ?? "").trim());
-      setAt(empty >= 0 ? empty : 2);
-    }
-
-    await actor.update({ "system.biographyModules": mods });
-  };
-
-  const _promptFlexibleAllocations = async (moduleItem) => {
-    const flex = moduleItem.system?.flexible ?? {};
-    const picks = Number(flex.picks ?? 0) || 0;
-    const amount = Number(flex.amount ?? 0) || 0;
-
-    if (picks <= 0 || amount === 0) return [];
-
-    const allowed = [];
-    if (flex.allowAttributes) allowed.push("attribute");
-    if (flex.allowTraits) allowed.push("trait");
-    if (flex.allowSkills) allowed.push("skill");
-    if (!allowed.length) return [];
-
-    const attrOptions = Object.keys(ATTR_KEY_MAP).map(a => `<option value="${a}">${a}</option>`).join("");
-
-    const rows = Array.from({ length: picks }).map((_, i) => `
-      <div class="flex-row" data-idx="${i}">
-        <label>Pick ${i + 1}</label>
-        <select class="flex-type">
-          ${allowed.map(t => `<option value="${t}">${t}</option>`).join("")}
-        </select>
-        <select class="flex-attr">${attrOptions}</select>
-        <input class="flex-name" type="text" placeholder="Trait/Skill name" style="display:none;" />
-      </div>
-    `).join("");
-
-    const content = `
-      <div class="atow-flex-dialog">
-        <p>Allocate <b>${amount >= 0 ? "+" : ""}${amount} XP</b> for each pick.</p>
-        ${rows}
-      </div>
-      <style>
-        .atow-flex-dialog .flex-row { display:grid; grid-template-columns: 70px 110px 90px 1fr; gap: 8px; align-items:center; margin: 6px 0; }
-        .atow-flex-dialog label { font-weight:700; }
-      </style>
-    `;
-
-    return new Promise((resolve) => {
-      const dlg = new Dialog({
-        title: "Allocate Flexible XP",
-        content,
-        buttons: {
-          ok: {
-            label: "Apply",
-            callback: (html) => {
-              const out = [];
-              const els = html[0].querySelectorAll(".flex-row");
-              for (const row of els) {
-                const type = row.querySelector(".flex-type")?.value;
-                if (type === "attribute") {
-                  const a = row.querySelector(".flex-attr")?.value;
-                  if (a) out.push({ type, target: a });
-                } else {
-                  const name = row.querySelector(".flex-name")?.value?.trim();
-                  if (name) out.push({ type, target: name });
-                }
-              }
-              resolve(out);
-            }
-          },
-          cancel: { label: "Cancel", callback: () => resolve(null) }
-        },
-        default: "ok",
-        render: (html) => {
-          const root = html[0];
-          root.querySelectorAll(".flex-row").forEach(row => {
-            const sel = row.querySelector(".flex-type");
-            const attrSel = row.querySelector(".flex-attr");
-            const nameIn = row.querySelector(".flex-name");
-
-            const sync = () => {
-              const t = sel.value;
-              if (t === "attribute") {
-                attrSel.style.display = "";
-                nameIn.style.display = "none";
-              } else {
-                attrSel.style.display = "none";
-                nameIn.style.display = "";
-                nameIn.placeholder = (t === "skill") ? "Skill name (e.g. Running)" : "Trait name (e.g. Fit)";
-              }
-            };
-
-            sel.addEventListener("change", sync);
-            sync();
-          });
-        }
-      });
-      dlg.render(true);
-    });
-  };
-
-  const applyCharacterModuleToActor = async (actor, moduleItem) => {
-    if (!actor || actor.type !== "character") return;
-
-    if (moduleItem.getFlag?.(SYSTEM_ID, "applied")) return;
-
-    const prereq = moduleItem.system?.prereq ?? {};
-    const requiredAff = String(prereq.affiliation ?? "any").trim();
-    if (requiredAff && requiredAff.toLowerCase() !== "any") {
-      const actorAff = String(actor.system?.affiliation ?? "").trim();
-      if (actorAff !== requiredAff) {
-        ui.notifications?.warn?.(`Prerequisite failed: requires affiliation "${requiredAff}".`);
-        return;
-      }
-    }
-
-    const reqs = _parseAttrReqLines(prereq.attributesText);
-    for (const r of reqs) {
-      if (!_meetsReq(actor, r)) {
-        ui.notifications?.warn?.(`Prerequisite failed: ${r.attr}${r.op}${r.value}.`);
-        return;
-      }
-    }
-
-    const xp = _ensurePools(actor.system?.xp ?? {});
-    const pools = xp.pools;
-
-    let awardedTotal = 0;
-
-    for (const g of _parseXpLines(moduleItem.system?.fixed?.attributesText)) {
-      const a = String(g.key ?? "").toUpperCase().trim().slice(0,3);
-      const k = ATTR_KEY_MAP[a];
-      if (!k) continue;
-      pools.attributes[k] = Number(pools.attributes[k] ?? 0) + g.xp;
-      awardedTotal += g.xp;
-    }
-
-    for (const g of _parseXpLines(moduleItem.system?.fixed?.skillsText)) {
-      _addToMap(pools.skills, g.key, g.xp);
-      awardedTotal += g.xp;
-    }
-
-    for (const g of _parseXpLines(moduleItem.system?.fixed?.traitsText)) {
-      _addToMap(pools.traits, g.key, g.xp);
-      awardedTotal += g.xp;
-    }
-
-    const flex = moduleItem.system?.flexible ?? {};
-    const picks = Number(flex.picks ?? 0) || 0;
-    const amount = Number(flex.amount ?? 0) || 0;
-
-    if (picks > 0 && amount !== 0) {
-      const allocs = await _promptFlexibleAllocations(moduleItem);
-      if (allocs === null) {
-        ui.notifications?.info?.("Flexible XP allocation cancelled. Module not applied.");
-        return;
-      }
-
-      let appliedCount = 0;
-
-      for (const a of allocs) {
-        if (a.type === "attribute") {
-          const k = ATTR_KEY_MAP[String(a.target ?? "").toUpperCase()];
-          if (!k) continue;
-          pools.attributes[k] = Number(pools.attributes[k] ?? 0) + amount;
-          awardedTotal += amount;
-          appliedCount += 1;
-        } else if (a.type === "skill") {
-          _addToMap(pools.skills, a.target, amount);
-          awardedTotal += amount;
-          appliedCount += 1;
-        } else if (a.type === "trait") {
-          _addToMap(pools.traits, a.target, amount);
-          awardedTotal += amount;
-          appliedCount += 1;
-        }
-      }
-
-      const remaining = Math.max(0, picks - appliedCount);
-      if (remaining > 0) {
-        pools.unallocated = Number(pools.unallocated ?? 0) + (remaining * amount);
-        awardedTotal += (remaining * amount);
-      }
-    }
-
-    const moduleCost = Number(moduleItem.system?.moduleCost ?? 0) || 0;
-    xp.total = Number(xp.total ?? 0) + awardedTotal;
-    xp.spent = Number(xp.spent ?? 0) + moduleCost;
-
-    await actor.update({ "system.xp": xp });
-
-    await _applyBiographySlot(actor, moduleItem);
-
-    await moduleItem.setFlag(SYSTEM_ID, "applied", true);
-
-    ui.notifications?.info?.(`Applied Module: ${moduleItem.name} (Awarded ${awardedTotal >= 0 ? "+" : ""}${awardedTotal} XP, Spent ${moduleCost} XP).`);
-  };
-
-  Hooks.on("createItem", async (item, options, userId) => {
-    try {
-      if (userId !== game.userId) return;
-      if (!item || item.type !== "characterModule") return;
-
-      const actor = item.parent;
-      if (!actor || actor.documentName !== "Actor" || actor.type !== "character") return;
-
-      if (item.getFlag?.(SYSTEM_ID, "applied")) return;
-
-      await applyCharacterModuleToActor(actor, item);
-    } catch (err) {
-      console.warn("AToW Battletech | Applying Character Module failed", err);
-      ui.notifications?.error?.("Failed to apply Character Module (see console).");
-    }
-  });
-
-  ATOW.api.applyCharacterModuleToActor = applyCharacterModuleToActor;
-
+  game[SYSTEM_ID].api.computeHeatEffects = computeHeatEffects;
+  game[SYSTEM_ID].api.getActorStoredHeat = getActorStoredHeat;
+  game[SYSTEM_ID].api.addActorPendingHeat = addActorPendingHeat;
+  game[SYSTEM_ID].api.resolveActorHeatForTurn = resolveActorHeatForTurn;
 
 });
 
@@ -3180,6 +3974,7 @@ Hooks.once("ready", () => {
     }
     await tokenDoc.unsetFlag("atow-battletech", "moveMode");
     await tokenDoc.unsetFlag("atow-battletech", "movedThisTurn");
+    await tokenDoc.unsetFlag("atow-battletech", "displacementThisTurn");
     if (!preserveTurnStart) await tokenDoc.unsetFlag("atow-battletech", "turnStart");
   };
 
@@ -3195,6 +3990,14 @@ Hooks.once("ready", () => {
 
   const getMoveSpeeds = (actor) => {
     const sys = actor?.system ?? {};
+    const isCombatVehicle = actor?.type === "wheeledvehicle" || actor?.type === "vehicle";
+    if (isCombatVehicle) {
+      const vehicleMove = sys.vehicle?.movement ?? {};
+      const walk = Number(vehicleMove.cruise ?? vehicleMove.walk ?? vehicleMove.Walk ?? 0) || 0;
+      const run = Number(vehicleMove.flank ?? vehicleMove.run ?? vehicleMove.Run ?? 0) || 0;
+      return { walk, run, jump: 0 };
+    }
+
     const mv = sys.movement ?? sys.move ?? sys.derived?.move ?? {};
     let walk = Number(mv.walk ?? mv.Walk ?? mv.w ?? 0) || 0;
     let run  = Number(mv.run  ?? mv.Run  ?? mv.r ?? 0) || 0;
@@ -3215,6 +4018,7 @@ Hooks.once("ready", () => {
   };
 
   Hooks.on("updateCombat", async (combat, changed) => {
+    if (!game.user?.isGM) return;
     if (!("turn" in changed || "round" in changed)) return;
 
     const c = combat.combatant;
@@ -3231,7 +4035,8 @@ Hooks.once("ready", () => {
 
 
   // -----------------------------------
-  // Heat Dissipation Automation (Turn Start)
+  // Legacy Heat Dissipation Fallback
+  // Kept inert so it does not double-vent now that round-start venting is authoritative.
   // -----------------------------------
   const calcTotalHeatSinks = (actor) => {
     if (!actor) return 0;
@@ -3255,7 +4060,9 @@ Hooks.once("ready", () => {
   };
 
   Hooks.on("updateCombat", async (combat, changed) => {
+    if (!game.user?.isGM) return;
     if (!("turn" in changed || "round" in changed)) return;
+    return;
 
     const c = combat.combatant;
     const actor = c?.actor;
@@ -3280,6 +4087,61 @@ Hooks.once("ready", () => {
 /* -------------------------------------------- */
 /* Settings                                     */
 /* -------------------------------------------- */
+
+const CRIT_MOUNT_ID_MIGRATION_VERSION = 1;
+
+async function migrateCritMountIds() {
+  if (!game.user?.isGM) return;
+
+  const currentVersion = Number(game.settings.get(SYSTEM_ID, "critMountIdMigrationVersion") ?? 0) || 0;
+  if (currentVersion >= CRIT_MOUNT_ID_MIGRATION_VERSION) return;
+
+  // World actors
+  for (const actor of game.actors?.contents ?? []) {
+    if (String(actor?.type ?? "").toLowerCase() !== "mech") continue;
+    await ensureActorCritMountIds(actor).catch((err) => {
+      console.warn(`${SYSTEM_ID} | Failed crit mountId migration for actor ${actor?.name ?? actor?.id}`, err);
+    });
+  }
+
+  // Synthetic token actors on scenes
+  for (const scene of game.scenes?.contents ?? []) {
+    for (const tokenDoc of scene?.tokens ?? []) {
+      const actor = tokenDoc?.actor ?? null;
+      if (!actor || String(actor?.type ?? "").toLowerCase() !== "mech") continue;
+      await ensureActorCritMountIds(actor).catch((err) => {
+        console.warn(`${SYSTEM_ID} | Failed crit mountId migration for token actor ${tokenDoc?.name ?? tokenDoc?.id}`, err);
+      });
+    }
+  }
+
+  // System actor compendiums
+  for (const pack of game.packs ?? []) {
+    if (pack?.documentName !== "Actor") continue;
+    const packageName = String(pack?.metadata?.packageName ?? pack?.metadata?.package ?? "");
+    if (packageName !== SYSTEM_ID) continue;
+
+    const wasLocked = Boolean(pack.locked);
+    try {
+      if (wasLocked) await pack.configure({ locked: false });
+      const docs = await pack.getDocuments();
+      for (const actor of docs) {
+        if (String(actor?.type ?? "").toLowerCase() !== "mech") continue;
+        await ensureActorCritMountIds(actor).catch((err) => {
+          console.warn(`${SYSTEM_ID} | Failed crit mountId migration for pack actor ${actor?.name ?? actor?.id}`, err);
+        });
+      }
+    } catch (err) {
+      console.warn(`${SYSTEM_ID} | Failed crit mountId pack migration for ${pack?.collection ?? pack?.metadata?.label}`, err);
+    } finally {
+      if (wasLocked) {
+        try { await pack.configure({ locked: true }); } catch (_) {}
+      }
+    }
+  }
+
+  await game.settings.set(SYSTEM_ID, "critMountIdMigrationVersion", CRIT_MOUNT_ID_MIGRATION_VERSION);
+}
 
 function registerSystemSettings() {
   game.settings.register(SYSTEM_ID, "defaultTN", {
@@ -3338,6 +4200,14 @@ function registerSystemSettings() {
     default: true
   });
 
+  game.settings.register(SYSTEM_ID, "critMountIdMigrationVersion", {
+    name: "Crit Mount ID Migration Version",
+    scope: "world",
+    config: false,
+    type: Number,
+    default: 0
+  });
+
   game.settings.register(SYSTEM_ID, "facingIndicatorColor", {
     name: "Facing Indicator Color",
     hint: "Choose the color used by the built-in facing arrow.",
@@ -3360,6 +4230,33 @@ function registerSystemSettings() {
       step: 0.05
     }
   });
+
+  game.settings.register(SYSTEM_ID, "relativeMovementKeys", {
+    name: "Battletech Relative Movement Keys",
+    hint: "Use W/S to move forward and backward relative to facing, and A/D to turn left and right for a controlled mech token.",
+    scope: "client",
+    config: true,
+    type: Boolean,
+    default: false
+  });
+
+  game.settings.register(SYSTEM_ID, "enforceWeaponFireLimits", {
+    name: "Enforce One Weapon Attack Per Turn",
+    hint: "If enabled, each weapon may only be fired once per combat turn.",
+    scope: "world",
+    config: true,
+    type: Boolean,
+    default: true
+  });
+
+  game.settings.register(SYSTEM_ID, "audioDebug", {
+    name: "Audio Debug Notifications",
+    hint: "Show temporary audio debug notifications and console logs to troubleshoot turn-start announcements.",
+    scope: "client",
+    config: true,
+    type: Boolean,
+    default: false
+  });
 }
 
 /* -------------------------------------------- */
@@ -3372,14 +4269,11 @@ async function preloadHandlebarsTemplates() {
     `systems/${SYSTEM_ID}/templates/abomination-sheet.hbs`,
     `systems/${SYSTEM_ID}/templates/skill-sheet.hbs`,
     `systems/${SYSTEM_ID}/templates/trait-sheet.hbs`,
-    `systems/${SYSTEM_ID}/templates/item-sheet.hbs`,
-    `systems/${SYSTEM_ID}/templates/mech-sheet.hbs`,
-    `systems/${SYSTEM_ID}/templates/wheeledvehicle-sheet.hbs`,
+    `systems/${SYSTEM_ID}/templates/combat-vehicle.hbs`,
     `systems/${SYSTEM_ID}/templates/mech-weapon.hbs`,
     `systems/${SYSTEM_ID}/templates/mech-equipment.hbs`,
     `systems/${SYSTEM_ID}/templates/character-weapon.hbs`,
     `systems/${SYSTEM_ID}/templates/character-armor.hbs`,
-    `systems/${SYSTEM_ID}/templates/character-module.hbs`,
     `systems/${SYSTEM_ID}/templates/character-equipment.hbs`
   ];
 

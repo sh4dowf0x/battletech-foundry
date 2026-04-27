@@ -17,8 +17,8 @@ export class ATOWCharacterWeaponSheet extends HandlebarsApplicationMixin(ItemShe
   static DEFAULT_OPTIONS = foundry.utils.mergeObject(
     super.DEFAULT_OPTIONS,
     {
-      classes: ["atow", "sheet", "item", "character-weapon"],
-      position: { width: 760, height: 760 },
+      classes: ["atow", "sheet", "item", "atow-item-sheet", "character-weapon"],
+      position: { width: 720, height: 600 },
       window: { resizable: true },
       form: {
         submitOnChange: true,
@@ -69,6 +69,42 @@ export class ATOWCharacterWeaponSheet extends HandlebarsApplicationMixin(ItemShe
     context.skillTied = WEAPON_SKILL_TIED[sys.skillKey] ?? "";
 
     return context;
+  }
+
+  _onRender(context, options) {
+    super._onRender(context, options);
+
+    const root = this.element;
+    const portrait = root?.querySelector?.('[data-edit="img"]');
+    if (!portrait || portrait.dataset.atowImgBound === "1") return;
+
+    portrait.dataset.atowImgBound = "1";
+    portrait.addEventListener("click", async (event) => {
+      if (!this.isEditable) return;
+      event.preventDefault();
+
+      const FilePickerCtor =
+        globalThis.FilePicker ??
+        foundry?.applications?.forms?.FilePicker ??
+        foundry?.applications?.api?.FilePicker;
+
+      if (!FilePickerCtor) {
+        ui.notifications?.warn?.("FilePicker is not available.");
+        return;
+      }
+
+      const fp = new FilePickerCtor({
+        type: "image",
+        current: this.item?.img ?? "",
+        callback: async (path) => {
+          if (!path) return;
+          await this.item.update({ img: path });
+        }
+      });
+
+      try { fp.browse(); } catch (_) {}
+      fp.render(true);
+    });
   }
 }
 

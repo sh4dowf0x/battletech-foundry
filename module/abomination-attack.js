@@ -72,7 +72,11 @@ function measureTokenDistance(attackerToken, targetToken) {
 
 function getAutoTargetMoveData(targetToken) {
   const tokenDoc = targetToken?.document ?? targetToken;
-  const moved = num(tokenDoc?.getFlag?.(SYSTEM_ID, "movedThisTurn"), 0);
+  const moved = num(
+    tokenDoc?.getFlag?.(SYSTEM_ID, "displacementThisTurn")
+      ?? tokenDoc?.getFlag?.(SYSTEM_ID, "movedThisTurn"),
+    0
+  );
   const mod = calcTargetMoveModFromHexes(moved);
   return { moved, mod };
 }
@@ -299,7 +303,7 @@ function getAbominationAliveCount(actor) {
   return { aliveCount, trackCount };
 }
 
-export async function promptAndRollWeaponAttack(actor, weaponItem, { defaultSide = "front" } = {}) {
+export async function promptAndRollWeaponAttack(actor, weaponItem, { defaultSide = "front", weaponFireKey = "" } = {}) {
   const attackerToken = getAttackerToken(actor);
   const targetToken = getSingleTargetToken();
 
@@ -384,6 +388,7 @@ export async function promptAndRollWeaponAttack(actor, weaponItem, { defaultSide
               clusterShots: aliveCount,
               clusterLabel: "Abomination Volley",
               chatMode: "abomination",
+              weaponFireKey,
               ignoreTargetingComputer: true,
               skillLabel: isAbomMelee ? "AniMelee" : "Gunnery",
               skillValue: isAbomMelee ? num(actor?.system?.abomination?.aniMeleeSkill, 0) : undefined

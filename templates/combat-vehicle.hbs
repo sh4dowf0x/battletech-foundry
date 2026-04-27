@@ -1,0 +1,375 @@
+<form class="{{cssClass}} combat-vehicle-sheet{{#if hideThirdColumn}} third-column-hidden{{/if}}" autocomplete="off">
+  <header class="sheet-header">
+    <div class="header-left">
+      <input class="name cv-name-input" name="name" type="text" value="{{actor.name}}" placeholder="Vehicle Name" />
+      <div class="cv-header-meta">
+        <span>{{vehicleTypeLabel}}</span>
+        <span>{{vehicleTonnage}} Tons</span>
+        <span>{{system.vehicle.role}}</span>
+      </div>
+    </div>
+    <div class="header-actions cv-header-actions">
+      <button
+        type="button"
+        class="header-action-btn{{#if isDazzleMode}} is-active{{/if}}"
+        data-header-action="dazzle"
+        data-macro-label="Dazzle Mode"
+        data-macro-img="icons/magic/light/projectile-beam-yellow.webp"
+        draggable="true">Dazzle Mode</button>
+    </div>
+  </header>
+
+  <section class="cv-body">
+    <div class="cv-main">
+      <div class="cv-main-top">
+        <div class="cv-col cv-col-left">
+          <section class="cv-panel">
+            <h3>Vehicle Data</h3>
+
+            <div class="cv-grid cv-grid-2">
+              <div class="cv-field">
+                <label>Type</label>
+                <input name="system.vehicle.type" type="text" value="{{system.vehicle.type}}" placeholder="Vehicle Type" />
+              </div>
+
+              <div class="cv-field">
+                <label>Tonnage</label>
+                <select name="system.vehicle.tonnage">
+                  {{selectOptions tonnageOptions selected=vehicleTonnage}}
+                </select>
+              </div>
+            </div>
+
+            <div class="cv-grid cv-grid-2">
+              <div class="cv-field">
+                <label>Tech Base</label>
+                <input name="system.vehicle.techBase" type="text" value="{{system.vehicle.techBase}}" />
+              </div>
+
+              <div class="cv-field">
+                <label>Rules Level</label>
+                <input name="system.vehicle.rulesLevel" type="text" value="{{system.vehicle.rulesLevel}}" />
+              </div>
+            </div>
+
+            <div class="cv-grid cv-grid-2">
+              <div class="cv-field">
+                <label>Role</label>
+                <input name="system.vehicle.role" type="text" value="{{system.vehicle.role}}" />
+              </div>
+
+              <div class="cv-field">
+                <label>Engine Type</label>
+                <input name="system.vehicle.engine" type="text" value="{{system.vehicle.engine}}" />
+              </div>
+            </div>
+
+            <div class="cv-grid cv-grid-2">
+              <div class="cv-field">
+                <label>Movement Type</label>
+                <select name="system.vehicle.movement.type">
+                  {{#select system.vehicle.movement.type}}
+                    {{#each movementTypeOptions as |type|}}
+                      <option value="{{type}}">{{type}}</option>
+                    {{/each}}
+                  {{/select}}
+                </select>
+              </div>
+
+              <div class="cv-field">
+                <label>BV</label>
+                <input name="system.vehicle.bv" type="number" value="{{system.vehicle.bv}}" />
+              </div>
+            </div>
+
+            <div class="cv-grid cv-grid-2">
+              <div class="cv-field">
+                <label>Movement</label>
+                <div class="cv-movement-stack">
+                  <div class="cv-inline cv-movement-inline">
+                    <span class="cv-mini-label">C</span>
+                    <input class="cv-mini-inline-input" name="system.vehicle.movement.cruise" type="number" value="{{system.vehicle.movement.cruise}}" />
+                    <span class="cv-mini-label">F</span>
+                    <input class="cv-mini-inline-input" name="system.vehicle.movement.flank" type="number" value="{{system.vehicle.movement.flank}}" />
+                  </div>
+                  <div class="cv-movement-status-row">
+                    <span class="cv-mini-label">This Turn</span>
+                    <span class="cv-mini-label">Moved</span>
+                    <span class="cv-move-pill">{{movementStatus.moved}}</span>
+                    <span class="cv-mini-label">MP</span>
+                    <span class="cv-move-pill">{{movementStatus.mpSpent}}</span>
+                    <span class="cv-mini-label">Mode</span>
+                    <span class="cv-move-pill">{{movementStatus.mode}}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="cv-panel cv-panel-loadout">
+            <h3>Combat Loadout</h3>
+
+            <div class="cv-drop-zone" data-drop-zone="combat-vehicle-weapons">
+              <div class="cv-we-table">
+                <div class="cv-we-row cv-we-header">
+                  <div class="cv-we-col type">Type</div>
+                  <div class="cv-we-col loc">Loc</div>
+                  <div class="cv-we-col dmg">Dmg</div>
+                  <div class="cv-we-col range">Range</div>
+                  <div class="cv-we-col ctrl"></div>
+                </div>
+
+                {{#each vehicleWeapons as |w|}}
+                  <div class="cv-we-row" data-item-id="{{w._id}}" data-item-uuid="{{w.itemUuid}}" draggable="true">
+                    <div class="cv-we-col type">{{w.name}}</div>
+                    <div class="cv-we-col loc">{{w.system.loc}}</div>
+                    <div class="cv-we-col dmg">{{w.system.damage}}</div>
+                    <div class="cv-we-col range">{{w.system.range.min}}/{{w.system.range.short}}/{{w.system.range.medium}}/{{w.system.range.long}}</div>
+                    <div class="cv-we-col ctrl">
+                      <a class="item-delete" title="Delete">X</a>
+                    </div>
+                  </div>
+                {{/each}}
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <div class="cv-col cv-col-mid">
+          <section class="cv-panel">
+            <h3>Crew Station</h3>
+
+            <div class="cv-field">
+              <label>Crew</label>
+              <input name="system.crew.name" type="text" value="{{system.crew.name}}" />
+            </div>
+
+            <div class="cv-grid cv-grid-2">
+              <div class="cv-field">
+                <label>Gunnery</label>
+                <input name="system.crew.gunnery" type="number" value="{{system.crew.gunnery}}" />
+              </div>
+
+              <div class="cv-field">
+                <label>Driving</label>
+                <input name="system.crew.driving" type="number" value="{{system.crew.driving}}" />
+              </div>
+            </div>
+
+            <div class="cv-grid cv-grid-2">
+              <div class="cv-field">
+                <label>Commander Hit</label>
+                <div class="cv-track">
+                  {{#each crewTracks.commander as |p|}}
+                    <span class="cv-track-box {{#if p.filled}}filled{{/if}}" data-track="crew.commanderHit" data-value="{{p.n}}">
+                      {{p.n}}
+                    </span>
+                  {{/each}}
+                </div>
+              </div>
+
+              <div class="cv-field">
+                <label>Driver Hit</label>
+                <div class="cv-track">
+                  {{#each crewTracks.driver as |p|}}
+                    <span class="cv-track-box {{#if p.filled}}filled{{/if}}" data-track="crew.driverHit" data-value="{{p.n}}">
+                      {{p.n}}
+                    </span>
+                  {{/each}}
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="cv-panel cv-panel-portrait">
+            <h3>Profile</h3>
+            <img class="cv-portrait" src="{{actor.img}}" data-edit="img" title="{{actor.name}}" />
+          </section>
+
+          <section class="cv-panel">
+            <h3>Critical Damage</h3>
+
+            <div class="cv-crit-grid">
+              <div class="cv-crit-col">
+                <label class="cv-check">
+                  <input type="checkbox" name="system.crit.turretLocked" {{checked system.crit.turretLocked}} />
+                  <span>Turret Locked</span>
+                </label>
+
+                <div class="cv-field">
+                  <label>Sensor Hits</label>
+                  <div class="cv-track">
+                    {{#each critTracks.sensor as |p|}}
+                      <span class="cv-track-box {{#if p.filled}}filled{{/if}}" data-track="crit.sensorHits" data-value="{{p.n}}">
+                        {{p.n}}
+                      </span>
+                    {{/each}}
+                  </div>
+                </div>
+
+                <div class="cv-field">
+                  <label>Motive Hits</label>
+                  <div class="cv-track">
+                    {{#each critTracks.motive as |p|}}
+                      <span class="cv-track-box {{#if p.filled}}filled{{/if}}" data-track="crit.motiveHits" data-value="{{p.n}}">
+                        {{p.n}}
+                      </span>
+                    {{/each}}
+                  </div>
+                </div>
+              </div>
+
+              <div class="cv-crit-col">
+                <label class="cv-check">
+                  <input type="checkbox" name="system.crit.engineHit" {{checked system.crit.engineHit}} />
+                  <span>Engine Hit</span>
+                </label>
+
+                <div class="cv-field">
+                  <label>Stabilizers</label>
+                  <div class="cv-inline cv-inline-checks">
+                    <label class="cv-check">
+                      <input type="checkbox" name="system.crit.stabilizerLeft" {{checked system.crit.stabilizerLeft}} />
+                      <span>Left</span>
+                    </label>
+                    <label class="cv-check">
+                      <input type="checkbox" name="system.crit.stabilizerRight" {{checked system.crit.stabilizerRight}} />
+                      <span>Right</span>
+                    </label>
+                  </div>
+                </div>
+
+                <div class="cv-field">
+                  <label>Location Hits</label>
+                  <div class="cv-inline cv-inline-checks">
+                    <label class="cv-check">
+                      <input type="checkbox" name="system.crit.location.front" {{checked system.crit.location.front}} />
+                      <span>Front</span>
+                    </label>
+                    <label class="cv-check">
+                      <input type="checkbox" name="system.crit.location.rear" {{checked system.crit.location.rear}} />
+                      <span>Rear</span>
+                    </label>
+                    <label class="cv-check">
+                      <input type="checkbox" name="system.crit.location.left" {{checked system.crit.location.left}} />
+                      <span>Left</span>
+                    </label>
+                    <label class="cv-check">
+                      <input type="checkbox" name="system.crit.location.right" {{checked system.crit.location.right}} />
+                      <span>Right</span>
+                    </label>
+                    <label class="cv-check">
+                      <input type="checkbox" name="system.crit.location.turret" {{checked system.crit.location.turret}} />
+                      <span>Turret</span>
+                    </label>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <div class="cv-col cv-col-right">
+          <section class="cv-panel cv-panel-crit-grid">
+            <h3>Armor Diagram</h3>
+
+            <div class="cv-armor-controls">
+              <div class="cv-armor-control">
+                <label>Front</label>
+                <input class="cv-armor-max" name="system.armor.front.max" type="number" value="{{armor.front.max}}" min="0" />
+              </div>
+              <div class="cv-armor-control">
+                <label>Left</label>
+                <input class="cv-armor-max" name="system.armor.left.max" type="number" value="{{armor.left.max}}" min="0" />
+              </div>
+              <div class="cv-armor-control">
+                <label>Right</label>
+                <input class="cv-armor-max" name="system.armor.right.max" type="number" value="{{armor.right.max}}" min="0" />
+              </div>
+              <div class="cv-armor-control">
+                <label>Rear</label>
+                <input class="cv-armor-max" name="system.armor.rear.max" type="number" value="{{armor.rear.max}}" min="0" />
+              </div>
+              <div class="cv-armor-control">
+                <label>Turret</label>
+                <input class="cv-armor-max" name="system.armor.turret.max" type="number" value="{{armor.turret.max}}" min="0" />
+              </div>
+            </div>
+
+            <div class="cv-armor-diagram">
+              <div class="cv-armor-loc cv-armor-front">
+                <div class="cv-armor-pips">
+                  {{#each armor.front.pips as |p|}}
+                    <span class="cv-armor-pip {{#if p.filled}}filled{{/if}}" data-loc="front" data-pip="{{p.n}}"></span>
+                  {{/each}}
+                </div>
+              </div>
+
+              <div class="cv-armor-loc cv-armor-left">
+                <div class="cv-armor-pips">
+                  {{#each armor.left.pips as |p|}}
+                    <span class="cv-armor-pip {{#if p.filled}}filled{{/if}}" data-loc="left" data-pip="{{p.n}}"></span>
+                  {{/each}}
+                </div>
+              </div>
+
+              <div class="cv-armor-loc cv-armor-turret">
+                <div class="cv-armor-pips">
+                  {{#each armor.turret.pips as |p|}}
+                    <span class="cv-armor-pip {{#if p.filled}}filled{{/if}}" data-loc="turret" data-pip="{{p.n}}"></span>
+                  {{/each}}
+                </div>
+              </div>
+
+              <div class="cv-armor-loc cv-armor-right">
+                <div class="cv-armor-pips">
+                  {{#each armor.right.pips as |p|}}
+                    <span class="cv-armor-pip {{#if p.filled}}filled{{/if}}" data-loc="right" data-pip="{{p.n}}"></span>
+                  {{/each}}
+                </div>
+              </div>
+
+              <div class="cv-armor-loc cv-armor-rear">
+                <div class="cv-armor-pips">
+                  {{#each armor.rear.pips as |p|}}
+                    <span class="cv-armor-pip {{#if p.filled}}filled{{/if}}" data-loc="rear" data-pip="{{p.n}}"></span>
+                  {{/each}}
+                </div>
+              </div>
+
+              <div class="cv-structure-loc cv-structure-front">
+                {{#each structure.front.pips as |p|}}
+                  <span class="cv-structure-pip {{#if p.filled}}filled{{/if}}" data-loc="front" data-pip="{{p.n}}"></span>
+                {{/each}}
+              </div>
+
+              <div class="cv-structure-loc cv-structure-left">
+                {{#each structure.left.pips as |p|}}
+                  <span class="cv-structure-pip {{#if p.filled}}filled{{/if}}" data-loc="left" data-pip="{{p.n}}"></span>
+                {{/each}}
+              </div>
+
+              <div class="cv-structure-loc cv-structure-right">
+                {{#each structure.right.pips as |p|}}
+                  <span class="cv-structure-pip {{#if p.filled}}filled{{/if}}" data-loc="right" data-pip="{{p.n}}"></span>
+                {{/each}}
+              </div>
+
+              <div class="cv-structure-loc cv-structure-turret">
+                {{#each structure.turret.pips as |p|}}
+                  <span class="cv-structure-pip {{#if p.filled}}filled{{/if}}" data-loc="turret" data-pip="{{p.n}}"></span>
+                {{/each}}
+              </div>
+
+              <div class="cv-structure-loc cv-structure-rear">
+                {{#each structure.rear.pips as |p|}}
+                  <span class="cv-structure-pip {{#if p.filled}}filled{{/if}}" data-loc="rear" data-pip="{{p.n}}"></span>
+                {{/each}}
+              </div>
+            </div>
+          </section>
+        </div>
+      </div>
+    </div>
+  </section>
+</form>

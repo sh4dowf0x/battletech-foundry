@@ -147,6 +147,8 @@
         "gunnerySkill": "",
         "aniMeleeSkill": "",
         "groundMp": 0,
+        "jumpMp": 0,
+        "vtolMp": 0,
         "handler": "",
         "bonus": "",
         "trackCount": 3,
@@ -207,6 +209,12 @@
         "base",
         "mechCommon"
       ],
+      "mech": {
+        "profileMedia": "",
+        "bv": 0,
+        "yearProduced": 0,
+        "xlGyro": false
+      },
       "stats": {}
     },
     "vehicle": {

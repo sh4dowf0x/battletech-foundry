@@ -3,7 +3,305 @@
 // Centralized mech attack logic (to-hit, range bands, chat card).
 // UI-agnostic core, with an optional UI prompt helper at the bottom.
 
+import { enqueueActorAudioCues } from "./audio-helper.js";
+
 const SYSTEM_ID = "atow-battletech";// ------------------------------------------------------------
+
+function getATOWSocket() {
+  return game?.[SYSTEM_ID]?.socket ?? null;
+}
+
+function isWeaponFireLimitEnforced() {
+  const enforce = game.settings.get(SYSTEM_ID, "enforceWeaponFireLimits");
+  if (enforce === false) return false;
+
+  // Legacy compatibility with the earlier inverse test-only setting.
+  try {
+    const legacyIgnore = game.settings.get(SYSTEM_ID, "ignoreWeaponFireLimits");
+    if (legacyIgnore === true) return false;
+  } catch (_) {}
+
+  return true;
+}
+
+function getCombatTurnStamp() {
+  return `${game.combat?.id ?? "no-combat"}:${game.combat?.round ?? 0}:${game.combat?.turn ?? 0}`;
+}
+
+if (!globalThis.__ATOW_BT_WEAPON_FIRE_TRACKER__) {
+  globalThis.__ATOW_BT_WEAPON_FIRE_TRACKER__ = new Map();
+}
+
+function normalizeWeaponFireKeys(raw) {
+  if (Array.isArray(raw?.keys)) {
+    const keys = new Set();
+    for (const key of raw.keys) {
+      const normalized = String(key ?? "").trim();
+      if (normalized) keys.add(normalized);
+    }
+    return Array.from(keys);
+  }
+
+  const keys = new Set();
+
+  if (Array.isArray(raw?.fired)) {
+    for (const key of raw.fired) {
+      const normalized = String(key ?? "").trim();
+      if (normalized) keys.add(normalized);
+    }
+  } else if (raw?.fired && typeof raw.fired === "object") {
+    for (const [key, value] of Object.entries(raw.fired)) {
+      const normalized = String(key ?? "").trim();
+      if (normalized && value) keys.add(normalized);
+    }
+  }
+
+  return Array.from(keys);
+}
+
+function getWeaponFireTrackerTarget(actor, opts = {}) {
+  const activeCombatantToken = game.combat?.combatant?.token ?? null;
+  if (activeCombatantToken?.setFlag) {
+    const activeActorId = String(activeCombatantToken?.actor?.id ?? activeCombatantToken?.baseActor?.id ?? "");
+    const actorId = String(actor?.id ?? "");
+    if (activeActorId && actorId && activeActorId === actorId) return activeCombatantToken;
+  }
+
+  const tokenDoc = opts?.attackerToken?.document ?? opts?.attackerToken ?? null;
+  if (game.combat?.started) {
+    if (tokenDoc?.setFlag) return tokenDoc;
+    const activeTokens = actor?.getActiveTokens?.(true, true) ?? actor?.getActiveTokens?.() ?? [];
+    for (const tok of activeTokens) {
+      const doc = tok?.document ?? tok;
+      if (doc?.setFlag) return doc;
+    }
+  }
+
+  if (tokenDoc?.setFlag) return tokenDoc;
+  return actor ?? null;
+}
+
+function getWeaponFireTrackerTargets(actor, opts = {}) {
+  if (game.combat?.started) {
+    const primary = getWeaponFireTrackerTarget(actor, opts);
+    return primary?.setFlag ? [primary] : [];
+  }
+
+  const docs = new Set();
+
+  const primary = getWeaponFireTrackerTarget(actor, opts);
+  if (primary?.setFlag) docs.add(primary);
+
+  const tokenDoc = opts?.attackerToken?.document ?? opts?.attackerToken ?? null;
+  if (tokenDoc?.setFlag) docs.add(tokenDoc);
+
+  const activeCombatantToken = game.combat?.combatant?.token ?? null;
+  const activeActorId = String(activeCombatantToken?.actor?.id ?? activeCombatantToken?.baseActor?.id ?? "");
+  const actorId = String(actor?.id ?? "");
+  if (activeCombatantToken?.setFlag && activeActorId && actorId && activeActorId === actorId) {
+    docs.add(activeCombatantToken);
+  }
+
+  if (actor?.setFlag) docs.add(actor);
+
+  const worldActor = actor?.id ? game.actors?.get?.(actor.id) ?? null : null;
+  if (worldActor?.setFlag) docs.add(worldActor);
+
+  for (const tok of actor?.getActiveTokens?.(true, true) ?? actor?.getActiveTokens?.() ?? []) {
+    const doc = tok?.document ?? tok;
+    if (doc?.setFlag) docs.add(doc);
+  }
+
+  return Array.from(docs);
+}
+
+function getWeaponFireCacheKey(target) {
+  return String(target?.uuid ?? target?.id ?? "");
+}
+
+function getCachedWeaponFireTracker(target) {
+  const key = getWeaponFireCacheKey(target);
+  if (!key) return { stamp: "", keys: [] };
+  const cached = globalThis.__ATOW_BT_WEAPON_FIRE_TRACKER__?.get?.(key) ?? null;
+  const stamp = String(cached?.stamp ?? "");
+  const keysList = normalizeWeaponFireKeys(cached);
+  return { stamp, keys: keysList };
+}
+
+function setCachedWeaponFireTracker(target, tracker) {
+  const key = getWeaponFireCacheKey(target);
+  if (!key) return;
+  const keysList = normalizeWeaponFireKeys(tracker);
+  globalThis.__ATOW_BT_WEAPON_FIRE_TRACKER__?.set?.(key, {
+    stamp: String(tracker?.stamp ?? ""),
+    keys: keysList
+  });
+}
+
+function getWeaponFireTracker(actor, opts = {}) {
+  const target = getWeaponFireTrackerTarget(actor, opts);
+  const raw = target?.getFlag?.(SYSTEM_ID, "weaponFireTracker") ?? target?.flags?.[SYSTEM_ID]?.weaponFireTracker ?? null;
+  const flagStamp = String(raw?.stamp ?? "");
+  const flagKeys = normalizeWeaponFireKeys(raw);
+  const cached = getCachedWeaponFireTracker(target);
+
+  if (flagStamp) {
+    const tracker = { stamp: flagStamp, keys: flagKeys };
+    setCachedWeaponFireTracker(target, tracker);
+    return tracker;
+  }
+
+  return cached;
+}
+
+function getWeaponFireKey(actor, weaponItem, opts = {}) {
+  const explicit = String(opts?.weaponFireKey ?? "").trim();
+  if (explicit) return explicit;
+
+  const uuid = String(weaponItem?.uuid ?? weaponItem?.itemUuid ?? "").trim();
+  if (uuid) return uuid;
+
+  const id = String(weaponItem?.id ?? weaponItem?._id ?? "").trim();
+  if (id) return `actor:${actor?.id ?? "unknown"}:item:${id}`;
+
+  const name = String(weaponItem?.name ?? "").trim().toLowerCase();
+  if (name) return `actor:${actor?.id ?? "unknown"}:name:${name}`;
+
+  return "";
+}
+
+function hasWeaponFiredThisTurn(actor, weaponItem, opts = {}) {
+  if (!game.combat?.started) return false;
+  if (!isWeaponFireLimitEnforced()) return false;
+
+  const target = getWeaponFireTrackerTarget(actor, opts);
+  const currentStamp = getCombatTurnStamp();
+  const targetTurnStamp = String(target?.getFlag?.(SYSTEM_ID, "turnStamp") ?? "");
+  const consumedThisTurn = target?.getFlag?.(SYSTEM_ID, "weaponFireConsumedThisTurn");
+  const isFreshTurn = (targetTurnStamp !== currentStamp) || (consumedThisTurn !== true);
+  if (isFreshTurn) return false;
+
+  const key = getWeaponFireKey(actor, weaponItem, opts);
+  if (!key) return false;
+
+  const tracker = getWeaponFireTracker(actor, opts);
+  const firedSet = new Set(tracker.keys ?? []);
+  if (tracker.stamp !== currentStamp) return false;
+  return firedSet.has(key);
+}
+
+async function markWeaponFiredThisTurn(actor, weaponItem, opts = {}) {
+  if (!game.combat?.started) return;
+  if (!isWeaponFireLimitEnforced()) return;
+  const target = getWeaponFireTrackerTarget(actor, opts);
+  if (!target?.setFlag) return;
+
+  const key = getWeaponFireKey(actor, weaponItem, opts);
+  if (!key) return;
+
+  const stamp = getCombatTurnStamp();
+  const targetTurnStamp = String(target?.getFlag?.(SYSTEM_ID, "turnStamp") ?? "");
+  const consumedThisTurn = target?.getFlag?.(SYSTEM_ID, "weaponFireConsumedThisTurn");
+  const tracker = getWeaponFireTracker(actor, opts);
+  const isFreshTurn = (targetTurnStamp !== stamp) || (consumedThisTurn !== true);
+  const reuseExistingKeys = !isFreshTurn && tracker.stamp === stamp;
+  const firedSet = new Set(reuseExistingKeys ? (tracker.keys ?? []) : []);
+  firedSet.add(key);
+  const keys = Array.from(firedSet);
+
+  const targets = getWeaponFireTrackerTargets(actor, opts);
+  for (const doc of targets) {
+    setCachedWeaponFireTracker(doc, { stamp, keys });
+    await doc.unsetFlag?.(SYSTEM_ID, "weaponFireTracker").catch?.(() => {});
+    await doc.setFlag(SYSTEM_ID, "weaponFireTracker", { stamp, keys });
+    await doc.setFlag(SYSTEM_ID, "weaponFireConsumedThisTurn", true);
+  }
+}
+
+async function _resolveActorFromUuid(actorUuid) {
+  if (!actorUuid) return null;
+  try {
+    const doc = await fromUuid(actorUuid);
+    return (doc?.documentName === "Actor") ? doc : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+async function _gmApplyDamageToTargetActor(actorUuid, hitLoc, damage, opts = {}) {
+  const targetActor = await _resolveActorFromUuid(actorUuid);
+  if (!targetActor) return { ok: false, reason: "No target actor" };
+  const result = await applyDamageToTargetActor(targetActor, hitLoc, damage, opts);
+  await _triggerAmmoExplosionsForDamageResult(targetActor, result, { side: opts?.side });
+  return result;
+}
+
+async function _gmApplyDamageToVehicleActor(actorUuid, hitLoc, damage, opts = {}) {
+  const targetActor = await _resolveActorFromUuid(actorUuid);
+  if (!targetActor) return { ok: false, reason: "No target actor" };
+  return applyDamageToVehicleActor(targetActor, hitLoc, damage, opts);
+}
+
+async function _gmApplyDamageToAbominationActor(actorUuid, damage) {
+  const targetActor = await _resolveActorFromUuid(actorUuid);
+  if (!targetActor) return { ok: false, reason: "No target actor" };
+  return applyDamageToAbominationActor(targetActor, damage);
+}
+
+async function _gmResolveAmmoExplosionEvent(actorUuid, event = {}) {
+  const targetActor = await _resolveActorFromUuid(actorUuid);
+  if (!targetActor) return false;
+  return _resolveAmmoExplosionEventLocal(targetActor, event);
+}
+
+async function applyDamageToTargetActorAuto(targetActor, hitLoc, damage, opts = {}) {
+  if (!targetActor) return { ok: false, reason: "No target actor" };
+  if (game.user?.isGM) return _gmApplyDamageToTargetActor(targetActor.uuid, hitLoc, damage, opts);
+  const socket = getATOWSocket();
+  if (!socket) return { ok: false, reason: "AToW socket is not ready" };
+  return socket.executeAsGM("gmApplyDamageToTargetActor", targetActor.uuid, hitLoc, damage, opts);
+}
+
+async function applyDamageToVehicleActorAuto(targetActor, hitLoc, damage, opts = {}) {
+  if (!targetActor) return { ok: false, reason: "No target actor" };
+  if (game.user?.isGM) return _gmApplyDamageToVehicleActor(targetActor.uuid, hitLoc, damage, opts);
+  const socket = getATOWSocket();
+  if (!socket) return { ok: false, reason: "AToW socket is not ready" };
+  return socket.executeAsGM("gmApplyDamageToVehicleActor", targetActor.uuid, hitLoc, damage, opts);
+}
+
+async function applyDamageToAbominationActorAuto(targetActor, damage) {
+  if (!targetActor) return { ok: false, reason: "No target actor" };
+  if (game.user?.isGM) return _gmApplyDamageToAbominationActor(targetActor.uuid, damage);
+  const socket = getATOWSocket();
+  if (!socket) return { ok: false, reason: "AToW socket is not ready" };
+  return socket.executeAsGM("gmApplyDamageToAbominationActor", targetActor.uuid, damage);
+}
+
+export function registerATOWAttackSockets() {
+  const socketlibApi = globalThis.socketlib;
+  if (!socketlibApi?.registerSystem) {
+    console.warn(`${SYSTEM_ID} | socketlib is not available; GM-executed attack automation is disabled.`);
+    return null;
+  }
+
+  const socket = socketlibApi.registerSystem(SYSTEM_ID);
+  if (!socket) {
+    console.warn(`${SYSTEM_ID} | Failed to register system socket.`);
+    return null;
+  }
+
+  if (!socket.functions?.has?.("gmApplyDamageToTargetActor")) {
+    socket.register("gmApplyDamageToTargetActor", _gmApplyDamageToTargetActor);
+    socket.register("gmApplyDamageToVehicleActor", _gmApplyDamageToVehicleActor);
+    socket.register("gmApplyDamageToAbominationActor", _gmApplyDamageToAbominationActor);
+    socket.register("gmResolveAmmoExplosionEvent", _gmResolveAmmoExplosionEvent);
+  }
+
+  game[SYSTEM_ID] = game[SYSTEM_ID] ?? {};
+  game[SYSTEM_ID].socket = socket;
+  return socket;
+}
 
 
 // ------------------------------------------------------------
@@ -563,7 +861,7 @@ async function _triggerAmmoExplosionsForDamageResult(targetActor, damageResult, 
  *   - idx: optional crit slot index (if known)
  *   - side: optional hit side (front/rear/left/right). Defaults to "front".
  */
-export async function resolveAmmoExplosionEvent(targetActor, event = {}) {
+async function _resolveAmmoExplosionEventLocal(targetActor, event = {}) {
   if (!targetActor) return false;
   if (!game.user?.isGM) return false;
 
@@ -598,6 +896,19 @@ export async function resolveAmmoExplosionEvent(targetActor, event = {}) {
   }
 
   return false;
+}
+
+export async function resolveAmmoExplosionEvent(targetActor, event = {}) {
+  if (!targetActor) return false;
+  if (game.user?.isGM) return _resolveAmmoExplosionEventLocal(targetActor, event);
+  const socket = getATOWSocket();
+  if (!socket) return false;
+  try {
+    return await socket.executeAsGM("gmResolveAmmoExplosionEvent", targetActor.uuid, event);
+  } catch (err) {
+    console.warn("AToW Battletech | Failed to resolve ammo explosion via GM socket", err);
+    return false;
+  }
 }
 
 
@@ -1356,6 +1667,9 @@ function getTargetSideFromFacing(attackerToken, targetToken) {
 
   const facingDeg = getTokenFacingDeg(targetToken);
   if (facingDeg === null) return null;
+  const attackerCenter = getTokenCenter(attackerToken);
+  const targetCenter = getTokenCenter(targetToken);
+  if (!attackerCenter || !targetCenter) return null;
 
   // If we have a hex grid, use direction indices for exact BattleTech hex-side arcs.
   // Arc mapping (per your screenshot):
@@ -1365,8 +1679,8 @@ function getTargetSideFromFacing(attackerToken, targetToken) {
   // - LEFT:  1 hex side (rear-left) => delta 4
   try {
     const grid = canvas?.grid;
-    const origin = targetToken?.center;
-    const attackerPt = attackerToken?.center;
+    const origin = targetCenter;
+    const attackerPt = attackerCenter;
     if (grid?.getDirection && origin && attackerPt) {
       const facingDir = getTokenFacingDir(targetToken);
       const attackerDir = grid.getDirection(origin, attackerPt);
@@ -1392,8 +1706,8 @@ function getTargetSideFromFacing(attackerToken, targetToken) {
     // fall through to degree-based fallback
   }
 
-  const dx = attackerToken.center.x - targetToken.center.x;
-  const dy = attackerToken.center.y - targetToken.center.y;
+  const dx = attackerCenter.x - targetCenter.x;
+  const dy = attackerCenter.y - targetCenter.y;
   const bearingDeg = normalizeDeg(Math.atan2(dy, dx) * 180 / Math.PI);
 
   // Degree-based fallback that matches the 6-hex-side arcs.
@@ -1454,6 +1768,21 @@ function isDirectFireEnergyWeapon(weaponItem) {
     name.includes("ppc") ||
     name.includes("flamer")
   );
+}
+
+function isLaserWeapon(weaponItem) {
+  const name = String(weaponItem?.name ?? "").toLowerCase();
+  const sys = weaponItem?.system ?? {};
+  const kind = String(sys.type ?? sys.category ?? sys.weaponType ?? sys.damageType ?? "").toLowerCase();
+  return name.includes("laser") || kind.includes("laser");
+}
+
+function isActorDazzleModeActive(actor) {
+  try {
+    return Boolean(actor?.getFlag?.(SYSTEM_ID, "dazzleMode"));
+  } catch (_) {
+    return false;
+  }
 }
 
 function getEnvironmentTNMods(weaponItem, scene = canvas?.scene ?? game?.scenes?.active) {
@@ -1789,7 +2118,11 @@ function getAutoAttackerMoveMod(actor, attackerToken) {
 
 function getAutoTargetMoveData(targetToken) {
   const tokenDoc = targetToken?.document ?? targetToken;
-  const moved = num(tokenDoc?.getFlag?.(SYSTEM_ID, "movedThisTurn"), 0);
+  const moved = num(
+    tokenDoc?.getFlag?.(SYSTEM_ID, "displacementThisTurn")
+      ?? tokenDoc?.getFlag?.(SYSTEM_ID, "movedThisTurn"),
+    0
+  );
   const mod = calcTargetMoveModFromHexes(moved);
   return { moved, mod };
 }
@@ -2266,38 +2599,86 @@ export async function isWeaponDestroyedOnActor(actor, weaponItem) {
 
     const crit = actor.system?.crit ?? {};
     for (const [locKey, locData] of Object.entries(crit)) {
-      const slots = locData?.slots;
-      if (!Array.isArray(slots)) continue;
+      const rawSlots = locData?.slots;
+      if (!rawSlots) continue;
+      const locMax = _getCritLocMax(locKey);
+      const slots = Array.isArray(rawSlots) ? rawSlots : Object.values(rawSlots);
 
-      for (const slot of slots) {
-        // Slot can be a plain string (legacy) or an object {label, uuid, destroyed}
-        const destroyed = (typeof slot === "object") ? Boolean(slot?.destroyed) : false;
-        if (!destroyed) continue;
+      for (let i = 0; i < Math.min(slots.length, locMax); i++) {
+        const slot = slots[i] ?? {};
+        if (!slot || (slot.partOf !== undefined && slot.partOf !== null)) continue;
 
         const slotUuid = String(
           (slot?.uuid ?? slot?.itemUuid ?? slot?.sourceUuid ?? slot?.documentUuid ?? "")
         ).trim();
-
         const slotItemId = String(slot?.itemId ?? "").trim();
-
-        if (weaponUuid && slotUuid && slotUuid === weaponUuid) return true;
-        if (weaponId) {
-          if (slotItemId && slotItemId === weaponId) return true;
-          // Common UUID formats end with ".Item.<id>"
-          if (slotUuid && (slotUuid.endsWith(`.Item.${weaponId}`) || slotUuid.endsWith(weaponId))) return true;
-        }
-
         const label = (typeof slot === "string") ? slot : (slot?.label ?? slot?.name ?? "");
         const slotLabel = norm(label);
 
-        // If we have no better identifier, fall back to label containment.
-        if (weaponName && slotLabel && (slotLabel === weaponName || slotLabel.includes(weaponName))) return true;
+        let matches = false;
+        if (weaponUuid && slotUuid && slotUuid === weaponUuid) matches = true;
+        if (!matches && weaponId) {
+          if (slotItemId && slotItemId === weaponId) matches = true;
+          else if (slotUuid && (slotUuid.endsWith(`.Item.${weaponId}`) || slotUuid.endsWith(weaponId))) matches = true;
+        }
+        if (!matches && weaponName && slotLabel && (slotLabel === weaponName || slotLabel.includes(weaponName))) {
+          matches = true;
+        }
+        if (!matches) continue;
+
+        const span = clamp(num(slot?.span, 1), 1, locMax - i);
+        for (let j = 0; j < span; j++) {
+          if (Boolean(slots[i + j]?.destroyed)) return true;
+        }
+        return false;
       }
     }
   } catch (_) {
     // ignore and treat as not destroyed
   }
   return false;
+}
+
+function isWeaponDestroyedForFireKey(actor, weaponFireKey = "") {
+  const key = String(weaponFireKey ?? "").trim();
+  if (!actor || !key) return null;
+
+  const mountMatch = /^mount:(.+)$/i.exec(key);
+  const critMatch = /^crit:([^:]+):(\d+)(?::\d+)?$/i.exec(key);
+  if (!mountMatch && !critMatch) return null;
+
+  const crit = actor.system?.crit ?? {};
+  for (const [locKey, locData] of Object.entries(crit)) {
+    const rawSlots = locData?.slots;
+    if (!rawSlots) continue;
+    const locMax = _getCritLocMax(locKey);
+    const slots = Array.isArray(rawSlots) ? rawSlots : Object.values(rawSlots);
+
+    for (let i = 0; i < Math.min(slots.length, locMax); i++) {
+      const slot = slots[i] ?? {};
+      if (!slot || (slot.partOf !== undefined && slot.partOf !== null)) continue;
+
+      let matches = false;
+      if (mountMatch) {
+        matches = String(slot?.mountId ?? "").trim() === String(mountMatch[1] ?? "").trim();
+      } else if (critMatch) {
+        matches = String(locKey).toLowerCase() === String(critMatch[1] ?? "").toLowerCase() && i === Number(critMatch[2]);
+      }
+      if (!matches) continue;
+
+      const span = clamp(num(slot?.span, 1), 1, locMax - i);
+      let destroyed = false;
+      for (let j = 0; j < span; j++) destroyed ||= Boolean(slots[i + j]?.destroyed);
+      return destroyed;
+    }
+  }
+  return null;
+}
+
+async function isWeaponDestroyedForAttack(actor, weaponItem, opts = {}) {
+  const byKey = isWeaponDestroyedForFireKey(actor, opts?.weaponFireKey ?? "");
+  if (typeof byKey === "boolean") return byKey;
+  return isWeaponDestroyedOnActor(actor, weaponItem);
 }
 
 export function calcRangeBandAndMod(item, distance) {
@@ -2342,17 +2723,28 @@ export async function rollWeaponAttack(actor, weaponItem, opts = {}) {
   weaponItem = await _resolveWeaponItem(actor, weaponItem);
   const isAbomChat = opts?.chatMode === "abomination";
 
+  if (await isWeaponDestroyedForAttack(actor, weaponItem, opts)) {
+    ui?.notifications?.warn?.(`${weaponItem?.name ?? "This weapon"} is destroyed and cannot be fired.`);
+    return { ok: false, blocked: true, reason: "destroyedWeapon" };
+  }
+
+  if (hasWeaponFiredThisTurn(actor, weaponItem, opts)) {
+    ui?.notifications?.warn?.(`${weaponItem?.name ?? "This weapon"} has already been fired this turn.`);
+    return { ok: false, blocked: true, reason: "alreadyFiredThisTurn" };
+  }
+
 // Rapid-fire jam: if this weapon jammed previously, it cannot be fired again.
 if (!isAbomChat && weaponItem?.system?.jammed) {
   ui?.notifications?.warn?.(`${weaponItem.name} is jammed and cannot be fired.`);
   return null;
 }
 
-
-
   const pilot = actor.system?.pilot ?? {};
+  const crew = actor.system?.crew ?? {};
+  const isVehicleAttacker = isVehicleActor(actor);
   const hasSkillOverride = Number.isFinite(Number(opts.skillValue));
-  const gunnery = hasSkillOverride ? num(opts.skillValue, 0) : num(pilot.gunnery, 0);
+  const baseGunnery = isVehicleAttacker ? num(crew.gunnery, 0) : num(pilot.gunnery, 0);
+  const gunnery = hasSkillOverride ? num(opts.skillValue, 0) : baseGunnery;
   const skillLabel = (opts.skillLabel && String(opts.skillLabel).trim()) ? String(opts.skillLabel).trim() : "Gunnery";
 
   const baseTN = (opts.tn ?? getDefaultTN(8));
@@ -2362,7 +2754,6 @@ if (!isAbomChat && weaponItem?.system?.jammed) {
   const isAbomTarget = isAbominationActor(targetActor);
   const isVehicleTarget = isVehicleActor(targetActor);
   const hasVehicleTurret = isVehicleTarget && (num(targetActor?.system?.armor?.turret?.max, 0) > 0);
-  const isVehicleAttacker = isVehicleActor(actor);
 
   if (!targetToken) {
     ui?.notifications?.warn?.("Select exactly 1 target token before making an attack.");
@@ -2593,8 +2984,18 @@ if (!isAbomChat && rapidShots > 1 && !rack) {
 
 const hit = (toHit.total ?? 0) >= tn;
 
-  let heat = isVehicleAttacker ? 0 : num(weaponItem.system?.heat, 0);
-  const baseDamage = num(weaponItem.system?.damage, 0);
+  const rawHeat = num(weaponItem.system?.heat, 0);
+  const rawBaseDamage = num(weaponItem.system?.damage, 0);
+  const dazzleMode = isActorDazzleModeActive(actor) && isLaserWeapon(weaponItem);
+  const dazzleHalvesDamage = dazzleMode && !isAbomTarget;
+
+  let heat = isVehicleAttacker ? 0 : rawHeat;
+  let baseDamage = rawBaseDamage;
+
+  if (dazzleMode) {
+    if (!isVehicleAttacker) heat = Math.max(0, Math.floor(rawHeat / 2));
+    if (dazzleHalvesDamage) baseDamage = Math.max(0, Math.floor(rawBaseDamage / 2));
+  }
 
   // Streak launchers do not fire on a miss (no ammo spent, no heat generated).
   const weaponFired = !(isStreakLauncher && !hit);
@@ -2935,10 +3336,22 @@ const hit = (toHit.total ?? 0) >= tn;
 
 
   if (!isVehicleAttacker && opts.applyHeat && heat && weaponFired) {
-    const cur = num((actor.system?.heat?.value ?? actor.system?.heat?.current), 0);
-    const barMax = num(actor.system?.heat?.max, 30);
-    const next = clamp(cur + heat, 0, HEAT_HARD_CAP);
-    await actor.update({ "system.heat.value": next, "system.heat.current": next, "system.heat.max": barMax });
+    const heatActor = attackerToken?.actor ?? actor;
+    const addActorPendingHeat = game?.[SYSTEM_ID]?.api?.addActorPendingHeat ?? null;
+    if (typeof addActorPendingHeat === "function") {
+      await addActorPendingHeat(heatActor, heat);
+    } else {
+      const cur = num((heatActor.system?.heat?.value ?? heatActor.system?.heat?.current), 0);
+      const barMax = num(heatActor.system?.heat?.max, 30);
+      const next = clamp(cur + heat, 0, HEAT_HARD_CAP);
+      await heatActor.update({
+        "system.heat.value": next,
+        "system.heat.current": next,
+        "system.heat.unvented": next,
+        "system.heat.effects.unvented": next,
+        "system.heat.max": barMax
+      });
+    }
   }
 
 
@@ -2955,7 +3368,23 @@ if (weaponFired && opts.spendAmmo !== false && weaponConsumesAmmo(weaponItem, ac
   }
 
   if (ammoSpend?.key && ammoSpend?.after === 0) {
-    { const n = (ammoSpend && (ammoSpend.name ?? ammoSpend.key)) ? String(ammoSpend.name ?? ammoSpend.key) : String(ammoSpend && ammoSpend.key ? ammoSpend.key : ""); if (ui && ui.notifications && typeof ui.notifications.warn === "function") ui.notifications.warn(`${actor.name}: ${n.toUpperCase()} ammo depleted!`); }
+    {
+      const n = (ammoSpend && (ammoSpend.name ?? ammoSpend.key)) ? String(ammoSpend.name ?? ammoSpend.key) : String(ammoSpend && ammoSpend.key ? ammoSpend.key : "");
+      if (ui && ui.notifications && typeof ui.notifications.warn === "function") ui.notifications.warn(`${actor.name}: ${n.toUpperCase()} ammo depleted!`);
+      enqueueActorAudioCues(actor, ["ammoDepleted"], { volume: 0.95 });
+    }
+  }
+}
+
+if (weaponFired) {
+  try {
+    await markWeaponFiredThisTurn(actor, weaponItem, opts);
+    try {
+      const sheet = actor?.sheet;
+      if (sheet?.rendered) sheet.render(false);
+    } catch (_) {}
+  } catch (err) {
+    console.warn("AToW Battletech | Failed to mark weapon as fired this turn", err);
   }
 }
 
@@ -2972,13 +3401,12 @@ if (weaponFired && opts.spendAmmo !== false && weaponConsumesAmmo(weaponItem, ac
           for (const p of cluster.packets) {
             let r;
             if (isAbomTarget) {
-              r = await applyDamageToAbominationActor(targetActor, p.damage);
+              r = await applyDamageToAbominationActorAuto(targetActor, p.damage);
               if (r?.ok) p.abomIndex = r.hitAbomination;
             } else if (isVehicleTarget) {
-              r = await applyDamageToVehicleActor(targetActor, p.loc, p.damage, { attackSide: side, crit: p.vehicleCrit });
+              r = await applyDamageToVehicleActorAuto(targetActor, p.loc, p.damage, { attackSide: side, crit: p.vehicleCrit });
             } else {
-              r = await applyDamageToTargetActor(targetActor, p.loc, p.damage, { side, tac: Boolean(p.tacFrom2), tacLoc: p.loc });
-              await _triggerAmmoExplosionsForDamageResult(targetActor, r, { side });
+              r = await applyDamageToTargetActorAuto(targetActor, p.loc, p.damage, { side, tac: Boolean(p.tacFrom2), tacLoc: p.loc });
             }
             results.push({ packet: p, result: r });
             // If we lack permissions, stop spamming updates
@@ -2988,7 +3416,7 @@ if (weaponFired && opts.spendAmmo !== false && weaponConsumesAmmo(weaponItem, ac
         } else {
           let r;
           if (isAbomTarget) {
-            r = await applyDamageToAbominationActor(targetActor, damage);
+            r = await applyDamageToAbominationActorAuto(targetActor, damage);
           } else if (isVehicleTarget) {
             let loc = locResult?.loc ?? null;
             let crit = locResult?.critTrigger ? { trigger: true, tableLoc: locResult.critTableLoc } : null;
@@ -2997,11 +3425,10 @@ if (weaponFired && opts.spendAmmo !== false && weaponConsumesAmmo(weaponItem, ac
               loc = fallback.loc;
               if (fallback.critTrigger) crit = { trigger: true, tableLoc: fallback.critTableLoc };
             }
-            r = await applyDamageToVehicleActor(targetActor, loc, damage, { attackSide: side, crit });
+            r = await applyDamageToVehicleActorAuto(targetActor, loc, damage, { attackSide: side, crit });
           } else {
             const loc = locResult?.loc ?? (await rollHitLocation(side))?.loc;
-            r = await applyDamageToTargetActor(targetActor, loc, damage, { side, tac: tacSingle, tacLoc: loc });
-            await _triggerAmmoExplosionsForDamageResult(targetActor, r, { side });
+            r = await applyDamageToTargetActorAuto(targetActor, loc, damage, { side, tac: tacSingle, tacLoc: loc });
           }
           damageApplied = { type: "single", result: r };
         }
@@ -3080,6 +3507,9 @@ const jamInfoLine = (jam && !isAbomChat && !rack && rapidShots > 1)
     : `Damage ${damage}`;
 
   const weaponLine = `<div><b>Weapon</b>: ${weaponSummary}${(!isAbomChat && heat ? `, Heat ${heat}` : "")}</div>`;
+  const dazzleInfoLine = dazzleMode
+    ? `<div><b>Dazzle Mode:</b> Active${(!isVehicleAttacker && rawHeat !== heat) ? ` | Heat ${rawHeat} → ${heat}` : ""}${dazzleHalvesDamage ? ` | Damage ${rawBaseDamage} → ${baseDamage}` : ` | Full damage vs abominations`}</div>`
+    : "";
 
   const clusterPacketsHtml = cluster ? (() => {
     const isMissile = cluster.mode === "missile";
@@ -3161,6 +3591,7 @@ const jamInfoLine = (jam && !isAbomChat && !rack && rapidShots > 1)
     `<li>Other: +${otherMod}</li>`,
     `</ul>`,
     `${weaponLine}`,
+    `${dazzleInfoLine}`,
     `${rapidFireInfoLine}`,
     `${jamInfoLine}`,
     `${artemisInfoLine}`,
@@ -3523,10 +3954,9 @@ export async function rollMeleeWeaponAttack(actor, weaponItem, opts = {}) {
       let r;
       if (isVehicleTarget) {
         const crit = locResult?.critTrigger ? { trigger: true, tableLoc: locResult.critTableLoc } : null;
-        r = await applyDamageToVehicleActor(targetActor, locResult.loc, damage, { attackSide: side, crit });
+        r = await applyDamageToVehicleActorAuto(targetActor, locResult.loc, damage, { attackSide: side, crit });
       } else {
-        r = await applyDamageToTargetActor(targetActor, locResult.loc, damage, { side, tac: tacMelee, tacLoc: locResult.loc });
-        await _triggerAmmoExplosionsForDamageResult(targetActor, r, { side });
+        r = await applyDamageToTargetActorAuto(targetActor, locResult.loc, damage, { side, tac: tacMelee, tacLoc: locResult.loc });
       }
       damageApplied = r;
     } catch (err) {
@@ -3727,7 +4157,7 @@ export async function promptAndRollMeleeWeaponAttack(actor, weaponItem, { defaul
     <div class="form-group">
       <label>Target Hexes Moved</label>
       <input type="number" name="targetHexes" value="${autoTargetMove.moved}" min="0"/>
-      <small>Auto-filled from target movement tracking (movedThisTurn). Override if needed.</small>
+      <small>Auto-filled from target displacement this turn. Override if needed.</small>
     </div>
 
     <div class="form-group">
@@ -3843,10 +4273,15 @@ export async function promptAndRollMeleeWeaponAttack(actor, weaponItem, { defaul
  * Convenience UI: requires 1 targeted token, auto-measures distance, then prompts for the remaining mods.
  * Defaults "Hit Side" to the computed attack arc (from target facing), but you can override it.
  */
-export async function promptAndRollWeaponAttack(actor, weaponItem, { defaultSide = "front", attackerToken = null } = {}) {
+export async function promptAndRollWeaponAttack(actor, weaponItem, { defaultSide = "front", attackerToken = null, weaponFireKey = "" } = {}) {
   // If this weapon is a melee weapon (hatchet/sword/etc.), use the melee weapon workflow.
   if (isMeleeWeaponItem(weaponItem)) {
     return promptAndRollMeleeWeaponAttack(actor, weaponItem, { defaultSide });
+  }
+
+  if (await isWeaponDestroyedForAttack(actor, weaponItem, { weaponFireKey })) {
+    ui?.notifications?.warn?.(`${weaponItem?.name ?? "This weapon"} is destroyed and cannot be fired.`);
+    return null;
   }
 
   const attackerTok = attackerToken ?? getAttackerToken(actor);
@@ -3921,7 +4356,7 @@ export async function promptAndRollWeaponAttack(actor, weaponItem, { defaultSide
     <div class="form-group">
       <label>Target Hexes Moved</label>
       <input type="number" name="targetHexes" value="${autoTargetMove.moved}" min="0"/>
-      <small>Auto-filled from target movement tracking (movedThisTurn). Override if needed.</small>
+      <small>Auto-filled from target displacement this turn. Override if needed.</small>
     </div>
 
     <div class="form-group">
@@ -3984,7 +4419,8 @@ export async function promptAndRollWeaponAttack(actor, weaponItem, { defaultSide
               applyDamage: fd.get("applyDamage") === "on",
               applyHeat: fd.get("applyHeat") === "on",
               showLocation: fd.get("showLocation") === "on",
-              rapidShots: num(fd.get("rapidShots"), 1)
+              rapidShots: num(fd.get("rapidShots"), 1),
+              weaponFireKey
             };
             const result = await rollWeaponAttack(actor, weaponItem, { ...opts, attackerToken: attackerTok, targetToken });
             resolve(result);
@@ -4282,10 +4718,9 @@ export async function rollPunchAttack(actor, opts = {}) {
         let r;
         if (isVehicleTarget) {
           const crit = locResult?.critTrigger ? { trigger: true, tableLoc: locResult.critTableLoc } : null;
-          r = await applyDamageToVehicleActor(targetActor, locResult.loc, damage, { attackSide: side, crit });
+          r = await applyDamageToVehicleActorAuto(targetActor, locResult.loc, damage, { attackSide: side, crit });
         } else {
-          r = await applyDamageToTargetActor(targetActor, locResult.loc, damage, { side });
-          await _triggerAmmoExplosionsForDamageResult(targetActor, r, { side });
+          r = await applyDamageToTargetActorAuto(targetActor, locResult.loc, damage, { side });
         }
         damageApplied = r;
       } catch (err) {
@@ -4587,6 +5022,8 @@ export async function rollKickAttack(actor, opts = {}) {
   const hipsOk = !leftLeg.hipDestroyed && !rightLeg.hipDestroyed;
 
   const targetActor = targetToken?.actor;
+  const isVehicleTarget = isVehicleActor(targetActor);
+  const hasVehicleTurret = isVehicleTarget && (num(targetActor?.system?.armor?.turret?.max, 0) > 0);
 
   const { damage, actuator, base } = calcKickDamageForLeg(actor, kickLegLoc);
 
@@ -4618,10 +5055,9 @@ export async function rollKickAttack(actor, opts = {}) {
         let r;
         if (isVehicleTarget) {
           const crit = locResult?.critTrigger ? { trigger: true, tableLoc: locResult.critTableLoc } : null;
-          r = await applyDamageToVehicleActor(targetActor, locResult.loc, damage, { attackSide: side, crit });
+          r = await applyDamageToVehicleActorAuto(targetActor, locResult.loc, damage, { attackSide: side, crit });
         } else {
-          r = await applyDamageToTargetActor(targetActor, locResult.loc, damage, { side });
-          await _triggerAmmoExplosionsForDamageResult(targetActor, r, { side });
+          r = await applyDamageToTargetActorAuto(targetActor, locResult.loc, damage, { side });
         }
         damageApplied = r;
       } catch (err) {
@@ -4805,7 +5241,7 @@ export async function promptAndRollMeleeAttack(actor, meleeType = "punch", { def
     <div class="form-group">
       <label>Target Hexes Moved</label>
       <input type="number" name="targetHexes" value="${autoTargetMove.moved}" min="0"/>
-      <small>Auto-filled from target movement tracking (movedThisTurn). Override if needed.</small>
+      <small>Auto-filled from target displacement this turn. Override if needed.</small>
     </div>
 
     <div class="form-group">
@@ -4971,16 +5407,44 @@ function _critHitTypeFromLabel(label) {
 const _CRIT_HIT_LIMITS = { engine: 3, gyro: 2, sensor: 2, lifeSupport: 1 };
 
 async function _rollCritSlotIndex(targetActor, structLoc) {
-  const slots = targetActor.system?.crit?.[structLoc]?.slots;
-  const maxSlots = Array.isArray(slots) ? slots.length : Number(targetActor.system?.crit?.[structLoc]?.maxSlots ?? 0) || 0;
+  const rawSlots = targetActor.system?.crit?.[structLoc]?.slots;
+  const maxSlots = Array.isArray(rawSlots) ? rawSlots.length : Number(targetActor.system?.crit?.[structLoc]?.maxSlots ?? 0) || 0;
 
   // Best-effort inference: torsos are 12 slots (upper/lower), everything else is 6
   const isTorsoLoc = ["ct", "lt", "rt"].includes(structLoc);
   const size = isTorsoLoc ? 12 : 6;
+  const slotCap = Math.max(size, maxSlots);
+  const slots = Array.from({ length: slotCap }, () => ({}));
 
   // If we don't have a crit table for this location, abort.
-  if (!slots || (Array.isArray(slots) && slots.length === 0) || (!Array.isArray(slots) && Object.keys(slots).length === 0)) {
+  if (!rawSlots || (Array.isArray(rawSlots) && rawSlots.length === 0) || (!Array.isArray(rawSlots) && Object.keys(rawSlots).length === 0)) {
     return { ok: false, reason: "No crit table" };
+  }
+
+  if (Array.isArray(rawSlots)) {
+    for (let i = 0; i < Math.min(slotCap, rawSlots.length); i++) slots[i] = rawSlots[i] ?? {};
+  } else if (rawSlots && typeof rawSlots === "object") {
+    for (const [k, v] of Object.entries(rawSlots)) {
+      const idx = Number(k);
+      if (!Number.isNaN(idx) && idx >= 0 && idx < slotCap) slots[idx] = v ?? {};
+    }
+  }
+
+  // Rule handling:
+  // - Re-roll if the selected crit slot was already destroyed.
+  // - Multi-slot equipment can still take multiple crits, because each intact occupied
+  //   slot within that component remains a valid target until it too is destroyed.
+  let hasIntactOccupiedSlot = false;
+  const slotCount = Math.min(slots.length, size);
+  for (let i = 0; i < slotCount; i++) {
+    const slot = slots?.[i];
+    if (!_isOccupiedCritSlot(slot)) continue;
+    if (Boolean(slot?.destroyed)) continue;
+    hasIntactOccupiedSlot = true;
+    break;
+  }
+  if (!hasIntactOccupiedSlot) {
+    return { ok: false, reason: "No intact occupied crit slots" };
   }
 
   // Try up to N times to avoid infinite loops if everything is empty
@@ -4991,7 +5455,9 @@ async function _rollCritSlotIndex(targetActor, structLoc) {
       const r = await (new Roll("1d6")).evaluate();
       const idx = (r.total ?? 1) - 1;
       const slot = slots?.[idx];
-      if (_isOccupiedCritSlot(slot)) return { ok: true, idx, rolls: { slot: r.total }, label: slot?.label ?? slot };
+      if (_isOccupiedCritSlot(slot) && !Boolean(slot?.destroyed)) {
+        return { ok: true, idx, rolls: { slot: r.total }, label: slot?.label ?? slot };
+      }
       continue;
     }
 
@@ -5004,7 +5470,7 @@ async function _rollCritSlotIndex(targetActor, structLoc) {
     const idx = offset + ((slotRoll.total ?? 1) - 1);
 
     const slot = slots?.[idx];
-    if (_isOccupiedCritSlot(slot)) {
+    if (_isOccupiedCritSlot(slot) && !Boolean(slot?.destroyed)) {
       return {
         ok: true,
         idx,
