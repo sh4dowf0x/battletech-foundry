@@ -1,0 +1,117 @@
+<form class="atow-attack-dialog atow-vehicle-attack-dialog" data-base-tn-without-range="{{baseTNWithoutRange}}" data-auto-attacker-move-mod="{{autoAttackerMoveMod}}" data-range-mod="{{selectedRangeMod}}">
+  <header class="attack-card-header">
+    <div>
+      <div class="attack-kicker">BattleTech Attack</div>
+      <h2>{{weaponName}}</h2>
+    </div>
+  </header>
+
+  <section class="attack-summary-grid">
+    <div>
+      <span>Attacker</span>
+      <strong>{{attackerName}}</strong>
+    </div>
+    <div>
+      <span>Target</span>
+      <strong>{{targetName}}</strong>
+    </div>
+    <div>
+      <span>Range</span>
+      <strong><span data-attack-distance>{{distance}}</span> (<span data-attack-band>{{band}}</span>)</strong>
+      <input type="hidden" name="distance" value="{{distance}}"/>
+    </div>
+  </section>
+
+  <section class="attack-mod-line">
+    <strong>Mods:</strong>
+    {{#if hasMods}}
+      {{#each mods}}
+        <span class="attack-mod-chip">{{label}} {{signed value}}</span>
+      {{/each}}
+    {{else}}
+      <span class="attack-mod-none">None</span>
+    {{/if}}
+  </section>
+
+  {{#if hasBlockedNotes}}
+    <section class="attack-warning-line">
+      {{#each blockedNotes}}
+        <span>{{this}}</span>
+      {{/each}}
+    </section>
+  {{/if}}
+
+  <section class="attack-form-grid">
+    <label>
+      <span>Attacker Move</span>
+      <select name="attackerMoveMode">
+        <option value="auto" selected>Auto (from movement)</option>
+        <option value="stationary">Stationary</option>
+        <option value="walk">Walk (+1)</option>
+        <option value="run">Run (+2)</option>
+        <option value="jump">Jump (+3)</option>
+      </select>
+    </label>
+
+    <label>
+      <span>Target Hexes Moved</span>
+      <input type="number" name="targetHexes" value="{{autoTargetMove}}" min="0"/>
+    </label>
+
+    <label>
+      <span>Other Mod</span>
+      <input type="number" name="otherMod" value="0"/>
+    </label>
+
+    {{#if showAmmoSelection}}
+      <label>
+        <span>Ammo Type</span>
+        <select name="ammoKey">
+          {{#each ammoSelectionOptions}}
+            <option value="{{key}}" data-range-band="{{rangeBand}}" data-range-mod="{{rangeMod}}" data-total-tn="{{totalTN}}" {{#ifEq key ../selectedAmmoKey}}selected{{/ifEq}}>{{label}}{{#if current}} ({{current}}/{{total}}){{/if}}</option>
+          {{/each}}
+        </select>
+      </label>
+    {{else}}
+      <input type="hidden" name="ammoKey" value="{{selectedAmmoKey}}"/>
+    {{/if}}
+
+    <label>
+      <span>Hit Side</span>
+      <select name="side">
+        <option value="front" {{#ifEq computedSide "front"}}selected{{/ifEq}}>Front</option>
+        <option value="rear" {{#ifEq computedSide "rear"}}selected{{/ifEq}}>Rear</option>
+        <option value="left" {{#ifEq computedSide "left"}}selected{{/ifEq}}>Left</option>
+        <option value="right" {{#ifEq computedSide "right"}}selected{{/ifEq}}>Right</option>
+      </select>
+    </label>
+
+    {{#if showRapidFire}}
+      <label>
+        <span>Rapid-Fire Shots (R{{rapidFireRating}})</span>
+        <input type="number" name="rapidShots" value="1" min="1" max="{{rapidFireRating}}"/>
+      </label>
+    {{else}}
+      <input type="hidden" name="rapidShots" value="1"/>
+    {{/if}}
+  </section>
+
+  <section class="attack-note-line">
+    <span>{{arcNote}}</span>
+    {{#if showRapidFire}}
+      <span>Each rapid-fire shot spends 1 ammo and adds +{{weaponHeat}} Heat.</span>
+    {{/if}}
+  </section>
+
+  <section class="attack-total-line">
+    <strong>Total TN</strong>
+    <span data-attack-total-tn>{{totalTN}}</span>
+  </section>
+
+  {{#if showArrowIVIndirectControl}}
+    <label class="attack-check-line">
+      <input type="checkbox" name="arrowIVIndirect"/>
+      <span>Indirect Fire</span>
+    </label>
+  {{/if}}
+</form>

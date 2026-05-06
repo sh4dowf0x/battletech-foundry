@@ -1,0 +1,541 @@
+<form class="{{cssClass}} company-sheet" autocomplete="off">
+  <header class="company-header">
+    <div class="company-title-block">
+      <input class="company-name" name="name" type="text" value="{{actor.name}}" placeholder="Company Name" />
+      <div class="company-subtitle">
+        <span>{{company.identity.unitType}}</span>
+        <span>{{company.identity.classification}}</span>
+        <span>{{company.identity.currentBase}}</span>
+      </div>
+    </div>
+    <div class="company-readiness">
+      <label>Readiness
+        <input name="system.company.readiness.overall" type="text" value="{{company.readiness.overall}}" placeholder="Fair" />
+      </label>
+    </div>
+  </header>
+
+  <nav class="company-tabs">
+    {{#each tabs as |tab|}}
+      <button type="button" class="{{#if tab.active}}active{{/if}}" data-company-tab="{{tab.id}}">{{tab.label}}</button>
+    {{/each}}
+  </nav>
+
+  <main class="company-body">
+    {{#each tabs as |tab|}}
+      {{#if tab.active}}
+        {{#ifEq tab.id "overview"}}
+          <section class="company-tab company-overview">
+            <section class="company-panel company-identity">
+              <h3>Company Identity</h3>
+              <div class="company-grid company-grid-3">
+                <label>Unit Type <input name="system.company.identity.unitType" type="text" value="{{../company.identity.unitType}}" placeholder="Mercenary command" /></label>
+                <label>Classification <input name="system.company.identity.classification" type="text" value="{{../company.identity.classification}}" placeholder="Company" /></label>
+                <label>Current Base <input name="system.company.identity.currentBase" type="text" value="{{../company.identity.currentBase}}" placeholder="DropShip, planet, depot..." /></label>
+                <label>Founding Date <input name="system.company.identity.foundingDate" type="text" value="{{../company.identity.foundingDate}}" /></label>
+                <label>Motto <input name="system.company.identity.motto" type="text" value="{{../company.identity.motto}}" /></label>
+                <label>Colors / Insignia <input name="system.company.identity.colors" type="text" value="{{../company.identity.colors}}" /></label>
+              </div>
+              <label class="company-textarea-label">Service History
+                <textarea name="system.company.identity.serviceHistory">{{../company.identity.serviceHistory}}</textarea>
+              </label>
+            </section>
+
+            <section class="company-panel">
+              <h3>Command Staff</h3>
+              <div class="company-grid company-grid-3">
+                {{#each ../commandStaff as |staff|}}
+                  <label>{{staff.label}} <input name="system.company.commandStaff.{{staff.key}}" type="text" value="{{staff.value}}" /></label>
+                {{/each}}
+              </div>
+            </section>
+
+            <section class="company-panel">
+              <h3>Reputation and Standing</h3>
+              <div class="company-grid company-grid-3">
+                <label>Standing <input name="system.company.reputation.standing" type="text" value="{{../company.reputation.standing}}" /></label>
+                <label>Known For <input name="system.company.reputation.knownFor" type="text" value="{{../company.reputation.knownFor}}" /></label>
+                <label>Public Image <input name="system.company.reputation.publicImage" type="text" value="{{../company.reputation.publicImage}}" /></label>
+                <label>Discipline / Morale <input name="system.company.reputation.discipline" type="text" value="{{../company.reputation.discipline}}" /></label>
+                <label>Unit Loyalty <input name="system.company.reputation.loyalty" type="text" value="{{../company.reputation.loyalty}}" /></label>
+                <label>Legal Status <input name="system.company.reputation.legalStatus" type="text" value="{{../company.reputation.legalStatus}}" /></label>
+              </div>
+            </section>
+
+            <section class="company-panel">
+              <h3>Affiliations</h3>
+              <div class="company-grid company-grid-2">
+                <label>Primary Affiliation <input name="system.company.affiliations.primary" type="text" value="{{../company.affiliations.primary}}" /></label>
+                <label>Current Employer / Patron <input name="system.company.affiliations.employer" type="text" value="{{../company.affiliations.employer}}" /></label>
+                <label>Allied Factions <textarea name="system.company.affiliations.allies">{{../company.affiliations.allies}}</textarea></label>
+                <label>Neutral Factions <textarea name="system.company.affiliations.neutrals">{{../company.affiliations.neutrals}}</textarea></label>
+                <label>Hostile Factions <textarea name="system.company.affiliations.hostiles">{{../company.affiliations.hostiles}}</textarea></label>
+                <label>Rivals / Enemies <textarea name="system.company.affiliations.rivals">{{../company.affiliations.rivals}}</textarea></label>
+              </div>
+              <label class="company-textarea-label">Political Entanglements
+                <textarea name="system.company.affiliations.entanglements">{{../company.affiliations.entanglements}}</textarea>
+              </label>
+            </section>
+
+            <section class="company-panel">
+              <h3>Mechanical Trackers</h3>
+              <div class="company-trackers">
+                {{#each ../trackers as |tracker|}}
+                  <label>{{tracker.label}}
+                    <input name="system.company.trackers.{{tracker.key}}" type="number" value="{{tracker.value}}" min="0" max="5" data-dtype="Number" />
+                  </label>
+                {{/each}}
+              </div>
+            </section>
+          </section>
+        {{/ifEq}}
+
+        {{#ifEq tab.id "roster"}}
+          <section class="company-tab">
+            <section class="company-panel company-roster-drop-zone" data-drop-zone="company-combat-personnel">
+              <div class="company-panel-header"><h3>Combat Personnel</h3><button type="button" data-action="add-row" data-table="combatPersonnel">Add</button></div>
+              <div class="company-table company-personnel-table">
+                <div class="company-table-row company-table-head"><span>Name</span><span>Callsign</span><span>Rank / Position</span><span>Role</span><span>Lance</span><span>Asset</span><span>Skill Notes</span><span>Status</span><span></span></div>
+                {{#each ../combatPersonnel as |row|}}
+                  <div class="company-table-row">
+                    <input type="hidden" name="system.company.combatPersonnel.{{@index}}.sourceUuid" value="{{row.sourceUuid}}" />
+                    <input name="system.company.combatPersonnel.{{@index}}.name" value="{{row.name}}" />
+                    <input name="system.company.combatPersonnel.{{@index}}.callsign" value="{{row.callsign}}" />
+                    <input name="system.company.combatPersonnel.{{@index}}.rank" value="{{row.rank}}" />
+                    <input name="system.company.combatPersonnel.{{@index}}.role" value="{{row.role}}" />
+                    <input name="system.company.combatPersonnel.{{@index}}.lance" value="{{row.lance}}" />
+                    <input name="system.company.combatPersonnel.{{@index}}.asset" value="{{row.asset}}" />
+                    <input name="system.company.combatPersonnel.{{@index}}.skills" value="{{row.skills}}" />
+                    <input name="system.company.combatPersonnel.{{@index}}.status" value="{{row.status}}" />
+                    <button type="button" data-action="delete-row" data-table="combatPersonnel" data-index="{{@index}}">X</button>
+                  </div>
+                {{/each}}
+              </div>
+            </section>
+
+            <section class="company-panel company-roster-drop-zone" data-drop-zone="company-support-personnel">
+              <div class="company-panel-header"><h3>Technical and Support Personnel</h3><button type="button" data-action="add-row" data-table="supportPersonnel">Add</button></div>
+              <div class="company-table company-support-table">
+                <div class="company-table-row company-table-head"><span>Name</span><span>Role</span><span>Specialty</span><span>Department</span><span>Workload</span><span>Morale</span><span>Notes</span><span></span></div>
+                {{#each ../supportPersonnel as |row|}}
+                  <div class="company-table-row">
+                    <input type="hidden" name="system.company.supportPersonnel.{{@index}}.sourceUuid" value="{{row.sourceUuid}}" />
+                    <input name="system.company.supportPersonnel.{{@index}}.name" value="{{row.name}}" />
+                    <input name="system.company.supportPersonnel.{{@index}}.role" value="{{row.role}}" />
+                    <input name="system.company.supportPersonnel.{{@index}}.specialty" value="{{row.specialty}}" />
+                    <input name="system.company.supportPersonnel.{{@index}}.department" value="{{row.department}}" />
+                    <input name="system.company.supportPersonnel.{{@index}}.workload" value="{{row.workload}}" />
+                    <input name="system.company.supportPersonnel.{{@index}}.morale" value="{{row.morale}}" />
+                    <input name="system.company.supportPersonnel.{{@index}}.notes" value="{{row.notes}}" />
+                    <button type="button" data-action="delete-row" data-table="supportPersonnel" data-index="{{@index}}">X</button>
+                  </div>
+                {{/each}}
+              </div>
+            </section>
+
+            <section class="company-panel">
+              <div class="company-panel-header"><h3>Unit Organization</h3><button type="button" data-action="add-row" data-table="subunits">Add</button></div>
+              <div class="company-table company-subunit-table">
+                <div class="company-table-row company-table-head"><span>Sub-unit</span><span>Commander</span><span>Role</span><span>Members</span><span>Assets</span><span>Readiness</span><span>Notes</span><span></span></div>
+                {{#each ../subunits as |row|}}
+                  <div class="company-table-row">
+                    <input name="system.company.subunits.{{@index}}.name" value="{{row.name}}" />
+                    <input name="system.company.subunits.{{@index}}.commander" value="{{row.commander}}" />
+                    <input name="system.company.subunits.{{@index}}.role" value="{{row.role}}" />
+                    <input name="system.company.subunits.{{@index}}.members" value="{{row.members}}" />
+                    <input name="system.company.subunits.{{@index}}.assets" value="{{row.assets}}" />
+                    <input name="system.company.subunits.{{@index}}.readiness" value="{{row.readiness}}" />
+                    <input name="system.company.subunits.{{@index}}.notes" value="{{row.notes}}" />
+                    <button type="button" data-action="delete-row" data-table="subunits" data-index="{{@index}}">X</button>
+                  </div>
+                {{/each}}
+              </div>
+            </section>
+          </section>
+        {{/ifEq}}
+
+        {{#ifEq tab.id "assets"}}
+          <section class="company-tab">
+            <section class="company-panel company-mech-drop-zone" data-drop-zone="company-mechs">
+              <div class="company-panel-header"><h3>BattleMechs</h3><button type="button" data-action="add-row" data-table="mechs">Add</button></div>
+              <div class="company-table company-mech-table">
+                <div class="company-table-row company-table-head"><span>Name</span><span>Chassis / Variant</span><span>Tons</span><span>Pilot</span><span>Lance</span><span>Condition</span><span>Ownership</span><span>Priority</span><span>Notes</span><span></span></div>
+                {{#each ../mechs as |row|}}
+                  <div class="company-table-row">
+                    <input type="hidden" name="system.company.mechs.{{@index}}.sourceUuid" value="{{row.sourceUuid}}" />
+                    <input name="system.company.mechs.{{@index}}.name" value="{{row.name}}" />
+                    <input name="system.company.mechs.{{@index}}.chassis" value="{{row.chassis}}" />
+                    <input name="system.company.mechs.{{@index}}.tonnage" type="number" value="{{row.tonnage}}" />
+                    <input name="system.company.mechs.{{@index}}.pilot" value="{{row.pilot}}" />
+                    <input name="system.company.mechs.{{@index}}.lance" value="{{row.lance}}" />
+                    <input name="system.company.mechs.{{@index}}.condition" value="{{row.condition}}" />
+                    <input name="system.company.mechs.{{@index}}.ownership" value="{{row.ownership}}" />
+                    <input name="system.company.mechs.{{@index}}.priority" value="{{row.priority}}" />
+                    <input name="system.company.mechs.{{@index}}.notes" value="{{row.notes}}" />
+                    <button type="button" data-action="delete-row" data-table="mechs" data-index="{{@index}}">X</button>
+                  </div>
+                {{/each}}
+              </div>
+            </section>
+
+            <section class="company-grid company-grid-2">
+              <section class="company-panel company-vehicle-drop-zone" data-drop-zone="company-vehicles">
+                <div class="company-panel-header"><h3>Vehicles</h3><button type="button" data-action="add-row" data-table="vehicles">Add</button></div>
+                <div class="company-card-list">
+                  {{#each ../vehicles as |row|}}
+                    <div class="company-card-row">
+                      <input type="hidden" name="system.company.vehicles.{{@index}}.sourceUuid" value="{{row.sourceUuid}}" />
+                      <input name="system.company.vehicles.{{@index}}.name" value="{{row.name}}" placeholder="Vehicle" />
+                      <input name="system.company.vehicles.{{@index}}.type" value="{{row.type}}" placeholder="Type" />
+                      <input name="system.company.vehicles.{{@index}}.crew" value="{{row.crew}}" placeholder="Crew" />
+                      <input name="system.company.vehicles.{{@index}}.condition" value="{{row.condition}}" placeholder="Condition" />
+                      <textarea name="system.company.vehicles.{{@index}}.notes" placeholder="Capacity, section, quirks">{{row.notes}}</textarea>
+                      <button type="button" data-action="delete-row" data-table="vehicles" data-index="{{@index}}">Remove</button>
+                    </div>
+                  {{/each}}
+                </div>
+              </section>
+
+              <section class="company-panel company-dropship-drop-zone" data-drop-zone="company-dropships">
+                <div class="company-panel-header"><h3>DropShips and Transport</h3><button type="button" data-action="add-row" data-table="dropships">Add</button></div>
+                <div class="company-card-list">
+                  {{#each ../dropships as |row|}}
+                    <div class="company-card-row company-dropship-card">
+                      <input type="hidden" name="system.company.dropships.{{@index}}.sourceUuid" value="{{row.sourceUuid}}" />
+                      <input name="system.company.dropships.{{@index}}.name" value="{{row.name}}" placeholder="Ship Name" />
+                      <input name="system.company.dropships.{{@index}}.type" value="{{row.type}}" placeholder="Type" />
+                      <input name="system.company.dropships.{{@index}}.tonnage" type="number" value="{{row.tonnage}}" placeholder="Tons" />
+                      <input name="system.company.dropships.{{@index}}.techBase" value="{{row.techBase}}" placeholder="Tech Base" />
+                      <input name="system.company.dropships.{{@index}}.rulesLevel" value="{{row.rulesLevel}}" placeholder="Rules Level" />
+                      <input name="system.company.dropships.{{@index}}.role" value="{{row.role}}" placeholder="Role" />
+                      <input name="system.company.dropships.{{@index}}.safeThrust" type="number" value="{{row.safeThrust}}" placeholder="Safe Thrust" />
+                      <input name="system.company.dropships.{{@index}}.maxThrust" type="number" value="{{row.maxThrust}}" placeholder="Max Thrust" />
+                      <input name="system.company.dropships.{{@index}}.bv" type="number" value="{{row.bv}}" placeholder="BV" />
+                      <input name="system.company.dropships.{{@index}}.fuel" type="number" value="{{row.fuel}}" placeholder="Fuel" />
+                      <input name="system.company.dropships.{{@index}}.scale" value="{{row.scale}}" placeholder="Scale" />
+                      <input name="system.company.dropships.{{@index}}.captain" value="{{row.captain}}" placeholder="Captain" />
+                      <input name="system.company.dropships.{{@index}}.condition" value="{{row.condition}}" placeholder="Condition" />
+                      <input name="system.company.dropships.{{@index}}.ownership" value="{{row.ownership}}" placeholder="Ownership" />
+                      <input name="system.company.dropships.{{@index}}.docking" value="{{row.docking}}" placeholder="Docking" />
+                      <textarea name="system.company.dropships.{{@index}}.cargo" placeholder="Cargo, docking, debt, notes">{{row.cargo}}</textarea>
+                      <button type="button" data-action="delete-row" data-table="dropships" data-index="{{@index}}">Remove</button>
+                    </div>
+                  {{/each}}
+                </div>
+              </section>
+            </section>
+
+            <section class="company-panel company-abomination-drop-zone" data-drop-zone="company-abominations">
+              <div class="company-panel-header"><h3>Abominations</h3><button type="button" data-action="add-row" data-table="abominations">Add</button></div>
+              <div class="company-card-list">
+                {{#each ../abominations as |row|}}
+                  <div class="company-card-row company-abomination-card">
+                    <input type="hidden" name="system.company.abominations.{{@index}}.sourceUuid" value="{{row.sourceUuid}}" />
+                    <input name="system.company.abominations.{{@index}}.name" value="{{row.name}}" placeholder="Name" />
+                    <input name="system.company.abominations.{{@index}}.type" value="{{row.type}}" placeholder="Type" />
+                    <input name="system.company.abominations.{{@index}}.sizeClass" value="{{row.sizeClass}}" placeholder="Size Class" />
+                    <input name="system.company.abominations.{{@index}}.aliveTracks" value="{{row.aliveTracks}}" placeholder="Alive Tracks" />
+                    <input name="system.company.abominations.{{@index}}.trackProfile" value="{{row.trackProfile}}" placeholder="Tracks x Pips" />
+                    <input name="system.company.abominations.{{@index}}.movement" value="{{row.movement}}" placeholder="Movement" />
+                    <input name="system.company.abominations.{{@index}}.aniMelee" value="{{row.aniMelee}}" placeholder="ANI Melee" />
+                    <input name="system.company.abominations.{{@index}}.gunnery" value="{{row.gunnery}}" placeholder="Gunnery" />
+                    <input name="system.company.abominations.{{@index}}.physical" value="{{row.physical}}" placeholder="Physical Attacks" />
+                    <input name="system.company.abominations.{{@index}}.handler" value="{{row.handler}}" placeholder="Handler" />
+                    <input name="system.company.abominations.{{@index}}.condition" value="{{row.condition}}" placeholder="Condition" />
+                    <textarea name="system.company.abominations.{{@index}}.notes" placeholder="Bonus, manifestations, containment notes">{{row.notes}}</textarea>
+                    <button type="button" data-action="delete-row" data-table="abominations" data-index="{{@index}}">Remove</button>
+                  </div>
+                {{/each}}
+              </div>
+            </section>
+
+            <section class="company-grid company-grid-2">
+              <section class="company-panel">
+                <div class="company-panel-header"><h3>Aerospace / Conventional Fighters</h3><button type="button" data-action="add-row" data-table="aerospace">Add</button></div>
+                <div class="company-card-list">
+                  {{#each ../aerospace as |row|}}
+                    <div class="company-card-row">
+                      <input name="system.company.aerospace.{{@index}}.model" value="{{row.model}}" placeholder="Model" />
+                      <input name="system.company.aerospace.{{@index}}.pilot" value="{{row.pilot}}" placeholder="Pilot" />
+                      <input name="system.company.aerospace.{{@index}}.bay" value="{{row.bay}}" placeholder="Bay / Carrier" />
+                      <input name="system.company.aerospace.{{@index}}.status" value="{{row.status}}" placeholder="Status" />
+                      <input name="system.company.aerospace.{{@index}}.fuelAmmo" value="{{row.fuelAmmo}}" placeholder="Fuel / Ammo" />
+                      <button type="button" data-action="delete-row" data-table="aerospace" data-index="{{@index}}">Remove</button>
+                    </div>
+                  {{/each}}
+                </div>
+              </section>
+
+              <section class="company-panel">
+                <div class="company-panel-header"><h3>Infantry / Battle Armor</h3><button type="button" data-action="add-row" data-table="infantry">Add</button></div>
+                <div class="company-card-list">
+                  {{#each ../infantry as |row|}}
+                    <div class="company-card-row">
+                      <input name="system.company.infantry.{{@index}}.name" value="{{row.name}}" placeholder="Unit Name" />
+                      <input name="system.company.infantry.{{@index}}.size" value="{{row.size}}" placeholder="Size" />
+                      <input name="system.company.infantry.{{@index}}.commander" value="{{row.commander}}" placeholder="Commander" />
+                      <input name="system.company.infantry.{{@index}}.equipment" value="{{row.equipment}}" placeholder="Equipment" />
+                      <input name="system.company.infantry.{{@index}}.readiness" value="{{row.readiness}}" placeholder="Readiness" />
+                      <button type="button" data-action="delete-row" data-table="infantry" data-index="{{@index}}">Remove</button>
+                    </div>
+                  {{/each}}
+                </div>
+              </section>
+            </section>
+
+            <section class="company-panel">
+              <div class="company-panel-header"><h3>Facilities and Support</h3><button type="button" data-action="add-row" data-table="facilities">Add</button></div>
+              <div class="company-table company-facilities-table">
+                <div class="company-table-row company-table-head"><span>Name</span><span>Type</span><span>Capacity</span><span>Security</span><span>Local Reputation</span><span>Vulnerabilities</span><span>Notes</span><span></span></div>
+                {{#each ../facilities as |row|}}
+                  <div class="company-table-row">
+                    <input name="system.company.facilities.{{@index}}.name" value="{{row.name}}" />
+                    <input name="system.company.facilities.{{@index}}.type" value="{{row.type}}" />
+                    <input name="system.company.facilities.{{@index}}.capacity" value="{{row.capacity}}" />
+                    <input name="system.company.facilities.{{@index}}.security" value="{{row.security}}" />
+                    <input name="system.company.facilities.{{@index}}.localRep" value="{{row.localRep}}" />
+                    <input name="system.company.facilities.{{@index}}.vulnerabilities" value="{{row.vulnerabilities}}" />
+                    <input name="system.company.facilities.{{@index}}.notes" value="{{row.notes}}" />
+                    <button type="button" data-action="delete-row" data-table="facilities" data-index="{{@index}}">X</button>
+                  </div>
+                {{/each}}
+              </div>
+            </section>
+          </section>
+        {{/ifEq}}
+
+        {{#ifEq tab.id "logistics"}}
+          <section class="company-tab">
+            <section class="company-panel">
+              <h3>Finance</h3>
+              <div class="company-grid company-grid-4">
+                <label>C-Bills / Treasury <input name="system.company.finance.treasury" type="number" value="{{../company.finance.treasury}}" /></label>
+                <label>Monthly Upkeep <input name="system.company.finance.upkeep" type="number" value="{{../company.finance.upkeep}}" /></label>
+                <label>Payroll <input name="system.company.finance.payroll" type="number" value="{{../company.finance.payroll}}" /></label>
+                <label>Debt <input name="system.company.finance.debt" type="number" value="{{../company.finance.debt}}" /></label>
+                <label>Repair Costs Owed <input name="system.company.finance.repairCosts" type="number" value="{{../company.finance.repairCosts}}" /></label>
+                <label>Expected Income <input name="system.company.finance.expectedIncome" type="number" value="{{../company.finance.expectedIncome}}" /></label>
+                <label>Supply Status <input name="system.company.logistics.supplyStatus" type="text" value="{{../company.logistics.supplyStatus}}" /></label>
+                <label>Rare Components <input name="system.company.logistics.rareComponents" type="text" value="{{../company.logistics.rareComponents}}" /></label>
+              </div>
+            </section>
+
+            <section class="company-panel">
+              <div class="company-panel-header"><h3>Supplies and Stockpiles</h3><button type="button" data-action="add-row" data-table="supplies">Add</button></div>
+              <div class="company-table company-supplies-table">
+                <div class="company-table-row company-table-head"><span>Category</span><span>Status</span><span>Quantity</span><span>Monthly Use</span><span>Notes</span><span></span></div>
+                {{#each ../supplies as |row|}}
+                  <div class="company-table-row">
+                    <input name="system.company.supplies.{{@index}}.category" value="{{row.category}}" />
+                    <input name="system.company.supplies.{{@index}}.status" value="{{row.status}}" />
+                    <input name="system.company.supplies.{{@index}}.quantity" value="{{row.quantity}}" />
+                    <input name="system.company.supplies.{{@index}}.monthlyUse" value="{{row.monthlyUse}}" />
+                    <input name="system.company.supplies.{{@index}}.notes" value="{{row.notes}}" />
+                    <button type="button" data-action="delete-row" data-table="supplies" data-index="{{@index}}">X</button>
+                  </div>
+                {{/each}}
+              </div>
+            </section>
+          </section>
+        {{/ifEq}}
+
+        {{#ifEq tab.id "missions"}}
+          <section class="company-tab">
+            <section class="company-panel">
+              <div class="company-panel-header"><h3>Current Contracts / Orders</h3><button type="button" data-action="add-row" data-table="contracts">Add</button></div>
+              <div class="company-card-list">
+                {{#each ../contracts as |row|}}
+                  <div class="company-card-row company-contract-card">
+                    <input name="system.company.contracts.{{@index}}.assignment" value="{{row.assignment}}" placeholder="Current Assignment" />
+                    <input name="system.company.contracts.{{@index}}.employer" value="{{row.employer}}" placeholder="Employer / Command" />
+                    <input name="system.company.contracts.{{@index}}.type" value="{{row.type}}" placeholder="Mission Type" />
+                    <input name="system.company.contracts.{{@index}}.payment" value="{{row.payment}}" placeholder="Payment / Support" />
+                    <input name="system.company.contracts.{{@index}}.salvageRights" value="{{row.salvageRights}}" placeholder="Salvage Rights" />
+                    <input name="system.company.contracts.{{@index}}.timeLimit" value="{{row.timeLimit}}" placeholder="Time Limit" />
+                    <textarea name="system.company.contracts.{{@index}}.primary" placeholder="Primary Objective">{{row.primary}}</textarea>
+                    <textarea name="system.company.contracts.{{@index}}.complications" placeholder="Complications / Consequences">{{row.complications}}</textarea>
+                    <button type="button" data-action="delete-row" data-table="contracts" data-index="{{@index}}">Remove</button>
+                  </div>
+                {{/each}}
+              </div>
+            </section>
+
+            <section class="company-panel">
+              <div class="company-panel-header"><h3>Mission Record</h3><button type="button" data-action="add-row" data-table="missions">Add</button></div>
+              <div class="company-table company-missions-table">
+                <div class="company-table-row company-table-head"><span>Mission</span><span>Date</span><span>Employer</span><span>Location</span><span>Objective</span><span>Result</span><span>Reward</span><span>Losses</span><span>Impact</span><span>Journal</span><span></span></div>
+                {{#each ../missions as |row|}}
+                  <div class="company-table-row">
+                    <input name="system.company.missions.{{@index}}.name" value="{{row.name}}" />
+                    <input name="system.company.missions.{{@index}}.date" value="{{row.date}}" />
+                    <input name="system.company.missions.{{@index}}.employer" value="{{row.employer}}" />
+                    <input name="system.company.missions.{{@index}}.location" value="{{row.location}}" />
+                    <input name="system.company.missions.{{@index}}.objective" value="{{row.objective}}" />
+                    <input name="system.company.missions.{{@index}}.result" value="{{row.result}}" />
+                    <input name="system.company.missions.{{@index}}.reward" value="{{row.reward}}" />
+                    <input name="system.company.missions.{{@index}}.losses" value="{{row.losses}}" />
+                    <input name="system.company.missions.{{@index}}.impact" value="{{row.impact}}" />
+                    <div class="company-journal-cell" data-drop-zone="company-mission-journal" data-index="{{@index}}">
+                      <input type="hidden" name="system.company.missions.{{@index}}.journalUuid" value="{{row.journalUuid}}" />
+                      <input type="hidden" name="system.company.missions.{{@index}}.journalName" value="{{row.journalName}}" />
+                      {{#if row.journalUuid}}
+                        <button type="button" data-action="open-mission-journal" data-table="missions" data-index="{{@index}}" title="{{row.journalName}}"><i class="fas fa-book-open"></i></button>
+                      {{else}}
+                        <button type="button" data-action="create-mission-journal" data-table="missions" data-index="{{@index}}" title="Create mission journal"><i class="fas fa-book-medical"></i></button>
+                      {{/if}}
+                    </div>
+                    <button type="button" data-action="delete-row" data-table="missions" data-index="{{@index}}">X</button>
+                  </div>
+                {{/each}}
+              </div>
+            </section>
+          </section>
+        {{/ifEq}}
+
+        {{#ifEq tab.id "contacts"}}
+          <section class="company-tab">
+            <section class="company-panel">
+              <div class="company-panel-header"><h3>Contacts and Network</h3><button type="button" data-action="add-row" data-table="contacts">Add</button></div>
+              <div class="company-table company-contacts-table">
+                <div class="company-table-row company-table-head"><span>Name</span><span>Faction</span><span>Role</span><span>Relationship</span><span>Reliability</span><span>Provides</span><span>Favors</span><span>Notes</span><span></span></div>
+                {{#each ../contacts as |row|}}
+                  <div class="company-table-row">
+                    <input name="system.company.contacts.{{@index}}.name" value="{{row.name}}" />
+                    <input name="system.company.contacts.{{@index}}.faction" value="{{row.faction}}" />
+                    <input name="system.company.contacts.{{@index}}.role" value="{{row.role}}" />
+                    <input name="system.company.contacts.{{@index}}.relationship" value="{{row.relationship}}" />
+                    <input name="system.company.contacts.{{@index}}.reliability" value="{{row.reliability}}" />
+                    <input name="system.company.contacts.{{@index}}.provides" value="{{row.provides}}" />
+                    <input name="system.company.contacts.{{@index}}.favors" value="{{row.favors}}" />
+                    <input name="system.company.contacts.{{@index}}.notes" value="{{row.notes}}" />
+                    <button type="button" data-action="delete-row" data-table="contacts" data-index="{{@index}}">X</button>
+                  </div>
+                {{/each}}
+              </div>
+            </section>
+          </section>
+        {{/ifEq}}
+
+        {{#ifEq tab.id "maintenance"}}
+          <section class="company-tab">
+            <section class="company-panel">
+              <h3>Maintenance and Readiness</h3>
+              <div class="company-grid company-grid-4">
+                <label>Overall Readiness <input name="system.company.readiness.overall" value="{{../company.readiness.overall}}" /></label>
+                <label>Operational Assets <input name="system.company.readiness.operationalAssets" value="{{../company.readiness.operationalAssets}}" /></label>
+                <label>Damaged Assets <input name="system.company.readiness.damagedAssets" value="{{../company.readiness.damagedAssets}}" /></label>
+                <label>Available Tech Hours <input name="system.company.readiness.techHours" value="{{../company.readiness.techHours}}" /></label>
+                <label>Tech Shortages <input name="system.company.readiness.techShortages" value="{{../company.readiness.techShortages}}" /></label>
+                <label>Parts Shortages <input name="system.company.readiness.partsShortages" value="{{../company.readiness.partsShortages}}" /></label>
+                <label>Refit Projects <input name="system.company.readiness.refitProjects" value="{{../company.readiness.refitProjects}}" /></label>
+                <label>Salvage Awaiting Evaluation <input name="system.company.readiness.salvageAwaiting" value="{{../company.readiness.salvageAwaiting}}" /></label>
+              </div>
+              <label class="company-textarea-label">Maintenance Complications
+                <textarea name="system.company.readiness.complications">{{../company.readiness.complications}}</textarea>
+              </label>
+            </section>
+
+            <section class="company-panel">
+              <div class="company-panel-header"><h3>Repair Queue</h3><button type="button" data-action="add-row" data-table="repairs">Add</button></div>
+              <div class="company-table company-repair-table">
+                <div class="company-table-row company-table-head"><span>Asset</span><span>Issue</span><span>Priority</span><span>Tech Hours</span><span>Parts</span><span>Status</span><span>Notes</span><span></span></div>
+                {{#each ../repairs as |row|}}
+                  <div class="company-table-row">
+                    <input name="system.company.repairs.{{@index}}.asset" value="{{row.asset}}" />
+                    <input name="system.company.repairs.{{@index}}.issue" value="{{row.issue}}" />
+                    <input name="system.company.repairs.{{@index}}.priority" value="{{row.priority}}" />
+                    <input name="system.company.repairs.{{@index}}.techHours" value="{{row.techHours}}" />
+                    <input name="system.company.repairs.{{@index}}.parts" value="{{row.parts}}" />
+                    <input name="system.company.repairs.{{@index}}.status" value="{{row.status}}" />
+                    <input name="system.company.repairs.{{@index}}.notes" value="{{row.notes}}" />
+                    <button type="button" data-action="delete-row" data-table="repairs" data-index="{{@index}}">X</button>
+                  </div>
+                {{/each}}
+              </div>
+            </section>
+
+            <section class="company-panel">
+              <div class="company-panel-header"><h3>Salvage and Inventory</h3><button type="button" data-action="add-row" data-table="salvage">Add</button></div>
+              <div class="company-table company-salvage-table">
+                <div class="company-table-row company-table-head"><span>Item</span><span>Source</span><span>Claim</span><span>Condition</span><span>Value</span><span>Restriction</span><span>Notes</span><span></span></div>
+                {{#each ../salvage as |row|}}
+                  <div class="company-table-row">
+                    <input name="system.company.salvage.{{@index}}.item" value="{{row.item}}" />
+                    <input name="system.company.salvage.{{@index}}.source" value="{{row.source}}" />
+                    <input name="system.company.salvage.{{@index}}.claim" value="{{row.claim}}" />
+                    <input name="system.company.salvage.{{@index}}.condition" value="{{row.condition}}" />
+                    <input name="system.company.salvage.{{@index}}.value" value="{{row.value}}" />
+                    <input name="system.company.salvage.{{@index}}.restriction" value="{{row.restriction}}" />
+                    <input name="system.company.salvage.{{@index}}.notes" value="{{row.notes}}" />
+                    <button type="button" data-action="delete-row" data-table="salvage" data-index="{{@index}}">X</button>
+                  </div>
+                {{/each}}
+              </div>
+            </section>
+          </section>
+        {{/ifEq}}
+
+        {{#ifEq tab.id "notes"}}
+          <section class="company-tab">
+            <section class="company-panel">
+              <h3>Culture and Internal Drama</h3>
+              <div class="company-grid company-grid-2">
+                <label>Company Culture <textarea name="system.company.culture.companyCulture">{{../company.culture.companyCulture}}</textarea></label>
+                <label>Traditions / Taboos <textarea name="system.company.culture.traditions">{{../company.culture.traditions}}</textarea></label>
+                <label>Internal Factions <textarea name="system.company.culture.internalFactions">{{../company.culture.internalFactions}}</textarea></label>
+                <label>Rivalries / Friendships / Feuds <textarea name="system.company.culture.relationships">{{../company.culture.relationships}}</textarea></label>
+                <label>Recent Morale Events <textarea name="system.company.culture.moraleEvents">{{../company.culture.moraleEvents}}</textarea></label>
+                <label>Unit Secrets <textarea name="system.company.culture.secrets">{{../company.culture.secrets}}</textarea></label>
+              </div>
+            </section>
+
+            <section class="company-panel">
+              <h3>Strategic Notes</h3>
+              <div class="company-grid company-grid-2">
+                <label>Current Theater / Region <input name="system.company.strategy.theater" value="{{../company.strategy.theater}}" /></label>
+                <label>Long-Term Goals <input name="system.company.strategy.goals" value="{{../company.strategy.goals}}" /></label>
+                <label>Known Threats <textarea name="system.company.strategy.threats">{{../company.strategy.threats}}</textarea></label>
+                <label>Friendly Forces <textarea name="system.company.strategy.friendlies">{{../company.strategy.friendlies}}</textarea></label>
+                <label>Enemy Forces <textarea name="system.company.strategy.enemies">{{../company.strategy.enemies}}</textarea></label>
+                <label>Important Planets / Bases <textarea name="system.company.strategy.locations">{{../company.strategy.locations}}</textarea></label>
+              </div>
+            </section>
+
+            <section class="company-grid company-grid-2">
+              <section class="company-panel">
+                <div class="company-panel-header"><h3>Rumors</h3><button type="button" data-action="add-row" data-table="rumors">Add</button></div>
+                <div class="company-card-list">
+                  {{#each ../rumors as |row|}}
+                    <div class="company-card-row">
+                      <input name="system.company.rumors.{{@index}}.title" value="{{row.title}}" placeholder="Rumor" />
+                      <input name="system.company.rumors.{{@index}}.source" value="{{row.source}}" placeholder="Source" />
+                      <input name="system.company.rumors.{{@index}}.status" value="{{row.status}}" placeholder="Status" />
+                      <textarea name="system.company.rumors.{{@index}}.notes">{{row.notes}}</textarea>
+                      <button type="button" data-action="delete-row" data-table="rumors" data-index="{{@index}}">Remove</button>
+                    </div>
+                  {{/each}}
+                </div>
+              </section>
+
+              <section class="company-panel">
+                <div class="company-panel-header"><h3>Plot Hooks</h3><button type="button" data-action="add-row" data-table="plotHooks">Add</button></div>
+                <div class="company-card-list">
+                  {{#each ../plotHooks as |row|}}
+                    <div class="company-card-row">
+                      <input name="system.company.plotHooks.{{@index}}.title" value="{{row.title}}" placeholder="Hook" />
+                      <input name="system.company.plotHooks.{{@index}}.theater" value="{{row.theater}}" placeholder="Theater" />
+                      <input name="system.company.plotHooks.{{@index}}.threat" value="{{row.threat}}" placeholder="Threat" />
+                      <input name="system.company.plotHooks.{{@index}}.goal" value="{{row.goal}}" placeholder="Goal" />
+                      <textarea name="system.company.plotHooks.{{@index}}.notes">{{row.notes}}</textarea>
+                      <button type="button" data-action="delete-row" data-table="plotHooks" data-index="{{@index}}">Remove</button>
+                    </div>
+                  {{/each}}
+                </div>
+              </section>
+            </section>
+          </section>
+        {{/ifEq}}
+      {{/if}}
+    {{/each}}
+  </main>
+</form>

@@ -21,6 +21,12 @@ export const ATOW_AUDIO_CUES = {
 };
 
 export const ATOW_AUDIO_EFFECTS = {
+  footstep1: `systems/${SYSTEM_ID}/assets/sounds/effect-footstep1.ogg`,
+  footstep2: `systems/${SYSTEM_ID}/assets/sounds/effect-footstep2.ogg`,
+  footstep3: `systems/${SYSTEM_ID}/assets/sounds/effect-footstep3.ogg`,
+  footstep4: `systems/${SYSTEM_ID}/assets/sounds/effect-footstep4.ogg`,
+  torsoTwist: `systems/${SYSTEM_ID}/assets/sounds/effect-torsotwist.ogg`,
+
   jumpjetLight: `systems/${SYSTEM_ID}/assets/sounds/effect-jumpjet-light.ogg`,
   jumpjetMedium: `systems/${SYSTEM_ID}/assets/sounds/effect-jumpjet-medium.ogg`,
   jumpjetHeavy: `systems/${SYSTEM_ID}/assets/sounds/effect-jumpjet-heavy.ogg`,
@@ -39,6 +45,10 @@ const HEAT_RESOLUTION_MAX_ATTEMPTS = 20;
 const audioState = globalThis.__ATOW_BT_AUDIO_STATE__ ?? (globalThis.__ATOW_BT_AUDIO_STATE__ = {
   queue: Promise.resolve(),
   lastTurnAnnouncementByActor: new Map()
+});
+
+const effectState = globalThis.__ATOW_BT_EFFECT_AUDIO_STATE__ ?? (globalThis.__ATOW_BT_EFFECT_AUDIO_STATE__ = {
+  queue: Promise.resolve()
 });
 
 function logAudioDebug(message, data = null) {
@@ -119,6 +129,8 @@ function getDerivedAmmoBins(actor) {
 
     if (t.includes("machine gun") || t === "mg") return "mg";
 
+    if (/\barrow\s*iv\b/i.test(t) && /\bhoming\b/i.test(t)) return "arrow-iv-homing";
+
     return t.replace(/[^a-z0-9]+/gi, "-").replace(/^-+|-+$/g, "");
   };
 
@@ -135,7 +147,7 @@ function getDerivedAmmoBins(actor) {
     const iter = Array.isArray(slots) ? slots : Object.values(slots);
 
     for (const slot of iter) {
-      const label = String(slot?.label ?? "").trim();
+      const label = (typeof slot === "string") ? String(slot).trim() : String(slot?.label ?? "").trim();
       if (!label) continue;
       const m = label.match(/^\s*Ammo\s*\(([^)]+)\)\s*(\d+)\s*$/i);
       if (!m) continue;
@@ -278,6 +290,46 @@ async function playClipLocal(src, { volume = 0.8 } = {}) {
       resolve();
     }
   });
+}
+
+export async function playSharedEffect(src, { volume = 0.8 } = {}) {
+  if (!src) return;
+  const helper = foundry?.audio?.AudioHelper ?? globalThis.AudioHelper ?? null;
+  if (!helper?.play) return;
+  try {
+    await helper.play({ src, volume, autoplay: true, loop: false }, true);
+  } catch (err) {
+    console.warn("AToW Battletech | Shared effect failed", err);
+  }
+}
+
+export async function playRandomFootstepSequence({ count = 2, gapMs = 180, volume = 0.5 } = {}) {
+  const clips = [
+    ATOW_AUDIO_EFFECTS.footstep1,
+    ATOW_AUDIO_EFFECTS.footstep2,
+    ATOW_AUDIO_EFFECTS.footstep3,
+    ATOW_AUDIO_EFFECTS.footstep4
+  ].filter(Boolean);
+  if (!clips.length) return;
+
+  const steps = Math.max(1, Math.min(6, Number(count) || 0));
+  const delay = Math.max(0, Number(gapMs) || 0);
+
+  effectState.queue = effectState.queue.then(async () => {
+    for (let i = 0; i < steps; i += 1) {
+      const src = clips[Math.floor(Math.random() * clips.length)] ?? clips[0];
+      await playSharedEffect(src, { volume });
+      if (i < (steps - 1) && delay > 0) await wait(delay);
+    }
+  }).catch((err) => {
+    console.warn("AToW Battletech | footstep sequence failed", err);
+  });
+
+  return effectState.queue;
+}
+
+export async function playTorsoTwistEffect({ volume = 0.7 } = {}) {
+  return playSharedEffect(ATOW_AUDIO_EFFECTS.torsoTwist, { volume });
 }
 
 export async function enqueueAudioCues(cues, { gapMs = AUDIO_GAP_MS, volume = 0.8 } = {}) {

@@ -1192,9 +1192,9 @@
 /* Crit slot clear control */
 .atow.battletech.sheet.mech .crit-slot{ position: relative; }
 
-.atow.battletech.sheet.mech .crit-clear{
+.atow.battletech.sheet.mech .crit-clear,
+.atow.battletech.sheet.mech .crit-rear{
   position: absolute;
-  right: 2px;
   top: 0px;
   font-weight: 900;
   font-size: 12px;
@@ -1203,7 +1203,15 @@
   opacity: 0.6;
 }
 
+.atow.battletech.sheet.mech .crit-clear{ right: 2px; }
+.atow.battletech.sheet.mech .crit-rear{
+  right: 44px;
+  color: #ffd166;
+}
+
 .atow.battletech.sheet.mech .crit-clear:hover{ opacity: 1; }
+.atow.battletech.sheet.mech .crit-rear:hover,
+.atow.battletech.sheet.mech .crit-rear.active{ opacity: 1; }
 
 
 /* Compact Critical Hit Table (v3) */

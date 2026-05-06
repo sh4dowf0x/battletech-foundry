@@ -332,6 +332,7 @@ export class ATOWAbominationSheet extends ATOWCharacterSheet {
 
     const name = String(el.name ?? "").trim();
     const explicitNumericFields = new Set([
+      "system.pilot.gunnery",
       "system.abomination.groundMp",
       "system.abomination.jumpMp",
       "system.abomination.vtolMp"
@@ -339,7 +340,9 @@ export class ATOWAbominationSheet extends ATOWCharacterSheet {
 
     if (explicitNumericFields.has(name)) {
       const value = Number(el.value ?? 0) || 0;
-      await this.actor.update({ [name]: value });
+      const update = { [name]: value };
+      if (name === "system.pilot.gunnery") update["system.abomination.gunnerySkill"] = value;
+      await this.actor.update(update);
       return;
     }
 

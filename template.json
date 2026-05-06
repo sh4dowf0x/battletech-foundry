@@ -5,6 +5,8 @@
       "abomination",
       "npc",
       "mech",
+      "dropship",
+      "company",
       "wheeledvehicle",
       "vehicle"
     ],
@@ -222,6 +224,190 @@
         "base"
       ],
       "stats": {}
+    },
+    "dropship": {
+      "templates": [
+        "base"
+      ],
+      "dropship": {
+        "type": "",
+        "tonnage": 0,
+        "techBase": "",
+        "rulesLevel": "",
+        "role": "",
+        "thrust": {
+          "safe": 0,
+          "max": 0
+        },
+        "fuel": 0,
+        "bv": 0,
+        "scale": "Standard",
+        "cargo": ""
+      },
+      "pilot": {
+        "name": "",
+        "gunnery": 0,
+        "piloting": 0,
+        "hitsTaken": 0
+      },
+      "crew": {
+        "crew": 0,
+        "passengers": 0,
+        "marines": 0,
+        "battleArmor": 0,
+        "other": "",
+        "lifeBoats": 0,
+        "escapePods": 0
+      },
+      "armor": {
+        "nose": { "max": 0, "dmg": 0, "threshold": 0 },
+        "left": { "max": 0, "dmg": 0, "threshold": 0 },
+        "right": { "max": 0, "dmg": 0, "threshold": 0 },
+        "aft": { "max": 0, "dmg": 0, "threshold": 0 }
+      },
+      "structure": {
+        "si": { "max": 0, "dmg": 0 }
+      },
+      "crit": {
+        "avionics": 0,
+        "fcs": 0,
+        "sensors": 0,
+        "leftThrusters": 0,
+        "rightThrusters": 0,
+        "engine": 0,
+        "landingGear": 0,
+        "lifeSupport": 0,
+        "kfBoomDestroyed": false,
+        "dockingCollarDestroyed": false
+      },
+      "heat": {
+        "sinks": 0,
+        "doubleSinks": 0,
+        "generation": {
+          "nose": 0,
+          "foreLeft": 0,
+          "foreRight": 0,
+          "aftLeft": 0,
+          "aftRight": 0,
+          "aft": 0
+        }
+      },
+      "velocity": {
+        "turns": {}
+      }
+    },
+    "company": {
+      "templates": [
+        "base"
+      ],
+      "company": {
+        "identity": {
+          "unitType": "",
+          "classification": "",
+          "currentBase": "",
+          "foundingDate": "",
+          "motto": "",
+          "colors": "",
+          "serviceHistory": ""
+        },
+        "commandStaff": {
+          "commandingOfficer": "",
+          "executiveOfficer": "",
+          "operationsOfficer": "",
+          "logisticsOfficer": "",
+          "intelligenceOfficer": "",
+          "quartermaster": "",
+          "chiefTechnician": "",
+          "medicalOfficer": "",
+          "transportCommander": ""
+        },
+        "reputation": {
+          "standing": "",
+          "knownFor": "",
+          "publicImage": "",
+          "discipline": "",
+          "loyalty": "",
+          "legalStatus": ""
+        },
+        "affiliations": {
+          "primary": "",
+          "employer": "",
+          "allies": "",
+          "neutrals": "",
+          "hostiles": "",
+          "rivals": "",
+          "entanglements": ""
+        },
+        "trackers": {
+          "reputation": 0,
+          "morale": 0,
+          "readiness": 0,
+          "supply": 0,
+          "cohesion": 0,
+          "discipline": 0,
+          "notoriety": 0,
+          "politicalFavor": 0,
+          "debt": 0,
+          "infamy": 0,
+          "tempo": 0
+        },
+        "finance": {
+          "treasury": 0,
+          "upkeep": 0,
+          "payroll": 0,
+          "debt": 0,
+          "repairCosts": 0,
+          "expectedIncome": 0
+        },
+        "logistics": {
+          "supplyStatus": "",
+          "rareComponents": ""
+        },
+        "readiness": {
+          "overall": "",
+          "operationalAssets": "",
+          "damagedAssets": "",
+          "techHours": "",
+          "techShortages": "",
+          "partsShortages": "",
+          "refitProjects": "",
+          "salvageAwaiting": "",
+          "complications": ""
+        },
+        "culture": {
+          "companyCulture": "",
+          "traditions": "",
+          "internalFactions": "",
+          "relationships": "",
+          "moraleEvents": "",
+          "secrets": ""
+        },
+        "strategy": {
+          "theater": "",
+          "goals": "",
+          "threats": "",
+          "friendlies": "",
+          "enemies": "",
+          "locations": ""
+        },
+        "contacts": [],
+        "combatPersonnel": [],
+        "supportPersonnel": [],
+        "subunits": [],
+        "mechs": [],
+        "vehicles": [],
+        "aerospace": [],
+        "infantry": [],
+        "dropships": [],
+        "facilities": [],
+        "supplies": [],
+        "repairs": [],
+        "salvage": [],
+        "missions": [],
+        "contracts": [],
+        "rumors": [],
+        "plotHooks": []
+      }
     },
     "wheeledvehicle": {
       "templates": [

@@ -2,7 +2,7 @@
     "id":  "atow-battletech",
     "title":  "BattleTech: A Time of War",
     "description":  "A Foundry VTT system for BattleTech: A Time of War (AToW).",
-    "version":  "0.0.3",
+    "version":  "0.0.4",
     "authors":  [
                     {
                         "name":  "Sh4dowf0x"
@@ -41,38 +41,10 @@
                                 }
                   },
                   {
-                      "label":  "TRO 3025",
+                      "label":  "Battlemechs",
                       "type":  "Actor",
-                      "name":  "tro-3025",
-                      "path":  "packs/tro-3025",
-                      "system":  "atow-battletech",
-                      "ownership":  {
-                                        "PLAYER":  "OBSERVER",
-                                        "ASSISTANT":  "OWNER"
-                                    },
-                      "flags":  {
-
-                                }
-                  },
-                  {
-                      "label":  "TRO 3050",
-                      "type":  "Actor",
-                      "name":  "tro-3050",
-                      "path":  "packs/tro-3050",
-                      "system":  "atow-battletech",
-                      "ownership":  {
-                                        "PLAYER":  "OBSERVER",
-                                        "ASSISTANT":  "OWNER"
-                                    },
-                      "flags":  {
-
-                                }
-                  },
-                  {
-                      "label":  "TRO CUSTOM MECHS",
-                      "type":  "Actor",
-                      "name":  "tro-custom-mechs",
-                      "path":  "packs/tro-custom-mechs",
+                      "name":  "battlemechs",
+                      "path":  "packs/battlemechs",
                       "system":  "atow-battletech",
                       "ownership":  {
                                         "PLAYER":  "OBSERVER",

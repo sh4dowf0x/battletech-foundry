@@ -713,6 +713,12 @@ export class ATOWCharacterSheet extends HandlebarsApplicationMixin(ActorSheetV2)
     this._delegatedChange = this._handleChange.bind(this);
     root.addEventListener("change", this._delegatedChange);
 
+    const dragHandle = root?.querySelector?.("[data-character-drag-handle]");
+    if (dragHandle && dragHandle.dataset.atowDragBound !== "1") {
+      dragHandle.dataset.atowDragBound = "1";
+      dragHandle.addEventListener("dragstart", (event) => this._onActorDragStart(event));
+    }
+
 
 
     // Allow dropping Items directly into the Gear section (it will embed onto the actor)
@@ -992,6 +998,22 @@ export class ATOWCharacterSheet extends HandlebarsApplicationMixin(ActorSheetV2)
 
     await this.actor.createEmbeddedDocuments("Item", [obj]);
     this.render();
+  }
+
+  _onActorDragStart(event) {
+    if (!this.actor?.uuid) return;
+    const dt = event.dataTransfer;
+    if (!dt) return;
+
+    const payload = {
+      type: "Actor",
+      uuid: this.actor.uuid
+    };
+
+    dt.setData("application/json", JSON.stringify(payload));
+    dt.setData("text/json", JSON.stringify(payload));
+    dt.setData("text/plain", this.actor.name ?? "Character");
+    dt.effectAllowed = "copyMove";
   }
 
 

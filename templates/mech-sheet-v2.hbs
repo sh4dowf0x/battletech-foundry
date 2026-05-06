@@ -116,7 +116,8 @@
     }
 
     .mech-sheet .crit-slot .crit-clear,
-    .mech-sheet .crit-slot .crit-destroy {
+    .mech-sheet .crit-slot .crit-destroy,
+    .mech-sheet .crit-slot .crit-rear {
       position: absolute;
       top: 3px;
       width: 18px;
@@ -134,9 +135,16 @@
 
     .mech-sheet .crit-slot .crit-clear { right: 3px; }
     .mech-sheet .crit-slot .crit-destroy { right: 24px; }
+    .mech-sheet .crit-slot .crit-rear { right: 45px; font-size: 11px; font-weight: 900; }
+    .mech-sheet .crit-slot .crit-rear.active {
+      opacity: 1;
+      color: #ffd166;
+      border-color: rgba(255, 209, 102, 0.55);
+    }
 
     .mech-sheet .crit-slot:hover .crit-clear,
-    .mech-sheet .crit-slot:hover .crit-destroy {
+    .mech-sheet .crit-slot:hover .crit-destroy,
+    .mech-sheet .crit-slot:hover .crit-rear {
       opacity: 1;
     }
 
@@ -264,6 +272,15 @@
       {{/each}}
     </div>
     <div class="header-actions">
+      {{#if hasAMS}}
+      <button
+        type="button"
+        class="header-action-btn{{#if isAMSEnabled}} is-active{{/if}}"
+        data-header-action="ams"
+        data-macro-label="{{#if isAMSEnabled}}AMS Off{{else}}AMS On{{/if}}"
+        data-macro-img="icons/svg/target.svg"
+        draggable="true">AMS</button>
+      {{/if}}
       <button
         type="button"
         class="header-action-btn{{#if isDazzleMode}} is-active{{/if}}"
@@ -278,6 +295,22 @@
         data-macro-label="Jump"
         data-macro-img="icons/svg/wing.svg"
         draggable="true">Jump</button>
+      <button
+        type="button"
+        class="header-action-btn"
+        data-header-action="reset-move"
+        data-macro-label="Reset Move"
+        data-macro-img="icons/svg/undo.svg"
+        draggable="true">Reset Move</button>
+      <button
+        type="button"
+        class="header-action-btn{{#if isProne}} is-active{{/if}}"
+        data-header-action="posture"
+        data-macro-label="{{#if isProne}}Stand Up{{else}}Go Prone{{/if}}"
+        data-macro-img="systems/atow-battletech/assets/status/prone.svg"
+        draggable="true">
+        {{#if isProne}}Stand Up{{else}}Go Prone{{/if}}
+      </button>
       <button
         type="button"
         class="header-action-btn{{#if isManualShutdown}} is-active{{/if}}"
@@ -407,6 +440,8 @@
                   {{#if item.id}}data-item-id="{{item.id}}"{{/if}}
                   {{#if item.itemUuid}}data-item-uuid="{{item.itemUuid}}"{{/if}}
                   {{#if item.weaponFireKey}}data-weapon-fire-key="{{item.weaponFireKey}}"{{/if}}
+                  {{#if item.mountLocKey}}data-weapon-mount-loc="{{item.mountLocKey}}"{{/if}}
+                  data-weapon-rear-mounted="{{item.rearMounted}}"
                   {{#if item.itemUuid}}draggable="true"{{/if}}
                   {{#if item.firedThisTurn}}data-fired="true"{{/if}}
                   data-destroyed="{{item.destroyed}}">
@@ -492,7 +527,7 @@
       <div class="track track-consciousness">
         {{#each pilotTracks.consciousness as |c|}}
           <div class="track-box {{#if c.active}}active{{/if}}" data-track="consciousness" data-value="{{c.v}}">
-            {{c.v}}
+            {{c.label}}
           </div>
         {{/each}}
       </div>
@@ -575,6 +610,10 @@
           <span class="mini-label">Move -{{heatData.movePenalty}}</span>
           <span class="mini-label">|</span>
           <span class="mini-label">Fire {{signed heatData.fireMod}}</span>
+          {{#if heatData.engineHeat}}
+            <span class="mini-label">|</span>
+            <span class="mini-label">Engine +{{heatData.engineHeat}}</span>
+          {{/if}}
         </div>
         {{#if heatData.shutdown}}
           <div class="hint">SHUTDOWN (heat). Attacks are blocked until cleared (restart logic TBD).</div>
@@ -638,6 +677,9 @@
         <a class="crit-destroy" title="{{#if s.destroyed}}Restore{{else}}Mark Destroyed{{/if}}">
           {{#if s.destroyed}}🛠{{else}}💥{{/if}}
         </a>
+        {{#if s.canRearMount}}
+          <a class="crit-rear {{#if s.rearMounted}}active{{/if}}" title="{{#if s.rearMounted}}Set Front-Mounted{{else}}Set Rear-Mounted{{/if}}">R</a>
+        {{/if}}
       {{/if}}
       {{#if s.uuid}}
         <a class="crit-clear" title="Remove">✕</a>
@@ -675,6 +717,9 @@
         <a class="crit-destroy" title="{{#if s.destroyed}}Restore{{else}}Mark Destroyed{{/if}}">
           {{#if s.destroyed}}🛠{{else}}💥{{/if}}
         </a>
+        {{#if s.canRearMount}}
+          <a class="crit-rear {{#if s.rearMounted}}active{{/if}}" title="{{#if s.rearMounted}}Set Front-Mounted{{else}}Set Rear-Mounted{{/if}}">R</a>
+        {{/if}}
       {{/if}}
       {{#if s.uuid}}
         <a class="crit-clear" title="Remove">✕</a>
@@ -711,6 +756,9 @@
         <a class="crit-destroy" title="{{#if s.destroyed}}Restore{{else}}Mark Destroyed{{/if}}">
           {{#if s.destroyed}}🛠{{else}}💥{{/if}}
         </a>
+        {{#if s.canRearMount}}
+          <a class="crit-rear {{#if s.rearMounted}}active{{/if}}" title="{{#if s.rearMounted}}Set Front-Mounted{{else}}Set Rear-Mounted{{/if}}">R</a>
+        {{/if}}
       {{/if}}
       {{#if s.uuid}}
         <a class="crit-clear" title="Remove">✕</a>
@@ -760,6 +808,9 @@
         <a class="crit-destroy" title="{{#if s.destroyed}}Restore{{else}}Mark Destroyed{{/if}}">
           {{#if s.destroyed}}🛠{{else}}💥{{/if}}
         </a>
+        {{#if s.canRearMount}}
+          <a class="crit-rear {{#if s.rearMounted}}active{{/if}}" title="{{#if s.rearMounted}}Set Front-Mounted{{else}}Set Rear-Mounted{{/if}}">R</a>
+        {{/if}}
       {{/if}}
       {{#if s.uuid}}
         <a class="crit-clear" title="Remove">✕</a>
@@ -795,6 +846,9 @@
         <a class="crit-destroy" title="{{#if s.destroyed}}Restore{{else}}Mark Destroyed{{/if}}">
           {{#if s.destroyed}}🛠{{else}}💥{{/if}}
         </a>
+        {{#if s.canRearMount}}
+          <a class="crit-rear {{#if s.rearMounted}}active{{/if}}" title="{{#if s.rearMounted}}Set Front-Mounted{{else}}Set Rear-Mounted{{/if}}">R</a>
+        {{/if}}
       {{/if}}
       {{#if s.uuid}}
         <a class="crit-clear" title="Remove">✕</a>
@@ -831,6 +885,9 @@
         <a class="crit-destroy" title="{{#if s.destroyed}}Restore{{else}}Mark Destroyed{{/if}}">
           {{#if s.destroyed}}🛠{{else}}💥{{/if}}
         </a>
+        {{#if s.canRearMount}}
+          <a class="crit-rear {{#if s.rearMounted}}active{{/if}}" title="{{#if s.rearMounted}}Set Front-Mounted{{else}}Set Rear-Mounted{{/if}}">R</a>
+        {{/if}}
       {{/if}}
       {{#if s.uuid}}
         <a class="crit-clear" title="Remove">✕</a>
@@ -929,6 +986,9 @@
         <a class="crit-destroy" title="{{#if s.destroyed}}Restore{{else}}Mark Destroyed{{/if}}">
           {{#if s.destroyed}}🛠{{else}}💥{{/if}}
         </a>
+        {{#if s.canRearMount}}
+          <a class="crit-rear {{#if s.rearMounted}}active{{/if}}" title="{{#if s.rearMounted}}Set Front-Mounted{{else}}Set Rear-Mounted{{/if}}">R</a>
+        {{/if}}
       {{/if}}
       {{#if s.uuid}}
         <a class="crit-clear" title="Remove">✕</a>
@@ -964,6 +1024,9 @@
         <a class="crit-destroy" title="{{#if s.destroyed}}Restore{{else}}Mark Destroyed{{/if}}">
           {{#if s.destroyed}}🛠{{else}}💥{{/if}}
         </a>
+        {{#if s.canRearMount}}
+          <a class="crit-rear {{#if s.rearMounted}}active{{/if}}" title="{{#if s.rearMounted}}Set Front-Mounted{{else}}Set Rear-Mounted{{/if}}">R</a>
+        {{/if}}
       {{/if}}
       {{#if s.uuid}}
         <a class="crit-clear" title="Remove">✕</a>
@@ -1000,6 +1063,9 @@
         <a class="crit-destroy" title="{{#if s.destroyed}}Restore{{else}}Mark Destroyed{{/if}}">
           {{#if s.destroyed}}🛠{{else}}💥{{/if}}
         </a>
+        {{#if s.canRearMount}}
+          <a class="crit-rear {{#if s.rearMounted}}active{{/if}}" title="{{#if s.rearMounted}}Set Front-Mounted{{else}}Set Rear-Mounted{{/if}}">R</a>
+        {{/if}}
       {{/if}}
       {{#if s.uuid}}
         <a class="crit-clear" title="Remove">✕</a>

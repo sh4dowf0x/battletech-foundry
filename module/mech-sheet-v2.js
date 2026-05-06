@@ -1,7 +1,7 @@
 // systems/atow-battletech/mech-sheet.js
 // lets fix ferro fibrous armor
 
-import { promptAndRollWeaponAttack, promptAndRollMeleeAttack, resolveAmmoExplosionEvent } from "./mech-attack.js";
+import { promptAndRollWeaponAttack, promptAndRollMeleeAttack, resolveAmmoExplosionEvent, rollHitLocation, applyMechDamageCluster, applyMechPilotHit, resolvePilotSeatbeltCheck } from "./mech-attack.js";
 import { ATOW_AUDIO_CUES, ATOW_AUDIO_EFFECTS, enqueueActorAudioCues, playActorMechExplosionEffect, playActorPowerRestoredAnnouncement, playActorShutdownAnnouncement } from "./audio-helper.js";
 
 const SYSTEM_ID = "atow-battletech";
@@ -224,6 +224,21 @@ function computeDerivedMovement(engineRatingRaw, tonnageRaw, opts = {}) {
   const jump = hasJumpJets ? (jumpJetCount > 0 ? Math.min(walk, jumpJetCount) : walk) : 0;
 
   return { walk, run, jump };
+}
+
+function getActorLegLossCount(actor) {
+  const flagCount = Number(actor?.getFlag?.(SYSTEM_ID, "legLoss") ?? actor?.flags?.[SYSTEM_ID]?.legLoss ?? 0) || 0;
+  const structureCount =
+    (isStructureLocDestroyed(actor, "ll") ? 1 : 0) +
+    (isStructureLocDestroyed(actor, "rl") ? 1 : 0);
+  return clamp(Math.max(flagCount, structureCount), 0, 2);
+}
+
+function applyLegLossMovementOverride(move, actor) {
+  const legLoss = getActorLegLossCount(actor);
+  if (!move || legLoss < 1) return move;
+  if (legLoss >= 2) return { ...move, walk: 0, run: 0, jump: 0 };
+  return { ...move, walk: 1, run: 2, jump: 0 };
 }
 
 
@@ -586,7 +601,7 @@ function countFerroFibrousCritSlots(actorSystem) {
       // Ignore continuation slots if present
       if (s.partOf !== undefined && s.partOf !== null) continue;
 
-      const label = String(s.label ?? "").trim();
+      const label = (typeof s === "string") ? String(s).trim() : String(s.label ?? "").trim();
       if (!label) continue;
 
       // Accept "Light Ferro Fibrous" as its own armor type first.
@@ -667,7 +682,7 @@ async function collectInstalledCritSlotTonnage(actor) {
       continue;
     }
 
-    const isAmmo = /^Ammo\s*\(/i.test(label) || docType === "ammo";
+    const isAmmo = _looksLikeAmmoLabel(label) || _looksLikeAmmoLabel(name) || docType === "ammo";
     if (isAmmo) {
       ammoSlots += 1;
 
@@ -679,8 +694,8 @@ async function collectInstalledCritSlotTonnage(actor) {
       continue;
     }
 
-    // Weapons are tracked separately (autoWeapons)
-    if (_WEAPON_TYPES.has(docType) || _looksLikeWeaponLabel(label)) continue;
+    // Weapons are tracked separately (autoWeapons). Some weapon-like items are stored as equipment.
+    if (_WEAPON_TYPES.has(docType) || _looksLikeWeaponLabel(label) || _looksLikeWeaponLabel(name)) continue;
 
     // Heat sinks are tracked separately
     if (isHeatSinkItemName(name) || isHeatSinkItemName(label)) continue;
@@ -767,6 +782,13 @@ function _ammoKeyFromType(typeText) {
   m = t.match(/\blbx\b[^\d]*(\d+)\b/i); // "lbx 10", "lbx ac/10", etc.
   if (m?.[1]) return _slugifyKey(`lbx-${m[1]}${isCluster ? "-cluster" : ""}`);
 
+  // Advanced Tactical Missile ammo: "ATM 6", "ATM 6 ER", "ATM 9 HE"
+  m = t.match(/\batm\s*[-/]?\s*(3|6|9|12)\b/i);
+  if (m?.[1]) {
+    const variant = /\ber\b/i.test(t) ? "-er" : (/\bhe\b/i.test(t) ? "-he" : "");
+    return _slugifyKey(`atm-${m[1]}${variant}`);
+  }
+
   // Gauss Rifle ammo ("Gauss", "Gauss Rifle", etc.)
   if (t === "gauss" || t.includes("gauss")) return "gauss";
 
@@ -780,6 +802,12 @@ function _ammoKeyFromType(typeText) {
 
   // Machine Gun
   if (t.includes("machine gun") || t === "mg") return "mg";
+
+  // Anti-Missile System
+  if (t === "ams" || /\banti\s*-?\s*missile\s+system\b/i.test(t)) return "ams";
+
+  // Arrow IV homing artillery ammunition
+  if (/\barrow\s*iv\b/i.test(t) && /\bhoming\b/i.test(t)) return "arrow-iv-homing";
 
   return null;
 }
@@ -843,9 +871,19 @@ function buildAmmoBinsFromCritSlots(actorSystem) {
 // ------------------------------------------------------------
 const _WEAPON_TYPES = new Set(["weapon", "mechWeapon"]);
 
+function _looksLikeAmmoLabel(label) {
+  const s = String(label ?? "").trim();
+  return /^ammo\s*(?:\(|$)/i.test(s) || /\bammo\b/i.test(s);
+}
+
 function _looksLikeWeaponLabel(label) {
   if (!label) return false;
   const s = String(label);
+  if (_looksLikeAmmoLabel(s)) return false;
+
+  if (/^\s*arrow\s*iv\s*system(?:\s*\(c\))?\s*$/i.test(s)) return true;
+  if (/^\s*ams\s*$/i.test(s) || /\banti\s*-?\s*missile\s+system\b/i.test(s)) return true;
+  if (/\batm\s*[-/]?\s*(3|6|9|12)\b/i.test(s)) return true;
 
   // LB-X Autocannons often appear as "LB 10-X AC" (or similar) and do not match the generic AC/10 pattern.
   // Accept a few common label styles:
@@ -855,7 +893,7 @@ function _looksLikeWeaponLabel(label) {
   if (/\blb\s*\d+\s*-\s*x\s*ac\b/i.test(s)) return true;
   if (/\blbx\b[^\d]*(\d+)\b/i.test(s)) return true;
 
-  return /(laser|ppc|\bac\s*\/?\s*\d+\b|\blrm\s*\d+\b|\bsrm\s*\d+\b|gauss|\bmg\b|machine gun|flamer|autocannon|rifle|plasma|pulse)/i.test(s);
+  return /(laser|ppc|\bac\s*\/?\s*\d+\b|\blrm\s*\d+\b|\bsrm\s*\d+\b|\batm\s*[-/]?\s*\d+\b|gauss|\bmg\b|machine gun|flamer|autocannon|rifle|plasma|pulse|artillery)/i.test(s);
 }
 
 function _critLocAbbr(locKey) {
@@ -920,6 +958,7 @@ async function buildAutoWeaponsFromCritSlots(actor) {
         label,
         mountId: String(s?.mountId ?? "").trim(),
         span,
+        rearMounted: Boolean(s?.rearMounted),
         destroyed,
         mountOrdinal: candidates.length
       });
@@ -944,16 +983,19 @@ async function buildAutoWeaponsFromCritSlots(actor) {
     const doc = c.uuid ? (resolved.get(c.uuid) ?? null) : null;
 
     // Determine weapon-ness
-    const isWeapon = doc
-      ? _WEAPON_TYPES.has(doc.type)
-      : _looksLikeWeaponLabel(c.label);
+    const isAmmo = _looksLikeAmmoLabel(c.label) || _looksLikeAmmoLabel(doc?.name);
+    const isWeapon = !isAmmo && (doc
+      ? (_WEAPON_TYPES.has(doc.type) || _looksLikeWeaponLabel(doc.name) || _looksLikeWeaponLabel(c.label))
+      : _looksLikeWeaponLabel(c.label));
     if (!isWeapon) continue;
 
     const o = doc ? doc.toObject() : { name: c.label, system: {} };
     o.id = `crit-${c.locKey}-${c.index}`;
     o.itemUuid = c.uuid || "";
     o.mountId = c.mountId || "";
-    o.weaponFireKey = c.mountId ? `mount:${c.mountId}` : `crit:${c.locKey}:${c.index}:${c.mountOrdinal}`;
+    o.mountLocKey = c.locKey;
+    o.rearMounted = Boolean(c.rearMounted);
+    o.weaponFireKey = `crit:${c.locKey}:${c.index}:${c.mountOrdinal}`;
     o.isWeapon = true;
     o.canDelete = false;
     o.canAttack = Boolean(c.uuid) && !c.destroyed;
@@ -961,7 +1003,7 @@ async function buildAutoWeaponsFromCritSlots(actor) {
 
     o.system = o.system ?? {};
     // Display-only mount location. (We don't persist this onto the source item.)
-    o.system.loc = _critLocAbbr(c.locKey);
+    o.system.loc = `${_critLocAbbr(c.locKey)}${o.rearMounted ? " (R)" : ""}`;
 
     weapons.push(o);
   }
@@ -980,7 +1022,7 @@ async function buildAutoWeaponsFromCritSlots(actor) {
 
 /**
  * Synthetic melee attacks (always available on every mech).
- * These are not Items; they are virtual rows so the sheet always has Punch/Kick available.
+ * These are not Items; they are virtual rows so the sheet always has physical attacks available.
  */
 function buildMeleeAttackEntries(actor, { tsmActive = false } = {}) {
   const tonnage = Number(actor?.system?.mech?.tonnage ?? actor?.system?.tonnage ?? 50) || 50;
@@ -1030,6 +1072,24 @@ function buildMeleeAttackEntries(actor, { tsmActive = false } = {}) {
       destroyed: false,
       _synthetic: true,
       _meleeType: "kick"
+    },
+    {
+      id: "melee-charge",
+      name: "Charge",
+      system: {
+        damage: "Move x tons/10",
+        heat: 0,
+        rangeShort: 1,
+        rangeMedium: 1,
+        rangeLong: 1,
+        location: "MELEE"
+      },
+      isWeapon: true,
+      canAttack: true,
+      canDelete: false,
+      destroyed: false,
+      _synthetic: true,
+      _meleeType: "charge"
     }
   ];
 }
@@ -1486,7 +1546,8 @@ function _buildXLGyroCritLabelUpdates(actor, enabledOverride = null, engineTextO
       mountId: null,
       span: 1,
       partOf: null,
-      destroyed: false
+      destroyed: false,
+      rearMounted: false
     }));
     return { updates, blocked };
   }
@@ -1787,6 +1848,7 @@ function buildCritMountIdUpdates(actor) {
   const updates = {};
   let changed = false;
   const crit = actor?.system?.crit ?? {};
+  const usedMountIds = new Set();
 
   for (const [locKey, locData] of Object.entries(crit)) {
     const slots = _getCritSlotsArray(actor?.system ?? {}, locKey);
@@ -1795,11 +1857,15 @@ function buildCritMountIdUpdates(actor) {
       if (slot?.partOf !== undefined && slot?.partOf !== null) continue;
 
       const uuid = String(slot?.uuid ?? "").trim();
-      const label = String(slot?.label ?? "").trim();
+      const label = (typeof slot === "string") ? String(slot).trim() : String(slot?.label ?? "").trim();
       if (!uuid && !label) continue;
 
       const span = clamp(Number(slot?.span ?? 1) || 1, 1, slots.length - i);
-      const mountId = String(slot?.mountId ?? "").trim() || createCritMountId();
+      const existingMountId = String(slot?.mountId ?? "").trim();
+      const mountId = (!existingMountId || usedMountIds.has(existingMountId))
+        ? createCritMountId()
+        : existingMountId;
+      usedMountIds.add(mountId);
 
       for (let j = 0; j < span; j++) {
         const idx = i + j;
@@ -1925,7 +1991,8 @@ function _ensureCritSlotsInitUpdates(actor, locKey) {
     mountId: null,
     span: 1,
     partOf: null,
-    destroyed: false
+    destroyed: false,
+    rearMounted: false
   }));
 
   return { [`system.crit.${locKey}.slots`]: arr };
@@ -2026,6 +2093,92 @@ async function setCustomStatus(actor, statusId, active, { name = null, icon = nu
   }
 }
 
+function _escapeHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function actorHasStatus(actor, statusId) {
+  if (!actor || !statusId) return false;
+  try {
+    if (actor.statuses?.has && actor.statuses.has(statusId)) return true;
+    if (Array.isArray(actor.statuses) && actor.statuses.includes(statusId)) return true;
+    return Array.from(actor.effects ?? []).some(e => {
+      if (e?.disabled) return false;
+      const sid = (e.getFlag?.("core", "statusId") ?? e.flags?.core?.statusId) ?? null;
+      if (sid === statusId) return true;
+      if (e.statuses?.has && e.statuses.has(statusId)) return true;
+      if (Array.isArray(e.statuses) && e.statuses.includes(statusId)) return true;
+      return false;
+    });
+  } catch (_) {
+    return false;
+  }
+}
+
+function getFallSideFromRoll(rollTotal) {
+  if (rollTotal === 1) return "front";
+  if (rollTotal === 2 || rollTotal === 3) return "right";
+  if (rollTotal === 4) return "rear";
+  return "left";
+}
+
+function getFallDamageClusters(damage) {
+  const clusters = [];
+  let remaining = Math.max(0, Math.ceil(Number(damage ?? 0) || 0));
+  while (remaining > 0) {
+    const cluster = Math.min(5, remaining);
+    clusters.push(cluster);
+    remaining -= cluster;
+  }
+  return clusters;
+}
+
+async function applyLegDestructionFallDamage(actor, { destroyedLegCount = 1 } = {}) {
+  if (!actor || String(actor.type ?? "").toLowerCase() !== "mech") return null;
+
+  const fallRoll = await (new Roll("1d6")).evaluate();
+  const side = getFallSideFromRoll(Number(fallRoll?.total ?? 1));
+  const tonnage = normalizeMechTonnage(actor?.system?.mech?.tonnage ?? actor?.system?.tonnage ?? 0);
+  const fallDamage = Math.max(1, Math.ceil((Number(tonnage) || 0) / 10));
+  const clusters = getFallDamageClusters(fallDamage);
+  const rolls = [fallRoll];
+  const hitRows = [];
+
+  await resolvePilotSeatbeltCheck(actor, { source: "Leg destroyed fall" }).catch(err => {
+    console.warn("AToW Battletech | Pilot seatbelt check failed", err);
+  });
+
+  for (const cluster of clusters) {
+    const locResult = await rollHitLocation(side);
+    if (locResult?.roll) rolls.push(locResult.roll);
+    const loc = locResult?.loc ?? "ct";
+    const result = await applyMechDamageCluster(actor, loc, cluster, { side });
+    hitRows.push(`<li>${cluster} damage to <b>${_escapeHtml(String(loc).toUpperCase())}</b> (location roll ${locResult?.roll?.total ?? "?"})${result?.ok === false ? ` - ${_escapeHtml(result.reason ?? "not applied")}` : ""}</li>`);
+  }
+
+  await ChatMessage.create({
+    speaker: ChatMessage.getSpeaker({ actor }),
+    rolls,
+    content: [
+      `<div class="atow-chat-card atow-mech-attack">`,
+      `<header><b>Leg Destroyed Fall</b></header>`,
+      `<div><b>${_escapeHtml(actor.name ?? "Mech")}</b> falls after ${Number(destroyedLegCount ?? 1)} destroyed leg${Number(destroyedLegCount ?? 1) === 1 ? "" : "s"}.</div>`,
+      `<div><b>Fall:</b> ${fallRoll.total} - ${_escapeHtml(side)} side. Damage ${fallDamage}${tonnage ? ` (${tonnage} tons / 10)` : ""}.</div>`,
+      `<ul>${hitRows.join("")}</ul>`,
+      `<div><b>Movement:</b> Walking MP reduced to 1. Piloting Skill Rolls suffer +5 TN.</div>`,
+      `</div>`
+    ].join(""),
+    flags: { [SYSTEM_ID]: { action: "legDestroyedFall", destroyedLegCount } }
+  }).catch(err => console.warn("AToW Battletech | Leg-destroyed fall chat failed", err));
+
+  return { fallRoll, side, fallDamage };
+}
+
 async function applyStructureLocationDestruction(actor, locKey) {
   if (!actor || !locKey) return;
 
@@ -2120,15 +2273,33 @@ async function applyLegLossConsequences(actor) {
       (isStructureLocDestroyed(actor, "rl") ? 1 : 0);
 
     const prev = Number(actor.getFlag?.(SYSTEM_ID, "legLoss") ?? actor.flags?.[SYSTEM_ID]?.legLoss ?? 0) || 0;
+    const wasProne = actorHasStatus(actor, "prone");
 
     // Always keep the flag in sync (helps if a mech is imported with leg damage).
     if (count !== prev) {
       await actor.setFlag(SYSTEM_ID, "legLoss", clamp(count, 0, 2)).catch(() => {});
     }
 
+    const movementUpdates = {};
+    if (count >= 2) {
+      if (Number(actor.system?.movement?.walk ?? 0) !== 0) movementUpdates["system.movement.walk"] = 0;
+      if (Number(actor.system?.movement?.run ?? 0) !== 0) movementUpdates["system.movement.run"] = 0;
+      if (Number(actor.system?.movement?.jump ?? 0) !== 0) movementUpdates["system.movement.jump"] = 0;
+    } else if (count >= 1) {
+      if (Number(actor.system?.movement?.walk ?? 0) !== 1) movementUpdates["system.movement.walk"] = 1;
+      if (Number(actor.system?.movement?.run ?? 0) !== 2) movementUpdates["system.movement.run"] = 2;
+      if (Number(actor.system?.movement?.jump ?? 0) !== 0) movementUpdates["system.movement.jump"] = 0;
+    }
+    if (Object.keys(movementUpdates).length) {
+      await actor.update(movementUpdates, { atowLegLossConsequences: true }).catch(() => {});
+    }
+
     // Any leg loss = the mech falls prone (we keep it applied; GM can clear manually if needed).
     if (count >= 1) {
       await setCustomStatus(actor, "prone", true, { name: "Prone" });
+      if (count > prev && !wasProne) {
+        await applyLegDestructionFallDamage(actor, { destroyedLegCount: count });
+      }
     }
   } catch (err) {
     console.warn("AToW Battletech | applyLegLossConsequences failed", err);
@@ -2420,6 +2591,13 @@ function _ammoExplosionDamageForType(typeText) {
   // Machine Gun
   if (t.includes("machine gun") || t === "mg") return 400;
 
+  // Anti-Missile System
+  if (t === "ams" || /\banti\s*-?\s*missile\s+system\b/i.test(t)) return 48;
+
+  // Advanced Tactical Missile ammo. Raw explosion value is intentionally high enough
+  // to trip the modern 20-point cap while still recording the ammo as explosive.
+  if (/\batm\s*[-/]?\s*(3|6|9|12)\b/i.test(t)) return 100;
+
   // AC/20, AC/10, AC/5, AC/2
   let m = t.match(/\bac\s*\/\s*(\d+)\b/i) || t.match(/\bac\s*(\d+)\b/i);
   if (m?.[1]) {
@@ -2446,6 +2624,22 @@ function _ammoExplosionDamageForType(typeText) {
 
   // Unknown ammo type: no explosion damage
   return null;
+}
+
+const AMMO_EXPLOSION_DAMAGE_CAP = 20;
+const AMMO_EXPLOSION_CASE_DAMAGE_CAP = 10;
+const AMMO_EXPLOSION_CASE_II_DAMAGE_CAP = 1;
+
+function hasCaseIIProtection(_actor, _locKey) {
+  return false;
+}
+
+function cappedAmmoExplosionDamage(rawDamage, { caseProtected = false, caseIIProtected = false } = {}) {
+  const raw = Math.max(0, Number(rawDamage ?? 0) || 0);
+  const cap = caseIIProtected
+    ? AMMO_EXPLOSION_CASE_II_DAMAGE_CAP
+    : (caseProtected ? AMMO_EXPLOSION_CASE_DAMAGE_CAP : AMMO_EXPLOSION_DAMAGE_CAP);
+  return Math.min(raw, cap);
 }
 
 function _iterCritSlots(slots) {
@@ -2543,53 +2737,27 @@ async function applyExplosionDamage(actor, originLocKey, totalDamage) {
   let dmg = Number(totalDamage ?? 0) || 0;
   if (dmg <= 0) return;
 
-  let locKey = String(originLocKey);
-  let first = true;
-
-
-  const caseProtected = isLocationProtectedByCASE(actor, locKey);
+  const locKey = String(originLocKey);
   // We may touch multiple locations; batch into as few updates as possible.
   const updates = {};
 
-  // Safety cap to prevent pathological loops
-  for (let steps = 0; steps < 20 && dmg > 0 && locKey; steps++) {
-    const armorNode = actor.system?.armor?.[locKey];
-    const structNode = actor.system?.structure?.[locKey];
+  const armorNode = actor.system?.armor?.[locKey];
+  const structNode = actor.system?.structure?.[locKey];
 
-    const aMax = Number(armorNode?.max ?? 0) || 0;
-    const aCur = Number(armorNode?.dmg ?? 0) || 0;
-    const sMax = Number(structNode?.max ?? 0) || 0;
-    const sCur = Number(structNode?.dmg ?? 0) || 0;
+  const aMax = Number(armorNode?.max ?? 0) || 0;
+  const aCur = Number(armorNode?.dmg ?? 0) || 0;
+  const sMax = Number(structNode?.max ?? 0) || 0;
+  const sCur = Number(structNode?.dmg ?? 0) || 0;
 
-    const aRem = Math.max(0, aMax - aCur);
-    const sRem = Math.max(0, sMax - sCur);
+  const aRem = Math.max(0, aMax - aCur);
+  const sRem = Math.max(0, sMax - sCur);
 
-    const applyStructFirst = first; // origin: structure-first, transfers: normal (armor-first)
+  const tookS = Math.min(dmg, sRem);
+  if (tookS > 0) updates[`system.structure.${locKey}.dmg`] = clamp(sCur + tookS, 0, sMax);
+  dmg -= tookS;
 
-    if (applyStructFirst) {
-      const tookS = Math.min(dmg, sRem);
-      if (tookS > 0) updates[`system.structure.${locKey}.dmg`] = clamp(sCur + tookS, 0, sMax);
-      dmg -= tookS;
-
-      const tookA = Math.min(dmg, aRem);
-      if (tookA > 0) updates[`system.armor.${locKey}.dmg`] = clamp(aCur + tookA, 0, aMax);
-      dmg -= tookA;
-    } else {
-      const tookA = Math.min(dmg, aRem);
-      if (tookA > 0) updates[`system.armor.${locKey}.dmg`] = clamp(aCur + tookA, 0, aMax);
-      dmg -= tookA;
-
-      const tookS = Math.min(dmg, sRem);
-      if (tookS > 0) updates[`system.structure.${locKey}.dmg`] = clamp(sCur + tookS, 0, sMax);
-      dmg -= tookS;
-    }
-
-    if (dmg > 0) {
-      if (first && caseProtected) break;
-      locKey = _transferTarget(locKey);
-      first = false;
-    }
-  }
+  const tookA = Math.min(dmg, aRem);
+  if (tookA > 0) updates[`system.armor.${locKey}.dmg`] = clamp(aCur + tookA, 0, aMax);
 
   if (Object.keys(updates).length) {
     await actor.update(updates, { atowAmmoExplosion: true }).catch(() => {});
@@ -2623,6 +2791,7 @@ function _occupiedCritIndices(actor, locKey) {
 
     let label = String(slot?.label ?? "").trim();
     if (!label) label = _defaultCritLabel(actor, locKey, idx);
+    if (_isFerroFibrousCritLabel(label)) continue;
 
     const uuid = String(slot?.uuid ?? "");
     const occupied = Boolean(uuid) || Boolean(label);
@@ -2680,13 +2849,24 @@ async function _processAmmoExplosionQueue(actor) {
       // Play SFX once per explosion event
       playAtowSfx(AMMO_EXPLOSION_SFX, { volume: 1.0 });
 
-      const dmg = _ammoExplosionDamageForType(typeText);
-      if (!dmg) continue;
+      const rawDmg = _ammoExplosionDamageForType(typeText);
+      if (!rawDmg) continue;
+      const caseProtected = isLocationProtectedByCASE(actor, locKey);
+      const caseIIProtected = hasCaseIIProtection(actor, locKey);
+      const dmg = cappedAmmoExplosionDamage(rawDmg, { caseProtected, caseIIProtected });
+      const capNote = rawDmg !== dmg ? `; raw ${rawDmg} capped` : "";
+      const caseNote = caseIIProtected ? "CASE II reduces explosion damage to 1." : (caseProtected ? "CASE reduces explosion damage to 10." : "Explosion damage is capped at 20 and vents without transfer.");
 
       await ChatMessage.create({
         speaker: ChatMessage.getSpeaker({ actor }),
-        content: `<b>${actor.name}</b> suffers an <b>AMMO EXPLOSION</b> in <b>${String(locKey).toUpperCase()}</b>!<br/>Exploding ammo: <b>${label}</b><br/>Damage: <b>${dmg}</b> (${reason})`
+        content: `<b>${actor.name}</b> suffers an <b>AMMO EXPLOSION</b> in <b>${String(locKey).toUpperCase()}</b>!<br/>Exploding ammo: <b>${label}</b><br/>Damage: <b>${dmg}</b> (${reason}${capNote})<br/>${caseNote}`
       });
+
+      if (!caseProtected && !caseIIProtected) {
+        await applyMechPilotHit(actor, { reason: "Ammo explosion without CASE" }).catch(err => {
+          console.warn("AToW Battletech | Pilot hit from ammo explosion failed", err);
+        });
+      }
 
       await applyExplosionDamage(actor, locKey, dmg);
 
@@ -3053,61 +3233,6 @@ if (isMechDestroyed(actor)) return;
   });
 
 
-  // Footsteps SFX: play a stompy sound when a mech changes facing (60° increments).
-  // Runs client-side (no GM gating) so everyone hears it.
-  Hooks.on("preUpdateToken", (tokenDoc, changed) => {
-    try {
-      if (!tokenDoc) return;
-      if (!changed || !Object.prototype.hasOwnProperty.call(changed, "rotation")) return;
-
-      const actor = tokenDoc.actor;
-      if (!actor) return;
-      if (actor.type && actor.type !== "mech") return;
-      if (isMechDestroyed(actor)) return;
-
-      const oldRot = Number(tokenDoc.rotation ?? tokenDoc._source?.rotation ?? 0) || 0;
-      const newRot = Number(changed.rotation ?? 0) || 0;
-
-      // Compute minimal signed angular difference (wrap-safe).
-      const norm = (d) => ((d % 360) + 360) % 360;
-      let diff = norm(newRot) - norm(oldRot);
-      diff = ((diff + 540) % 360) - 180; // [-180, 180)
-      const ad = Math.abs(diff);
-
-      if (ad < 0.5) return;
-
-      // Only trigger on 60° facings (hex grid). Allow a tiny tolerance.
-      const steps = ad / 60;
-      const stepCountRaw = Math.round(steps);
-      if (stepCountRaw < 1) return;
-      if (Math.abs(steps - stepCountRaw) > 0.02) return;
-
-      // Don't overlap / spam: global lock + per-token debounce.
-      const now = Date.now();
-      const lockUntil = Number(_atowSfxState.footstepsLockUntil ?? 0) || 0;
-      if (lockUntil > now) return;
-
-      const key = tokenDoc.id ?? tokenDoc._id ?? actor.id;
-      const lastAt = Number(_atowSfxState.lastFootstepsAt.get(key) ?? 0) || 0;
-      if ((now - lastAt) < 200) return;
-
-      // If the user spins multiple facings at once, play up to 3 "stomps" sequentially.
-      const stepCount = Math.min(3, stepCountRaw);
-      const intervalMs = 350;
-
-      _atowSfxState.lastFootstepsAt.set(key, now);
-      _atowSfxState.footstepsLockUntil = now + (stepCount * intervalMs);
-
-      for (let i = 0; i < stepCount; i += 1) {
-        setTimeout(() => playAtowSfx(FOOTSTEPS_SFX, { volume: 0.5 }), i * intervalMs);
-      }
-    } catch (err) {
-      console.warn("AToW Battletech | footsteps rotation SFX failed", err);
-    }
-  });
-
-  
-
 // Prevent moving destroyed mechs (non-GM). This blocks token position updates.
 Hooks.on("preUpdateToken", (tokenDoc, changed, options, userId) => {
   try {
@@ -3358,6 +3483,10 @@ Hooks.on("canvasReady", async () => {
   Hooks.on("preUpdateActor", (actor, changed, options) => {
     try {
       if (actor?.type && actor.type !== "mech") return;
+      const flat = foundry.utils.flattenObject(changed ?? {});
+      if (Object.keys(flat).some(k => k.startsWith("system.structure."))) {
+        _atowLocDestroyState.set(actor.id, _getStructureDestroyedSnapshot(actor));
+      }
 
       // --- Structure (internal) damage: play "armor breached" when total structure dmg increases ---
       const structDelta = changed?.system?.structure;
@@ -3667,11 +3796,12 @@ export class AToWMechSheetV2 extends HandlebarsApplicationMixin(ActorSheetV2) {
       tsmRun = Math.ceil(tsmWalk * 1.5);
     }
 
-    const derivedMove = {
+    const derivedMoveRaw = {
       walk: Math.max(0, tsmWalk - heatMovePenalty),
       run: Math.max(0, tsmRun - heatMovePenalty),
       jump: Math.max(0, baseJump - heatMovePenalty)
     };
+    const derivedMove = applyLegLossMovementOverride(derivedMoveRaw, this.actor);
 
     context.derivedMove = derivedMove;
 
@@ -3709,9 +3839,15 @@ export class AToWMechSheetV2 extends HandlebarsApplicationMixin(ActorSheetV2) {
     // Weapons are derived from crit-slot installs (no more double-listing).
     const meleeEntries = buildMeleeAttackEntries(this.actor, { tsmActive });
     const autoWeapons = [...meleeEntries, ...(await buildAutoWeaponsFromCritSlots(this.actor))];
+    context.hasAMS = autoWeapons.some(w => {
+      const name = String(w?.name ?? "").trim().toLowerCase();
+      return name === "ams" || /\banti\s*-?\s*missile\s+system\b/i.test(name);
+    });
+    context.isAMSEnabled = this.actor?.getFlag?.(SYSTEM_ID, "amsEnabled") !== false;
 
     // Equipment is still embedded items (drag/drop into the loadout zone).
-    const equipmentDocs = items.filter(i => i.type === "equipment" || i.type === "gear");
+    // Weapon-like equipment items installed in crit slots are shown/counted as weapons.
+    const equipmentDocs = items.filter(i => (i.type === "equipment" || i.type === "gear") && !_looksLikeWeaponLabel(i.name));
     const other = items.filter(i => !["weapon", "mechWeapon", "equipment", "gear", "ammo"].includes(i.type));
     const equipment = equipmentDocs
       .map((i) => {
@@ -3765,9 +3901,17 @@ export class AToWMechSheetV2 extends HandlebarsApplicationMixin(ActorSheetV2) {
     context.pilotTracks = {
       hitsTaken,
       hits: [1, 2, 3, 4, 5, 6].map(n => ({ n, filled: n <= hitsTaken })),
-      consciousness: ["3", "5", "7", "10", "11", "Dead"].map(v => ({
-        v,
-        active: String(pilot.consciousness ?? "") === String(v)
+      consciousness: [
+        { v: "3", label: "3" },
+        { v: "5", label: "5" },
+        { v: "7", label: "7" },
+        { v: "10", label: "10" },
+        { v: "11", label: "11" },
+        { v: "Unconscious", label: "KO" },
+        { v: "Dead", label: "Dead" }
+      ].map(c => ({
+        ...c,
+        active: String(pilot.consciousness ?? "") === String(c.v)
       }))
     };
 
@@ -3980,6 +4124,7 @@ context.tonnageBreakdown = [
 // ---- Ammunition (derived from installed ammo in crit slots) ----
 context.ammoBins = buildAmmoBinsFromCritSlots(system);
 context.hasAmmoBins = (context.ammoBins?.length ?? 0) > 0;
+context.amsAmmo = context.ammoBins?.find?.(b => String(b.key ?? "") === "ams") ?? null;
 
 // Armor diagram helpers (Column 3)
 const DEFAULT_ARMOR = {
@@ -4183,13 +4328,18 @@ function _classifyCritLabel(label) {
   // Weapon-ish keywords (best-effort; we don't want to async resolve fromUuid for every slot)
   if (
     // Include LB-X autocannon label styles (e.g., "LB 10-X AC") so they don't fall into "system/other".
-    /(laser|ppc|ac\s*\/?\s*\d+|lrm\s*\d+|srm\s*\d+|\blb\s*\d+\s*-\s*x\s*ac\b|\blbx\b|gauss|mg\b|machine gun|flamer|autocannon|rifle|plasma|pulse)/i.test(label)
+    /(laser|ppc|ac\s*\/?\s*\d+|lrm\s*\d+|srm\s*\d+|\batm\s*[-/]?\s*\d+\b|\blb\s*\d+\s*-\s*x\s*ac\b|\blbx\b|gauss|mg\b|machine gun|flamer|autocannon|rifle|plasma|pulse|anti-missile|\bams\b)/i.test(label)
   ) {
     return { category: "weapon", iconClass: "fas fa-crosshairs" };
   }
 
   // Default fallback
   return { category: "system", iconClass: "fas fa-microchip" };
+}
+
+function _isFerroFibrousCritLabel(label) {
+  const compact = String(label ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  return compact.includes("ferrofibrous");
 }
 
 // Build renderable slot arrays, supporting multi-slot "span" (start slot only)
@@ -4235,6 +4385,9 @@ const buildSlots = (locKey, labels, offset = 0) => {
       : (isEmpty ? "EMPTY" : String(label ?? "").trim());
     let slotTag = (!continuation && span > 1) ? `${span} slots` : "";
     if (!continuation && category === "case") slotTag = "CASE";
+    const canRearMount = !continuation && ["ct", "lt", "rt"].includes(locKey) && category === "weapon" && (Boolean(uuid) || Boolean(label));
+    const rearMounted = Boolean(componentStartSlot?.rearMounted ?? stored?.rearMounted);
+    if (!continuation && canRearMount && rearMounted) slotTag = slotTag ? `${slotTag} | REAR` : "REAR";
     if (!continuation && destroyed && !isEmpty) slotTag = "DESTROYED";
 
     out.push({
@@ -4247,6 +4400,8 @@ const buildSlots = (locKey, labels, offset = 0) => {
       iconClass,
       displayName,
       slotTag,
+      rearMounted,
+      canRearMount,
       isEmpty,
       span,
       partOf: continuation ? partOf : null,
@@ -4315,6 +4470,8 @@ const otherDissipation = Math.max(0, Number(otherCoolingDissipation) || 0);
     const unvented = Number((heat.unvented ?? heatEffects.unvented ?? rawHeat) ?? rawHeat);
     const movePenalty = Number(heatEffects.movePenalty ?? 0) || 0;
     const fireMod = Number(heatEffects.fireMod ?? 0) || 0;
+    const engineHits = clamp(Math.floor(Number(critHits.engine ?? 0) || 0), 0, 3);
+    const engineHeat = Math.min(engineHits, 2) * 5;
     const shutdown = Boolean(heat.shutdown) || Boolean(heatEffects.shutdown?.active);
     const shutdownInfo = heatEffects.shutdown ?? {};
 
@@ -4338,6 +4495,8 @@ engineSinksRemoved: Math.max(0, (Number(engineMountedSinksAuto) || 0) - (Number(
       displayUnvented: clamp((Number.isFinite(unvented) ? unvented : rawHeat), 0, barMax),
       movePenalty,
       fireMod,
+      engineHits,
+      engineHeat,
       shutdown,
       shutdownInfo,
       scale: Array.from({ length: barMax }, (_, i) => {
@@ -4360,12 +4519,40 @@ engineSinksRemoved: Math.max(0, (Number(engineMountedSinksAuto) || 0) - (Number(
     const moved = tok?.document?.getFlag?.(SYSTEM_ID, "movedThisTurn");
     const mpSpent = tok?.document?.getFlag?.(SYSTEM_ID, "mpSpentThisTurn");
     const modeFlag = tok?.document?.getFlag?.(SYSTEM_ID, "moveMode");
+    const actorHasStatus = (statusId) => {
+      try {
+        if (this.actor?.statuses?.has && this.actor.statuses.has(statusId)) return true;
+        if (Array.isArray(this.actor?.statuses) && this.actor.statuses.includes(statusId)) return true;
+        return Array.from(this.actor?.effects ?? []).some(e => {
+          if (e?.disabled) return false;
+          const sid = (e.getFlag?.("core", "statusId") ?? e.flags?.core?.statusId) ?? null;
+          if (sid === statusId) return true;
+          if (e.statuses?.has && e.statuses.has(statusId)) return true;
+          if (Array.isArray(e.statuses) && e.statuses.includes(statusId)) return true;
+          return false;
+        });
+      } catch (_) {
+        return false;
+      }
+    };
+    const tokenHasStatus = (statusId) => {
+      const doc = tok?.document ?? tok ?? null;
+      try {
+        if (doc?.hasStatusEffect && doc.hasStatusEffect(statusId)) return true;
+      } catch (_) {}
+      try {
+        if (doc?.statuses?.has && doc.statuses.has(statusId)) return true;
+        if (Array.isArray(doc?.statuses) && doc.statuses.includes(statusId)) return true;
+      } catch (_) {}
+      return actorHasStatus(statusId);
+    };
 
     context.movementStatus = {
       moved: (moved === undefined || moved === null) ? "—" : String(Number(moved)),
       mpSpent: (mpSpent === undefined || mpSpent === null) ? "—" : String(Number(mpSpent)),
       mode: modeFlag ? String(modeFlag).toUpperCase() : "—"
     };
+    context.isProne = tokenHasStatus("prone");
 
 
     // ---- Status Window (Bottom Section) ----
@@ -4716,6 +4903,7 @@ engineSinksRemoved: Math.max(0, (Number(engineMountedSinksAuto) || 0) - (Number(
     html.find(".we-row").on("click", this._onWeaponRowClick.bind(this));
     html.find(".we-row").on("contextmenu", this._onWeaponRowContext.bind(this));
     html.find(".we-row[draggable='true']").on("dragstart", this._onLoadoutDragStart.bind(this));
+    html.find('input[name="name"]').on("change", this._onActorNameChange.bind(this));
     html.find(".ammo-table input[name^='system.ammoBins.'][name$='.current']").on("change", this._onAmmoBinCurrentChange.bind(this));
     html.find('input[name="system.pilot.gunnery"], input[name="system.pilot.piloting"]').on("change", this._onPilotSkillChange.bind(this));
     html.find('input[name="system.heat.value"]').on("change", this._onHeatValueChange.bind(this));
@@ -4746,21 +4934,22 @@ engineSinksRemoved: Math.max(0, (Number(engineMountedSinksAuto) || 0) - (Number(
     html.find('input[name="system.mech.xlGyro"]').on("change", this._onXLGyroChange.bind(this));
 
 
-// Engine-mounted sinks slider <-> number sync
-const $engSlider = html.find("[data-engine-sinks-slider]");
-const $engNumber = html.find("[data-engine-sinks-number]");
-if ($engSlider.length && $engNumber.length) {
-  $engSlider.on("input", (ev) => {
-    const v = ev.currentTarget.value;
-    $engNumber.val(v);
-    // Trigger a change so Foundry persists immediately (submitOnChange)
-    $engNumber.trigger("change");
-  });
-  $engNumber.on("input change", (ev) => {
-    const v = ev.currentTarget.value;
-    $engSlider.val(v);
-  });
-}
+    // Engine-mounted sinks slider <-> number sync. The range input has no name,
+    // so persist this explicitly instead of relying on generic form submission.
+    const $engSlider = html.find("[data-engine-sinks-slider]");
+    const $engNumber = html.find("[data-engine-sinks-number]");
+    if ($engSlider.length && $engNumber.length) {
+      const syncEngineSinkInputs = (value) => {
+        $engSlider.val(value);
+        $engNumber.val(value);
+      };
+
+      $engSlider.on("input", (ev) => syncEngineSinkInputs(ev.currentTarget.value));
+      $engSlider.on("change", this._onEngineSinksUsedChange.bind(this));
+
+      $engNumber.on("input", (ev) => syncEngineSinkInputs(ev.currentTarget.value));
+      $engNumber.on("change", this._onEngineSinksUsedChange.bind(this));
+    }
 
     // On open/render, ensure structure matches current tonnage (one-time, best-effort)
     this._ensureStructureFromTonnage().catch(() => {});
@@ -4780,6 +4969,7 @@ if ($engSlider.length && $engNumber.length) {
     html.find(".crit-clear").on("click", this._onCritClear.bind(this));
     html.find(".crit-slot").on("contextmenu", this._onCritClear.bind(this));
     html.find(".crit-destroy").on("click", this._onCritDestroyToggle.bind(this));
+    html.find(".crit-rear").on("click", this._onCritRearToggle.bind(this));
     html.find(".crit-add-case").on("click", this._onAddCase.bind(this));
     // Make drop-zones feel responsive
     html.find(".drop-zone").on("dragover", (ev) => ev.preventDefault());
@@ -4893,6 +5083,8 @@ if ($engSlider.length && $engNumber.length) {
     for (const row of rows) {
       const itemUuid = String(row?.dataset?.itemUuid ?? "").trim();
       const weaponFireKey = String(row?.dataset?.weaponFireKey ?? "").trim();
+      const weaponMountLoc = String(row?.dataset?.weaponMountLoc ?? "").trim();
+      const weaponRearMounted = String(row?.dataset?.weaponRearMounted ?? "").toLowerCase() === "true";
       if (!itemUuid || !weaponFireKey) continue;
 
       const name = String(row.querySelector?.(".we-name")?.textContent ?? "").trim() || "Weapon";
@@ -4912,6 +5104,8 @@ if ($engSlider.length && $engNumber.length) {
         tokenId: tokenDoc?.id ?? null,
         itemUuid,
         weaponFireKey,
+        weaponMountLoc,
+        weaponRearMounted,
         defaultSide: "front"
       });
 
@@ -5156,6 +5350,7 @@ if (zone === "crit") {
     updates[`system.crit.${loc}.slots.${i}.span`] = 1;
     updates[`system.crit.${loc}.slots.${i}.partOf`] = null;
     updates[`system.crit.${loc}.slots.${i}.destroyed`] = false;
+    updates[`system.crit.${loc}.slots.${i}.rearMounted`] = false;
   }
 
   // Start slot
@@ -5165,6 +5360,7 @@ if (zone === "crit") {
   updates[`system.crit.${loc}.slots.${startIndex}.span`] = span;
   updates[`system.crit.${loc}.slots.${startIndex}.partOf`] = null;
   updates[`system.crit.${loc}.slots.${startIndex}.destroyed`] = false;
+  updates[`system.crit.${loc}.slots.${startIndex}.rearMounted`] = false;
 
   // Continuation slots (rendered, disabled)
   for (let j = 1; j < span; j++) {
@@ -5175,6 +5371,7 @@ if (zone === "crit") {
     updates[`system.crit.${loc}.slots.${i}.span`] = 1;
     updates[`system.crit.${loc}.slots.${i}.partOf`] = startIndex;
     updates[`system.crit.${loc}.slots.${i}.destroyed`] = false;
+    updates[`system.crit.${loc}.slots.${i}.rearMounted`] = false;
   }
 
   await this.actor.update(updates);
@@ -5184,7 +5381,7 @@ if (zone === "crit") {
   // Weapons should be installed via crit slots (they will auto-appear in the list).
   if (dropped.parent?.id === this.actor.id) return;
 
-  if (_WEAPON_TYPES.has(dropped.type)) {
+  if (_WEAPON_TYPES.has(dropped.type) || _looksLikeWeaponLabel(dropped.name)) {
     ui.notifications?.info?.("Install weapons by dragging them into a crit slot.");
     return;
   }
@@ -5284,7 +5481,10 @@ if (zone === "crit") {
 
     const jumpJetInstalledCount = await countJumpJetComponentsFromCritSlots(this.actor);
 
-    const derived = computeDerivedMovement(engine, tonnage, { jumpJetCount: jumpJetInstalledCount });
+    const derived = applyLegLossMovementOverride(
+      computeDerivedMovement(engine, tonnage, { jumpJetCount: jumpJetInstalledCount }),
+      this.actor
+    );
     if (!derived) return;
 
     const updates = {};
@@ -5342,7 +5542,10 @@ if (zone === "crit") {
     
     // Movement derived from engine rating + (possibly changed) tonnage.
     const jumpJetInstalledCount = await countJumpJetComponentsFromCritSlots(this.actor);
-    const derivedMove = computeDerivedMovement(current?.mech?.engine, tonnage, { jumpJetCount: jumpJetInstalledCount });
+    const derivedMove = applyLegLossMovementOverride(
+      computeDerivedMovement(current?.mech?.engine, tonnage, { jumpJetCount: jumpJetInstalledCount }),
+      this.actor
+    );
     if (derivedMove) {
       if (Number(current?.movement?.walk) !== Number(derivedMove.walk)) updates["system.movement.walk"] = Number(derivedMove.walk);
       if (Number(current?.movement?.run) !== Number(derivedMove.run)) updates["system.movement.run"] = Number(derivedMove.run);
@@ -5411,6 +5614,16 @@ if (Object.keys(updates).length) {
     await this.actor.update({
       [rawName]: next
     });
+  }
+
+  async _onActorNameChange(event) {
+    event?.preventDefault?.();
+
+    const input = event?.currentTarget;
+    const next = String(input?.value ?? "").trim();
+    if (!next || next === this.actor?.name) return;
+
+    await this.actor.update({ name: next });
   }
 
   async _onHeatValueChange(event) {
@@ -5493,6 +5706,33 @@ if (Object.keys(updates).length) {
     });
   }
 
+  _getEngineSinksUsedBounds() {
+    const system = this.actor?.system ?? {};
+    const engineRating = parseEngineRating(system?.mech?.engine ?? "");
+    const auto = Math.max(0, Math.floor(Number(engineRating ? engineRating / 25 : system?.heat?.baseSinks ?? 10) || 0));
+    const min = auto > 10 ? 10 : 0;
+    return { min, max: auto };
+  }
+
+  async _onEngineSinksUsedChange(event) {
+    event?.preventDefault?.();
+    event?.stopPropagation?.();
+
+    const input = event?.currentTarget;
+    const { min, max } = this._getEngineSinksUsedBounds();
+    const raw = Number(input?.value ?? max);
+    const next = clamp(Number.isFinite(raw) ? Math.round(raw) : max, min, max);
+
+    const root = this.element;
+    const html = root ? (globalThis.jQuery?.(root) ?? globalThis.$?.(root) ?? null) : null;
+    html?.find?.("[data-engine-sinks-slider], [data-engine-sinks-number]")?.val?.(String(next));
+    if (input) input.value = String(next);
+
+    await this.actor.update({
+      "system.heat.engineSinks": next
+    });
+  }
+
   async _onArmorMaxChange(event) {
     event?.preventDefault?.();
 
@@ -5539,23 +5779,25 @@ if (Object.keys(updates).length) {
       return;
     }
 
-    // --- Synthetic melee entries (Punch/Kick) ---
+    // --- Synthetic melee entries (Punch/Kick/Charge) ---
     // These appear in the weapons list but are not embedded Items, so they won't have a resolvable UUID.
     const itemId = String(li?.dataset?.itemId ?? "").trim();
     const meleeType = String(li?.dataset?.meleeType ?? "").trim().toLowerCase()
       || (itemId.startsWith("melee-") ? itemId.replace(/^melee-/, "") : "");
-    if (meleeType === "punch" || meleeType === "kick") {
+    if (meleeType === "punch" || meleeType === "kick" || meleeType === "charge") {
       await promptAndRollMeleeAttack(this.actor, meleeType, { defaultSide: "front" });
       return;
     }
 
     const weaponFireKey = String(li?.dataset?.weaponFireKey ?? "").trim() || itemId;
+    const weaponMountLoc = String(li?.dataset?.weaponMountLoc ?? "").trim();
+    const weaponRearMounted = String(li?.dataset?.weaponRearMounted ?? "").toLowerCase() === "true";
     const uuid = String(li?.dataset?.itemUuid ?? "").trim();
     if (uuid) {
       const weapon = await fromUuid(uuid);
       if (!weapon) return;
       if (!_WEAPON_TYPES.has(weapon.type)) return;
-      await promptAndRollWeaponAttack(this.actor, weapon, { defaultSide: "front", weaponFireKey });
+      await promptAndRollWeaponAttack(this.actor, weapon, { defaultSide: "front", weaponFireKey, weaponMountLoc, weaponRearMounted });
       return;
     }
 
@@ -5563,7 +5805,7 @@ if (Object.keys(updates).length) {
     const weapon = this.actor.items.get(itemId);
     if (!weapon) return;
     if (!_WEAPON_TYPES.has(weapon.type)) return;
-    await promptAndRollWeaponAttack(this.actor, weapon, { defaultSide: "front", weaponFireKey });
+    await promptAndRollWeaponAttack(this.actor, weapon, { defaultSide: "front", weaponFireKey, weaponMountLoc, weaponRearMounted });
   }
 
 
@@ -5602,6 +5844,15 @@ if (isMechDestroyed(this.actor)) {
     if (track === "hitsTaken") {
       const v = Number(value);
       if (Number.isNaN(v)) return;
+      const current = Number(this.actor.system?.pilot?.hitsTaken ?? 0) || 0;
+      if (v === current + 1) {
+        await applyMechPilotHit(this.actor, { reason: "Manual pilot hit" });
+        return;
+      }
+      if (v > current + 1) {
+        ui.notifications?.warn?.("Apply pilot hits one at a time so each consciousness check is rolled.");
+        return;
+      }
       await this.actor.update({ "system.pilot.hitsTaken": v });
       return;
     }
@@ -5705,6 +5956,32 @@ async _onCritDestroyToggle(event) {
   await this.actor.update({ [`system.crit.${loc}.slots.${index}.destroyed`]: next });
 }
 
+async _onCritRearToggle(event) {
+  event.preventDefault();
+  event.stopPropagation();
+
+  const slotEl = event.target.closest(".crit-slot");
+  if (!slotEl) return;
+
+  const loc = String(slotEl.dataset.critLoc ?? "").toLowerCase();
+  const index = Number(slotEl.dataset.critIndex);
+  if (!["ct", "lt", "rt"].includes(loc) || Number.isNaN(index)) return;
+
+  const slots = this.actor.system?.crit?.[loc]?.slots ?? {};
+  const stored = slots?.[index] ?? {};
+  const startIndex = (stored?.partOf !== undefined && stored.partOf !== null) ? Number(stored.partOf) : index;
+  const start = slots?.[startIndex] ?? {};
+  const label = String(start?.label ?? "").trim();
+  const category = _classifyCritLabel(label).category;
+  if (category !== "weapon" || (!label && !start?.uuid)) {
+    ui.notifications?.warn?.("Only weapons in CT/LT/RT can be marked rear-mounted.");
+    return;
+  }
+
+  const next = !Boolean(start?.rearMounted);
+  await this.actor.update({ [`system.crit.${loc}.slots.${startIndex}.rearMounted`]: next });
+}
+
 async _onCritClear(event) {
   event.preventDefault();
 
@@ -5736,6 +6013,7 @@ async _onCritClear(event) {
     updates[`system.crit.${loc}.slots.${i}.span`] = 1;
     updates[`system.crit.${loc}.slots.${i}.partOf`] = null;
     updates[`system.crit.${loc}.slots.${i}.destroyed`] = false;
+    updates[`system.crit.${loc}.slots.${i}.rearMounted`] = false;
   }
 
   await this.actor.update(updates);

@@ -68,6 +68,164 @@
   background: var(--atow-bg);
 }
 
+/* Attack dialogs */
+.atow-vehicle-attack-dialog {
+  --attack-red: #df1f2d;
+  --attack-ink: #18110d;
+  --attack-paper: #f4ecdf;
+  --attack-row: #f5d8ca;
+  color: var(--attack-ink);
+  background: var(--attack-paper);
+  border: 4px solid var(--attack-red);
+  box-shadow: inset 0 0 0 2px var(--attack-paper), inset 0 0 0 4px var(--attack-red);
+  padding: 14px;
+  font-family: "Roboto Condensed", "Arial Narrow", Arial, sans-serif;
+}
+
+.atow-vehicle-attack-dialog .attack-card-header {
+  position: relative;
+  min-height: 58px;
+  margin-bottom: 12px;
+  padding: 8px 54px 8px 10px;
+  border-top: 3px solid var(--attack-red);
+  border-left: 3px solid var(--attack-red);
+}
+
+.atow-vehicle-attack-dialog .attack-card-header::after {
+  content: "";
+  position: absolute;
+  top: -3px;
+  right: 8px;
+  width: 46px;
+  height: 46px;
+  border-top: 3px solid var(--attack-red);
+  border-right: 3px solid var(--attack-red);
+  transform: rotate(45deg);
+  transform-origin: center;
+}
+
+.atow-vehicle-attack-dialog .attack-kicker {
+  color: var(--attack-red);
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.atow-vehicle-attack-dialog h2 {
+  margin: 0;
+  color: var(--attack-red);
+  border: 0;
+  font-size: 26px;
+  font-weight: 900;
+  line-height: 1.05;
+  text-transform: uppercase;
+}
+
+.atow-vehicle-attack-dialog .attack-summary-grid,
+.atow-vehicle-attack-dialog .attack-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.atow-vehicle-attack-dialog .attack-summary-grid {
+  grid-template-columns: 1fr 1fr auto;
+  align-items: stretch;
+  margin-bottom: 10px;
+}
+
+.atow-vehicle-attack-dialog .attack-summary-grid > div,
+.atow-vehicle-attack-dialog .attack-form-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.atow-vehicle-attack-dialog .attack-summary-grid span,
+.atow-vehicle-attack-dialog .attack-form-grid span {
+  color: var(--attack-red);
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.atow-vehicle-attack-dialog .attack-summary-grid strong {
+  min-height: 28px;
+  padding: 5px 8px;
+  background: #fff8ed;
+  border-bottom: 2px solid var(--attack-red);
+  font-size: 15px;
+}
+
+.atow-vehicle-attack-dialog .attack-mod-line,
+.atow-vehicle-attack-dialog .attack-warning-line,
+.atow-vehicle-attack-dialog .attack-note-line,
+.atow-vehicle-attack-dialog .attack-check-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 10px 0;
+}
+
+.atow-vehicle-attack-dialog .attack-mod-line {
+  padding: 7px 9px;
+  background: var(--attack-red);
+  color: white;
+  font-weight: 900;
+}
+
+.atow-vehicle-attack-dialog .attack-mod-chip {
+  padding: 2px 7px;
+  background: white;
+  color: var(--attack-red);
+  border-radius: 2px;
+  font-size: 12px;
+}
+
+.atow-vehicle-attack-dialog .attack-mod-none {
+  font-size: 13px;
+}
+
+.atow-vehicle-attack-dialog .attack-warning-line {
+  padding: 7px 9px;
+  background: #fff2c1;
+  border-left: 4px solid var(--attack-red);
+  font-weight: 800;
+}
+
+.atow-vehicle-attack-dialog .attack-form-grid input,
+.atow-vehicle-attack-dialog .attack-form-grid select {
+  width: 100%;
+  min-height: 30px;
+  border: 1px solid #d9b3a5;
+  border-radius: 0;
+  background: #fff8ed;
+  color: var(--attack-ink);
+}
+
+.atow-vehicle-attack-dialog .attack-form-grid label:nth-child(odd) {
+  background: var(--attack-row);
+}
+
+.atow-vehicle-attack-dialog .attack-form-grid label {
+  padding: 7px;
+}
+
+.atow-vehicle-attack-dialog .attack-note-line {
+  padding-top: 8px;
+  border-top: 2px solid var(--attack-red);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.atow-vehicle-attack-dialog .attack-check-line {
+  margin-bottom: 0;
+  font-weight: 900;
+}
+
 /* Resources */
 .atow .resources {
   display: grid;

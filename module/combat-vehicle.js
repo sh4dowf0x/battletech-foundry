@@ -76,6 +76,33 @@ function getActorTokenDocument(actor) {
   return null;
 }
 
+function parseFormInputValue(input) {
+  if (!input) return null;
+  if (input.type === "checkbox") return Boolean(input.checked);
+  if (input.type === "number") {
+    const raw = String(input.value ?? "").trim();
+    if (!raw) return 0;
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : 0;
+  }
+
+  const name = String(input.name ?? "").trim();
+  const numericNames = new Set([
+    "system.vehicle.tonnage",
+    "system.vehicle.bv",
+    "system.vehicle.movement.cruise",
+    "system.vehicle.movement.flank",
+    "system.crew.gunnery",
+    "system.crew.driving"
+  ]);
+  if (numericNames.has(name)) {
+    const n = Number(input.value ?? 0);
+    return Number.isFinite(n) ? n : 0;
+  }
+
+  return input.value ?? "";
+}
+
 export class ATOWCombatVehicleSheet extends HandlebarsApplicationMixin(ActorSheetV2) {
   constructor(...args) {
     super(...args);
@@ -203,6 +230,12 @@ export class ATOWCombatVehicleSheet extends HandlebarsApplicationMixin(ActorShee
     if (!root) return;
     this._injectWindowColumnToggle(root);
 
+    const form = root.matches?.("form.combat-vehicle-sheet") ? root : root.querySelector?.("form.combat-vehicle-sheet");
+    if (form && form.dataset.atowFormBound !== "1") {
+      form.dataset.atowFormBound = "1";
+      form.addEventListener("change", (event) => this._onFormValueChange(event));
+    }
+
     const portrait = root.querySelector('[data-edit="img"]');
     if (portrait && portrait.dataset.atowImgBound !== "1") {
       portrait.dataset.atowImgBound = "1";
@@ -248,6 +281,12 @@ export class ATOWCombatVehicleSheet extends HandlebarsApplicationMixin(ActorShee
         button.addEventListener("dragstart", (event) => this._onHeaderActionDragStart(event));
       }
     });
+
+    const dragHandle = root.querySelector?.("[data-combat-vehicle-drag-handle]");
+    if (dragHandle && dragHandle.dataset.atowBound !== "1") {
+      dragHandle.dataset.atowBound = "1";
+      dragHandle.addEventListener("dragstart", (event) => this._onActorDragStart(event));
+    }
     this._primeHeaderActionMacros(root).catch(err => {
       console.warn("ATOWCombatVehicleSheet | Failed to prime header action macros", err);
     });
@@ -372,6 +411,22 @@ export class ATOWCombatVehicleSheet extends HandlebarsApplicationMixin(ActorShee
     dt.effectAllowed = "copyMove";
   }
 
+  _onActorDragStart(event) {
+    if (!this.actor?.uuid) return;
+    const dt = event.dataTransfer;
+    if (!dt) return;
+
+    const payload = {
+      type: "Actor",
+      uuid: this.actor.uuid
+    };
+
+    dt.setData("application/json", JSON.stringify(payload));
+    dt.setData("text/json", JSON.stringify(payload));
+    dt.setData("text/plain", this.actor.name ?? "Combat Vehicle");
+    dt.effectAllowed = "copyMove";
+  }
+
   async _primeHeaderActionMacros(root) {
     const ensureMacro = game?.[SYSTEM_ID]?.api?.ensureHeaderActionMacro ?? null;
     if (typeof ensureMacro !== "function") return;
@@ -492,6 +547,7 @@ export class ATOWCombatVehicleSheet extends HandlebarsApplicationMixin(ActorShee
     next = clampInt(next, 0, max, 0);
 
     await this.actor.update({ [`system.armor.${loc}.dmg`]: next });
+    this.render(false);
   }
 
   async _onStructurePip(event) {
@@ -511,6 +567,7 @@ export class ATOWCombatVehicleSheet extends HandlebarsApplicationMixin(ActorShee
     next = clampInt(next, 0, max, 0);
 
     await this.actor.update({ [`system.structure.${loc}.dmg`]: next });
+    this.render(false);
   }
 
   async _onTrackBox(event) {
@@ -524,6 +581,23 @@ export class ATOWCombatVehicleSheet extends HandlebarsApplicationMixin(ActorShee
     const current = Number(foundry.utils.getProperty(this.actor, path) ?? 0) || 0;
     const next = (current === value) ? Math.max(0, value - 1) : value;
     await this.actor.update({ [path]: next });
+    this.render(false);
+  }
+
+  async _onFormValueChange(event) {
+    const input = event.target;
+    const name = String(input?.name ?? "").trim();
+    if (!name) return;
+
+    const value = parseFormInputValue(input);
+    await this.actor.update({ [name]: value });
+
+    if (
+      name === "system.vehicle.tonnage" ||
+      /^system\.armor\.[^.]+\.max$/.test(name)
+    ) {
+      this.render(false);
+    }
   }
 
   async _onWeaponDrop(event) {

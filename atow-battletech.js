@@ -1,5 +1,5 @@
 // atow-battletech.js (ROOT)
-// version 0.0.3
+// version 0.0.4
 
 import { ATOWCharacterSheet } from "./module/character-sheet.js";
 import { ATOWAbominationSheet } from "./module/abomination-sheet.js";
@@ -9,12 +9,15 @@ import { ATOWCharacterEquipmentSheet } from "./module/character-equipment.js";
 import { AToWMechSheetV2, ensureActorCritMountIds } from "./module/mech-sheet-v2.js";
 import { AToWMechWeaponSheet} from "./module/mech-weapon.js";
 import { ATOWCombatVehicleSheet } from "./module/combat-vehicle.js";
+import { ATOWDropshipSheet } from "./module/dropship-sheet.js";
+import { ATOWCompanySheet } from "./module/company-sheet.js";
 
 import { AToWMechEquipmentSheet } from "./module/mech-equipment.js";
 import { registerATOWCharacterWeaponSheet } from "./module/character-weapon.js";
 import { registerATOWCharacterArmorSheet } from "./module/character-armor.js";
-import { registerATOWAttackSockets } from "./module/mech-attack.js";
-import { registerAtowAudioHooks, playActorJumpjetEffect, playActorPowerRestoredAnnouncement, playActorShutdownAnnouncement } from "./module/audio-helper.js";
+import { registerATOWAttackSockets, rollHitLocation, applyMechDamageCluster, applyMechPilotHit, resolvePilotSeatbeltCheck } from "./module/mech-attack.js";
+import { registerAtowAudioHooks, playActorJumpjetEffect, playActorPowerRestoredAnnouncement, playActorShutdownAnnouncement, playRandomFootstepSequence, playTorsoTwistEffect } from "./module/audio-helper.js";
+import { registerAtowTerrainTools } from "./module/terrain.js";
 
 export const SYSTEM_ID = "atow-battletech";
 
@@ -71,6 +74,7 @@ Hooks.once("init", async () => {
   };
 
   registerAtowAudioHooks();
+  registerAtowTerrainTools(ATOW);
   if (globalThis.socketlib?.registerSystem) tryRegisterSystemSocket();
   Hooks.once("socketlib.ready", tryRegisterSystemSocket);
 
@@ -89,7 +93,9 @@ Hooks.once("init", async () => {
   CONFIG.Actor.typeLabels.mech = "Mech";
   CONFIG.Actor.typeLabels.vehicle = "Vehicle";
   CONFIG.Actor.typeLabels.wheeledvehicle = "Combat Vehicle";
+  CONFIG.Actor.typeLabels.dropship = "DropShip";
   CONFIG.Actor.typeLabels.abomination = "Abomination";
+  CONFIG.Actor.typeLabels.company = "Company";
 
   CONFIG.Item.typeLabels = CONFIG.Item.typeLabels ?? {};
   CONFIG.Item.typeLabels.characterSkill = "Skill";
@@ -104,12 +110,12 @@ Hooks.once("init", async () => {
 registerSystemSettings();
   registerHandlebarsHelpers();
 
-  const registerRelativeMovementKeybinding = (name, key, handler) => {
+  const registerRelativeMovementKeybinding = (name, key, handler, { precedence = CONST.KEYBINDING_PRECEDENCE.NORMAL } = {}) => {
     game.keybindings?.register?.(SYSTEM_ID, name, {
       name,
       editable: [{ key }],
       restricted: false,
-      precedence: CONST.KEYBINDING_PRECEDENCE.NORMAL,
+      precedence,
       onDown: () => {
         if (!game.settings.get(SYSTEM_ID, "relativeMovementKeys")) return false;
         const tokenDoc = getControlledMechTokenDocForKeybind();
@@ -124,6 +130,25 @@ registerSystemSettings();
   registerRelativeMovementKeybinding("moveBackward", "KeyS", (tokenDoc) => relativeMoveTokenOneStep(tokenDoc, { backward: true }));
   registerRelativeMovementKeybinding("turnLeft", "KeyA", (tokenDoc) => relativeTurnTokenOneStep(tokenDoc, { clockwise: false }));
   registerRelativeMovementKeybinding("turnRight", "KeyD", (tokenDoc) => relativeTurnTokenOneStep(tokenDoc, { clockwise: true }));
+  const relativeFacingPriority = CONST.KEYBINDING_PRECEDENCE.PRIORITY ?? CONST.KEYBINDING_PRECEDENCE.NORMAL;
+  registerRelativeMovementKeybinding("torsoTwistLeft", "KeyQ", (tokenDoc) => torsoTwistTokenOneStep(tokenDoc, { clockwise: false }), { precedence: relativeFacingPriority });
+  registerRelativeMovementKeybinding("torsoTwistRight", "KeyE", (tokenDoc) => torsoTwistTokenOneStep(tokenDoc, { clockwise: true }), { precedence: relativeFacingPriority });
+  game.keybindings?.register?.(SYSTEM_ID, "resetMovementToTurnStart", {
+    name: "Reset Movement to Turn Start",
+    editable: [{ key: "KeyZ", modifiers: ["Control"] }],
+    restricted: false,
+    precedence: CONST.KEYBINDING_PRECEDENCE.PRIORITY ?? CONST.KEYBINDING_PRECEDENCE.NORMAL,
+    onDown: () => {
+      const controlled = canvas?.tokens?.controlled ?? [];
+      const token = controlled.find(t => String(t?.actor?.type ?? "").toLowerCase() === "mech") ?? controlled[0] ?? null;
+      const tokenDoc = token?.document ?? game.combat?.combatant?.token ?? null;
+      if (!tokenDoc) return false;
+      const reset = game?.[SYSTEM_ID]?.api?.resetMovementToTurnStart;
+      if (typeof reset !== "function") return false;
+      reset({ tokenDoc }).catch?.(err => console.warn("AToW Battletech | reset movement keybind failed", err));
+      return true;
+    }
+  });
 
   // ------------------------------------------------
   // Status Effects (Token HUD list)
@@ -225,6 +250,7 @@ registerSystemSettings();
       mk("heavy-woods",   "Heavy Woods",   icon("heavy-woods")),
       mk("in-water",      "In Water",      icon("in-water")),
       mk("partial-cover", "Partial Cover", icon("partial-cover")),
+      mk("tagged",        "Tagged",        icon("tagged")),
 
       // Core AToW conditions
       mk("atow-shutdown",  "Shutdown", icon("shutdown")),
@@ -408,6 +434,26 @@ registerSystemSettings();
 
       if (repaired > 0) {
         console.info(`AToW Battletech | Repaired ${repaired} invalid status effect(s).`);
+      }
+
+      if (game.user?.isGM) {
+        const movementStatusIds = ["atow-walked", "atow-ran", "atow-jumped", "jumped"];
+        const seenActors = new Set();
+        const dedupeActor = async (actor) => {
+          const key = actor?.uuid ?? actor?.id;
+          if (!actor || !key || seenActors.has(key)) return;
+          seenActors.add(key);
+          for (const id of movementStatusIds) {
+            await _dedupeActorStatusEffects(actor, id);
+          }
+        };
+
+        for (const actor of actors) await dedupeActor(actor);
+        for (const scene of scenes) {
+          for (const tokenDoc of scene.tokens?.contents ?? []) {
+            await dedupeActor(tokenDoc?.actor);
+          }
+        }
       }
     } catch (err) {
       console.warn("AToW Battletech | Invalid status effect repair failed", err);
@@ -627,6 +673,18 @@ registerSystemSettings();
     label: "AToW Combat Vehicle Sheet"
   });
 
+  Actors.registerSheet(SYSTEM_ID, ATOWDropshipSheet, {
+    types: ["dropship"],
+    makeDefault: true,
+    label: "AToW DropShip Sheet"
+  });
+
+  Actors.registerSheet(SYSTEM_ID, ATOWCompanySheet, {
+    types: ["company"],
+    makeDefault: true,
+    label: "AToW Company Sheet"
+  });
+
   // Register the Skill item sheet
   Items.registerSheet(SYSTEM_ID, ATOWSkillSheet, {
     types: ["characterSkill"],
@@ -729,7 +787,20 @@ const setTokenStatusEffect = async (tokenLike, statusId, active = false) => {
   // On token actors / ActorDelta documents, Foundry's token-level status toggle path can
   // thrash configured status _ids and produce duplicate/not-found errors in v13.
   if (actor) {
-    await _setActorStatusEffectDirect(actor, statusId, active);
+    const queue = globalThis.__ATOW_BT_STATUS_EFFECT_QUEUE__ ??= new Map();
+    const actorKey = String(actor.uuid ?? actor.id ?? tokenDoc?.uuid ?? tokenDoc?.id ?? "actor");
+    const queueKey = `${actorKey}:${statusId}`;
+    const previous = queue.get(queueKey) ?? Promise.resolve();
+    const current = previous
+      .catch(() => {})
+      .then(() => _setActorStatusEffectDirect(actor, statusId, active));
+
+    queue.set(queueKey, current);
+    try {
+      await current;
+    } finally {
+      if (queue.get(queueKey) === current) queue.delete(queueKey);
+    }
 
     // Best-effort token icon cleanup for any legacy icon-path entries left behind.
     if (tokenDoc && iconPath && Array.isArray(tokenDoc.effects)) {
@@ -1011,11 +1082,24 @@ const _actorHasAnyStatus = (actor, statusIds) => {
 const _findActorStatusEffects = (actor, statusId) => {
   if (!actor || !statusId) return [];
   try {
+    const def = getStatusDef(statusId);
+    const defIcon = String(def?.icon ?? def?.img ?? "").trim();
+    const defName = String(def?.name ?? def?.label ?? "").trim().toLowerCase();
+    const idText = String(statusId ?? "").trim().toLowerCase();
+    const allowVisualMatch = idText.startsWith("atow-") || ["jumped", "light-woods", "heavy-woods", "in-water", "prone", "skidding", "partial-cover", "tagged"].includes(idText);
+
     return Array.from(actor.effects ?? []).filter(e => {
       const sid = (e.getFlag?.("core", "statusId") ?? e.flags?.core?.statusId) ?? null;
       if (sid === statusId) return true;
       if (e.statuses?.has && e.statuses.has(statusId)) return true;
       if (Array.isArray(e.statuses) && e.statuses.includes(statusId)) return true;
+      if (allowVisualMatch) {
+        const effectIcon = String(e.icon ?? e.img ?? "").trim();
+        if (defIcon && effectIcon === defIcon) return true;
+
+        const effectName = String(e.name ?? e.label ?? "").trim().toLowerCase();
+        if (defName && effectName === defName) return true;
+      }
       return false;
     });
   } catch (_) {}
@@ -1207,6 +1291,30 @@ const _setActorStatusEffectDirect = async (actor, statusId, active) => {
   for (const e of matches) await _disableEffect(e);
 };
 
+const _dedupeActorStatusEffects = async (actor, statusId, { active = null } = {}) => {
+  if (!actor || !statusId) return;
+  const matches = _findActorStatusEffects(actor, statusId);
+  if (!matches.length) return;
+
+  const desiredActive = active === null ? matches.some(e => !e.disabled) : !!active;
+  if (!desiredActive) {
+    for (const e of matches) {
+      if (!e?.disabled && typeof e.update === "function") await e.update({ disabled: true }).catch(() => {});
+      else if (typeof e?.delete === "function") await e.delete().catch(() => {});
+    }
+    return;
+  }
+
+  const keep = matches.find(e => !e.disabled) ?? matches[0];
+  if (keep?.disabled && typeof keep.update === "function") await keep.update({ disabled: false }).catch(() => {});
+
+  for (const e of matches) {
+    if (!e || e.id === keep?.id) continue;
+    if (!e.disabled && typeof e.update === "function") await e.update({ disabled: true }).catch(() => {});
+    else if (typeof e.delete === "function") await e.delete().catch(() => {});
+  }
+};
+
 
 // Register once
 if (!globalThis.__ATOW_BT_IMMOBILE_SYNC_REGISTERED__) {
@@ -1316,14 +1424,17 @@ Hooks.once("ready", async () => {
 
   const clearMoveStatuses = async (tokenDoc, { preserveTurnStart = false } = {}) => {
     if (!tokenDoc) return;
+    const actor = tokenDoc.actor;
     for (const id of Object.values(MOVE_EFFECT_IDS)) {
       await setTokenStatusEffect(tokenDoc, id, false);
+      await _dedupeActorStatusEffects(actor, id, { active: false });
     }
     // Legacy cleanup: older builds used a "jumped" status id.
     await setTokenStatusEffect(tokenDoc, "jumped", false);
     await tokenDoc.unsetFlag("atow-battletech", "moveMode");
     await tokenDoc.unsetFlag("atow-battletech", "movedThisTurn");
     await tokenDoc.unsetFlag("atow-battletech", "displacementThisTurn");
+    await tokenDoc.unsetFlag("atow-battletech", "terrainMpThisTurn");
     await tokenDoc.unsetFlag("atow-battletech", "jumpedThisTurn");
     await tokenDoc.unsetFlag("atow-battletech", "movementEndedThisTurn");
     await tokenDoc.unsetFlag("atow-battletech", "backwardUsedThisTurn");
@@ -1332,12 +1443,173 @@ Hooks.once("ready", async () => {
 
   const setMoveStatus = async (tokenDoc, mode) => {
     if (!tokenDoc) return;
+    const actor = tokenDoc.actor;
     // disable all, then enable one
     for (const [m, id] of Object.entries(MOVE_EFFECT_IDS)) {
       const active = (m === mode);
       await setTokenStatusEffect(tokenDoc, id, active);
+      await _dedupeActorStatusEffects(actor, id, { active });
     }
     await tokenDoc.setFlag("atow-battletech", "moveMode", mode);
+  };
+
+  const buildMovementResetSnapshot = (tokenDoc, combat = game.combat) => {
+    if (!tokenDoc) return null;
+    const actor = tokenDoc.actor;
+    const topLeft = { x: Number(tokenDoc.x ?? 0) || 0, y: Number(tokenDoc.y ?? 0) || 0 };
+    const facing = getTokenFacingDegrees(tokenDoc);
+    return {
+      stamp: getCombatStamp(combat),
+      x: topLeft.x,
+      y: topLeft.y,
+      rotation: Number(tokenDoc.rotation ?? 0) || 0,
+      nativeFacing: _getNativeFacing(tokenDoc),
+      aboutFaceDirection: _getAboutFaceDir(tokenDoc),
+      torsoFacing: tokenDoc.getFlag?.(SYSTEM_ID, "torsoFacing") ?? null,
+      turnStart: topLeft,
+      lastPos: topLeft,
+      facingStart: facing,
+      heat: actor?.type === "mech" ? getActorStoredHeat(actor) : null
+    };
+  };
+
+  const storeMovementResetSnapshot = async (tokenDoc, combat = game.combat) => {
+    const snapshot = buildMovementResetSnapshot(tokenDoc, combat);
+    if (!snapshot) return null;
+    await tokenDoc.setFlag(SYSTEM_ID, "movementResetSnapshot", snapshot);
+    return snapshot;
+  };
+
+  const resetActorHeatToSnapshot = async (actor, snapshot) => {
+    if (!actor || actor.type !== "mech") return;
+    const heat = Number(snapshot?.heat);
+    if (!Number.isFinite(heat)) return;
+    const max = Number(actor.system?.heat?.max ?? 30) || 30;
+    const priorEffects = actor.system?.heat?.effects ?? {};
+    const next = clamp(heat, 0, HEAT_HARD_CAP);
+    await actor.update({
+      "system.heat.value": next,
+      "system.heat.current": next,
+      "system.heat.max": max,
+      "system.heat.unvented": next,
+      "system.heat.effects.unvented": next,
+      "system.heat.dissipation": Number(actor.system?.heat?.dissipation ?? 0) || 0,
+      "system.heat.effects.movePenalty": Number(priorEffects.movePenalty ?? 0) || 0,
+      "system.heat.effects.fireMod": Number(priorEffects.fireMod ?? 0) || 0,
+      "system.heat.effects.shutdown": priorEffects.shutdown ?? {}
+    }).catch(() => {});
+  };
+
+  const movementResetLockedReason = (actor, tokenDoc, combat = game.combat) => {
+    if (!combat?.started) return "Movement reset requires active combat.";
+    if (!tokenDoc) return "No active mech token was found.";
+    if (!actor || actor.type !== "mech") return "Movement reset is only available for mechs.";
+    const activeTokenId = combat.combatant?.token?.id;
+    if (activeTokenId && tokenDoc.id !== activeTokenId) return "Only the active combatant can reset movement.";
+
+    const stamp = getCombatStamp(combat);
+    const trackerStamp = String(tokenDoc.getFlag(SYSTEM_ID, "turnStamp") ?? "");
+    if (trackerStamp !== stamp) return "This mech does not have a current turn-start snapshot yet.";
+
+    const weaponConsumed = tokenDoc.getFlag(SYSTEM_ID, "weaponFireConsumedThisTurn");
+    const weaponTracker = tokenDoc.getFlag(SYSTEM_ID, "weaponFireTracker") ?? {};
+    const weaponKeys = Array.isArray(weaponTracker?.keys) ? weaponTracker.keys : [];
+    if (weaponConsumed === true && String(weaponTracker?.stamp ?? "") === stamp && weaponKeys.length > 0) {
+      return "Movement cannot be reset after this mech has fired weapons.";
+    }
+
+    const lockStamp = String(tokenDoc.getFlag(SYSTEM_ID, "movementResetLockedStamp") ?? actor.getFlag?.(SYSTEM_ID, "movementResetLockedStamp") ?? "");
+    if (lockStamp === stamp) return "Movement cannot be reset after a physical attack or other irreversible action.";
+
+    const chargeStamp = String(tokenDoc.getFlag(SYSTEM_ID, "chargeAttackStamp") ?? actor.getFlag?.(SYSTEM_ID, "chargeAttackStamp") ?? "");
+    if (chargeStamp === stamp) return "Movement cannot be reset after a charge attempt.";
+
+    const irreversibleStamp = String(tokenDoc.getFlag(SYSTEM_ID, "movementIrreversibleStamp") ?? actor.getFlag?.(SYSTEM_ID, "movementIrreversibleStamp") ?? "");
+    if (irreversibleStamp === stamp) return "Movement cannot be reset after a movement-triggered roll has been resolved.";
+
+    return "";
+  };
+
+  const lockMovementResetForTurn = async (actor, tokenDoc, reason = "irreversible action") => {
+    if (!game.combat?.started) return;
+    const stamp = getCombatStamp(game.combat);
+    await actor?.setFlag?.(SYSTEM_ID, "movementIrreversibleStamp", stamp).catch?.(() => {});
+    await tokenDoc?.setFlag?.(SYSTEM_ID, "movementIrreversibleStamp", stamp).catch?.(() => {});
+    await tokenDoc?.setFlag?.(SYSTEM_ID, "movementIrreversibleReason", reason).catch?.(() => {});
+  };
+
+  const resetMovementToTurnStart = async ({ actor = null, tokenDoc = null } = {}) => {
+    tokenDoc = tokenDoc?.document ?? tokenDoc ?? null;
+    actor = actor ?? tokenDoc?.actor ?? null;
+    if (!tokenDoc && actor) {
+      tokenDoc = actor.getActiveTokens?.(true, true)?.[0]?.document ?? actor.getActiveTokens?.()?.[0]?.document ?? null;
+    }
+    if (!actor) actor = tokenDoc?.actor ?? null;
+
+    const blocked = movementResetLockedReason(actor, tokenDoc, game.combat);
+    if (blocked) {
+      ui.notifications?.warn?.(blocked);
+      return false;
+    }
+
+    const stamp = getCombatStamp(game.combat);
+    const snapshot = tokenDoc.getFlag(SYSTEM_ID, "movementResetSnapshot") ?? null;
+    if (!snapshot || String(snapshot.stamp ?? "") !== stamp) {
+      ui.notifications?.warn?.("No movement reset snapshot is available for this turn.");
+      return false;
+    }
+
+    const atowFlags = {
+      turnStart: snapshot.turnStart ?? { x: snapshot.x, y: snapshot.y },
+      lastPos: snapshot.lastPos ?? { x: snapshot.x, y: snapshot.y },
+      movedHexesThisTurn: 0,
+      turnedThisTurn: 0,
+      movedThisTurn: 0,
+      spacesMovedThisTurn: 0,
+      postureMpSpentThisTurn: 0,
+      displacementThisTurn: 0,
+      mpSpentThisTurn: 0,
+      terrainMpThisTurn: 0,
+      backwardUsedThisTurn: false,
+      jumpedThisTurn: false,
+      movementEndedThisTurn: false,
+      moveHeatApplied: 0,
+      moveHeatStamp: stamp,
+      turnStamp: stamp,
+      weaponFireConsumedThisTurn: false,
+      facingStart: Number(snapshot.facingStart ?? 0) || 0
+    };
+    if (snapshot.torsoFacing === null || snapshot.torsoFacing === undefined) atowFlags["-=torsoFacing"] = null;
+    else atowFlags.torsoFacing = snapshot.torsoFacing;
+
+    const update = {
+      x: Number(snapshot.x ?? tokenDoc.x ?? 0) || 0,
+      y: Number(snapshot.y ?? tokenDoc.y ?? 0) || 0,
+      rotation: Number(snapshot.rotation ?? tokenDoc.rotation ?? 0) || 0,
+      flags: { [SYSTEM_ID]: atowFlags }
+    };
+    if (snapshot.nativeFacing !== null && snapshot.nativeFacing !== undefined) {
+      foundry.utils.setProperty(update, getNativeFacingFlagPath(), snapshot.nativeFacing);
+    }
+    if (snapshot.aboutFaceDirection !== null && snapshot.aboutFaceDirection !== undefined) {
+      foundry.utils.setProperty(update, "flags.about-face.direction", snapshot.aboutFaceDirection);
+    }
+
+    await tokenDoc.update(update, { atowMovementReset: true, atowMoveSync: true });
+    await clearMoveStatuses(tokenDoc, { preserveTurnStart: true });
+    for (const [key, value] of Object.entries(atowFlags)) {
+      if (key.startsWith("-=")) continue;
+      await tokenDoc.setFlag(SYSTEM_ID, key, value);
+    }
+    if (snapshot.torsoFacing === null || snapshot.torsoFacing === undefined) await tokenDoc.unsetFlag(SYSTEM_ID, "torsoFacing").catch?.(() => {});
+    else await tokenDoc.setFlag(SYSTEM_ID, "torsoFacing", snapshot.torsoFacing);
+    await resetWeaponFireTrackingForCombatant(game.combat.combatant, game.combat).catch?.(() => {});
+    await resetActorHeatToSnapshot(actor, snapshot);
+    await storeMovementResetSnapshot(tokenDoc, game.combat);
+    refreshTokenConditionVisuals(tokenDoc);
+    actor?.sheet?.rendered && actor.sheet.render(false);
+    ui.notifications?.info?.(`${actor.name}: movement reset to turn start.`);
+    return true;
   };
 
   const measureGridSpaces = (fromXY, toXY) => {
@@ -1412,6 +1684,314 @@ Hooks.once("ready", async () => {
       if (Number.isFinite(cx) && Number.isFinite(cy)) return { x: cx, y: cy };
     }
     return { x, y };
+  };
+
+  const getTerrainAtTokenTopLeft = (x, y) => {
+    try {
+      const getTerrain = game?.[SYSTEM_ID]?.api?.terrain?.getTerrainForTokenPosition;
+      return (typeof getTerrain === "function") ? (getTerrain(null, { x, y }) ?? null) : null;
+    } catch (_) {
+      return null;
+    }
+  };
+
+  const getTerrainForTokenDestination = (tokenDoc, dest = null) => {
+    try {
+      const getTerrain = game?.[SYSTEM_ID]?.api?.terrain?.getTerrainForTokenPosition;
+      if (typeof getTerrain === "function") {
+        return getTerrain(tokenDoc, {
+          x: Number(dest?.x ?? tokenDoc?.x ?? 0) || 0,
+          y: Number(dest?.y ?? tokenDoc?.y ?? 0) || 0
+        }) ?? null;
+      }
+    } catch (_) {}
+    return getTerrainAtTokenTopLeft(dest?.x ?? tokenDoc?.x, dest?.y ?? tokenDoc?.y);
+  };
+
+  const hasTokenMovedToDestination = (tokenDoc, dest) => {
+    if (!tokenDoc || !dest) return false;
+    const fromX = Number(tokenDoc.x ?? 0) || 0;
+    const fromY = Number(tokenDoc.y ?? 0) || 0;
+    const toX = Number(dest.x ?? fromX) || 0;
+    const toY = Number(dest.y ?? fromY) || 0;
+    return Math.round(fromX) !== Math.round(toX) || Math.round(fromY) !== Math.round(toY);
+  };
+
+  const getTerrainEntryCostParts = (terrain) => {
+    const woods = String(terrain?.woods ?? "").toLowerCase();
+    const waterDepth = Number(terrain?.waterDepth ?? 0) || 0;
+    const parts = [];
+    if (woods === "light" || woods === "heavy") parts.push({ cost: 1, label: "Woods cost +1 MP to enter." });
+    if (waterDepth === 1) parts.push({ cost: 1, label: "Water depth 1 costs +1 MP to enter." });
+    if (terrain?.rough) parts.push({ cost: 1, label: "Rough terrain costs +1 MP to enter." });
+    return parts;
+  };
+
+  const getTerrainEntryMpCost = (tokenDoc, dest) => {
+    if (!hasTokenMovedToDestination(tokenDoc, dest)) return 0;
+
+    const terrain = getTerrainForTokenDestination(tokenDoc, {
+      x: Number(dest.x ?? tokenDoc.x ?? 0) || 0,
+      y: Number(dest.y ?? tokenDoc.y ?? 0) || 0
+    });
+    return getTerrainEntryCostParts(terrain).reduce((sum, part) => sum + part.cost, 0);
+  };
+
+  const getTerrainEntryCostLabel = (tokenDoc, dest) => {
+    if (!hasTokenMovedToDestination(tokenDoc, dest)) return "";
+    const terrain = getTerrainForTokenDestination(tokenDoc, {
+      x: Number(dest.x ?? tokenDoc.x ?? 0) || 0,
+      y: Number(dest.y ?? tokenDoc.y ?? 0) || 0
+    });
+    const labels = getTerrainEntryCostParts(terrain).map(part => part.label);
+    return labels.length ? ` ${labels.join(" ")}` : "";
+  };
+
+  const isEnteringWaterDepthOne = (tokenDoc, dest) => {
+    if (!hasTokenMovedToDestination(tokenDoc, dest)) return false;
+    const fromTerrain = getTerrainForTokenDestination(tokenDoc);
+    const toTerrain = getTerrainForTokenDestination(tokenDoc, {
+      x: Number(dest?.x ?? tokenDoc?.x ?? 0) || 0,
+      y: Number(dest?.y ?? tokenDoc?.y ?? 0) || 0
+    });
+    const fromDepth = Number(fromTerrain?.waterDepth ?? 0) || 0;
+    const toDepth = Number(toTerrain?.waterDepth ?? 0) || 0;
+    return fromDepth !== 1 && toDepth === 1;
+  };
+
+  const syncTerrainStatusForToken = async (tokenDoc, position = null) => {
+    if (!tokenDoc) return;
+    if (!game.user?.isGM) {
+      refreshTokenConditionVisuals(tokenDoc);
+      return;
+    }
+    const terrain = getTerrainForTokenDestination(tokenDoc, position);
+    const woods = String(terrain?.woods ?? "").toLowerCase();
+    const waterDepth = Number(terrain?.waterDepth ?? 0) || 0;
+    await setTokenStatusEffect(tokenDoc, "light-woods", woods === "light");
+    await setTokenStatusEffect(tokenDoc, "heavy-woods", woods === "heavy");
+    await setTokenStatusEffect(tokenDoc, "in-water", waterDepth > 0);
+    refreshTokenConditionVisuals(tokenDoc);
+  };
+
+  const SUBMERGED_FILTER_KEY = "__atowBattletechSubmergedFilter";
+  const PRONE_ROTATION_KEY = "__atowBattletechProneRotation";
+
+  const tokenHasStatus = (tokenDoc, statusId) => {
+    if (!tokenDoc || !statusId) return false;
+    try {
+      if (tokenDoc.hasStatusEffect) return !!tokenDoc.hasStatusEffect(statusId);
+    } catch (_) {}
+    const actor = tokenDoc.actor;
+    if (_actorHasStatus(actor, statusId)) return true;
+    try {
+      if (tokenDoc.statuses?.has) return tokenDoc.statuses.has(statusId);
+      if (Array.isArray(tokenDoc.statuses)) return tokenDoc.statuses.includes(statusId);
+    } catch (_) {}
+    return false;
+  };
+
+  const getLegLossPSRTNMod = (actor) => {
+    const legLoss = getActorLegLossCount(actor);
+    return legLoss >= 1 ? 5 : 0;
+  };
+
+  const getActorLegLossCount = (actor) => {
+    const flagCount = Number(actor?.getFlag?.(SYSTEM_ID, "legLoss") ?? actor?.flags?.[SYSTEM_ID]?.legLoss ?? 0) || 0;
+    const isDestroyed = (locKey) => {
+      const loc = actor?.system?.structure?.[locKey] ?? {};
+      const max = Number(loc.max ?? 0) || 0;
+      const dmg = Number(loc.dmg ?? 0) || 0;
+      return max > 0 && dmg >= max;
+    };
+    const structureCount = (isDestroyed("ll") ? 1 : 0) + (isDestroyed("rl") ? 1 : 0);
+    return Math.min(2, Math.max(0, flagCount, structureCount));
+  };
+
+  const getSubmergedFilterTarget = (tokenDoc) => {
+    const tokenObj = tokenDoc?.object ?? null;
+    return tokenObj?.mesh ?? tokenObj;
+  };
+
+  const getProneRotationTarget = (tokenDoc) => {
+    const tokenObj = tokenDoc?.object ?? null;
+    return tokenObj?.mesh ?? tokenObj;
+  };
+
+  const applyProneTokenRotation = (tokenDoc, active) => {
+    const target = getProneRotationTarget(tokenDoc);
+    if (!target) return;
+
+    const state = target[PRONE_ROTATION_KEY] ?? null;
+    if (!active) {
+      if (state?.active) {
+        if (typeof state.angle === "number") target.angle = state.angle;
+        else if (typeof state.rotation === "number") target.rotation = state.rotation;
+      }
+      target[PRONE_ROTATION_KEY] = null;
+      return;
+    }
+
+    if (!state?.active) {
+      target[PRONE_ROTATION_KEY] = {
+        active: true,
+        angle: (typeof target.angle === "number") ? target.angle : null,
+        rotation: (typeof target.rotation === "number") ? target.rotation : null
+      };
+    }
+
+    const base = target[PRONE_ROTATION_KEY];
+    if (typeof base.angle === "number") target.angle = base.angle + 90;
+    else if (typeof base.rotation === "number") target.rotation = base.rotation + (Math.PI / 2);
+  };
+
+  const applySubmergedTokenFilter = (tokenDoc, active) => {
+    const target = getSubmergedFilterTarget(tokenDoc);
+    if (!target) return;
+
+    const existing = target[SUBMERGED_FILTER_KEY] ?? null;
+    const filters = Array.isArray(target.filters) ? target.filters : [];
+    if (!active) {
+      if (!existing && !filters.some(f => f?.[SUBMERGED_FILTER_KEY])) return;
+      target.filters = filters.filter(f => f && f !== existing && !f?.[SUBMERGED_FILTER_KEY]);
+      target[SUBMERGED_FILTER_KEY] = null;
+      return;
+    }
+
+    if (existing && filters.includes(existing)) return;
+    const PIXIRef = globalThis.PIXI ?? null;
+    const FilterClass = PIXIRef?.ColorMatrixFilter ?? PIXIRef?.filters?.ColorMatrixFilter;
+    if (!FilterClass) return;
+
+    const filter = new FilterClass();
+    filter[SUBMERGED_FILTER_KEY] = true;
+    filter.matrix = [
+      0.55, 0.00, 0.08, 0, 0.02,
+      0.00, 0.78, 0.14, 0, 0.04,
+      0.05, 0.12, 1.25, 0, 0.16,
+      0.00, 0.00, 0.00, 1, 0.00
+    ];
+    target[SUBMERGED_FILTER_KEY] = filter;
+    target.filters = [...filters.filter(f => !f?.[SUBMERGED_FILTER_KEY]), filter];
+  };
+
+  const refreshSubmergedTokenVisual = (tokenDoc) => {
+    if (!tokenDoc) return;
+    const submerged = tokenHasStatus(tokenDoc, "in-water") && tokenHasStatus(tokenDoc, "prone");
+    applySubmergedTokenFilter(tokenDoc, submerged);
+  };
+
+  const refreshProneTokenVisual = (tokenDoc) => {
+    if (!tokenDoc) return;
+    applyProneTokenRotation(tokenDoc, tokenHasStatus(tokenDoc, "prone"));
+  };
+
+  const refreshTokenConditionVisuals = (tokenDoc) => {
+    refreshSubmergedTokenVisual(tokenDoc);
+    refreshProneTokenVisual(tokenDoc);
+  };
+
+  const refreshActorConditionVisuals = (actor) => {
+    if (!actor) return;
+    const tokens = actor.getActiveTokens?.(true, true) ?? [];
+    for (const token of tokens) refreshTokenConditionVisuals(token?.document ?? token);
+  };
+
+  const htmlEscape = (value) => {
+    const div = document.createElement("div");
+    div.textContent = String(value ?? "");
+    return div.innerHTML;
+  };
+
+  const getMechTonnage = (actor) => {
+    const candidates = [
+      actor?.system?.mech?.tonnage,
+      actor?.system?.mech?.tons,
+      actor?.system?.tonnage,
+      actor?.system?.tons,
+      actor?.system?.stats?.tonnage
+    ];
+    for (const value of candidates) {
+      const n = Number(value);
+      if (Number.isFinite(n) && n > 0) return n;
+    }
+    return 0;
+  };
+
+  const getFallClusters = (damage) => {
+    const clusters = [];
+    let remaining = Math.max(0, Math.ceil(Number(damage ?? 0) || 0));
+    while (remaining > 0) {
+      const cluster = Math.min(5, remaining);
+      clusters.push(cluster);
+      remaining -= cluster;
+    }
+    return clusters;
+  };
+
+  const getFallSideFromRoll = (rollTotal) => {
+    if (rollTotal === 1) return "front";
+    if (rollTotal === 2 || rollTotal === 3) return "right";
+    if (rollTotal === 4) return "rear";
+    return "left";
+  };
+
+  const resolveWaterDepthOnePsr = async (tokenDoc, pending = null) => {
+    if (!game.user?.isGM || !tokenDoc?.actor) return;
+    const stamp = String(pending?.stamp ?? "");
+    const resolvedStamp = String(tokenDoc.getFlag(SYSTEM_ID, "waterPsrResolvedStamp") ?? "");
+    if (stamp && resolvedStamp === stamp) return;
+
+    const actor = tokenDoc.actor;
+    const piloting = Number(actor.system?.pilot?.piloting ?? 0) || 0;
+    const legLossMod = getLegLossPSRTNMod(actor);
+    const tn = 8 + legLossMod;
+    const psr = await (new Roll(`2d6 + ${piloting}`)).evaluate();
+    await lockMovementResetForTurn(actor, tokenDoc, "water entry PSR");
+    const success = Number(psr?.total ?? 0) >= tn;
+    const speaker = ChatMessage.getSpeaker({ token: tokenDoc.object ?? tokenDoc, actor });
+    const title = `${htmlEscape(tokenDoc.name ?? actor.name ?? "Mech")} enters water depth 1`;
+    const rolls = [psr];
+    const lines = [
+      `<h3>Water Entry PSR</h3>`,
+      `<div><b>${title}</b></div>`,
+      `<div><b>Roll:</b> ${psr.total} (2d6 + Piloting ${piloting}) vs <b>TN ${tn}</b>${legLossMod ? ` (leg destroyed +${legLossMod})` : ""} -> <b>${success ? "PASS" : "FALL"}</b></div>`
+    ];
+
+    if (!success) {
+      const fallRoll = await (new Roll("1d6")).evaluate();
+      rolls.push(fallRoll);
+      const side = getFallSideFromRoll(Number(fallRoll?.total ?? 1));
+      const tonnage = getMechTonnage(actor);
+      const fallDamage = Math.max(1, Math.ceil(tonnage / 10));
+      const clusters = getFallClusters(fallDamage);
+      await setTokenStatusEffect(tokenDoc, "prone", true);
+      refreshTokenConditionVisuals(tokenDoc);
+      await resolvePilotSeatbeltCheck(actor, { source: "Water entry fall", token: tokenDoc.object ?? tokenDoc }).catch(err => {
+        console.warn("AToW Battletech | Pilot seatbelt check failed", err);
+      });
+      lines.push(`<div><b>Fall:</b> ${fallRoll.total} -> ${htmlEscape(side)} side. Damage ${fallDamage}${tonnage ? ` (${tonnage} tons / 10)` : ""}.</div>`);
+      lines.push(`<div><b>Clusters:</b> ${clusters.join(", ")}</div>`);
+
+      const hitRows = [];
+      for (const cluster of clusters) {
+        const locResult = await rollHitLocation(side);
+        if (locResult?.roll) rolls.push(locResult.roll);
+        const loc = locResult?.loc ?? "ct";
+        const result = await applyMechDamageCluster(actor, loc, cluster, { side });
+        hitRows.push(`<li>${cluster} damage to <b>${htmlEscape(loc.toUpperCase())}</b> (location roll ${locResult?.roll?.total ?? "?"})${result?.ok === false ? ` - ${htmlEscape(result.reason ?? "not applied")}` : ""}</li>`);
+      }
+      if (hitRows.length) lines.push(`<ul>${hitRows.join("")}</ul>`);
+    }
+
+    await ChatMessage.create({
+      speaker,
+      rolls,
+      content: `<div class="atow-water-psr">${lines.join("")}</div>`
+    });
+
+    if (stamp) await tokenDoc.setFlag(SYSTEM_ID, "waterPsrResolvedStamp", stamp);
+    await tokenDoc.unsetFlag(SYSTEM_ID, "waterPsrPending");
   };
 
   const measureHexSpaces = (fromXY, toXY, gridType) => {
@@ -1780,6 +2360,19 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
     return normalizeDegrees(tokenDoc?.rotation ?? 0);
   };
 
+  const getTokenTorsoFacingDegrees = (tokenDoc) => {
+    const raw = tokenDoc?.getFlag?.(SYSTEM_ID, "torsoFacing");
+    const n = Number(raw);
+    if (Number.isFinite(n)) return normalizeDegrees(n);
+    return getTokenFacingDegrees(tokenDoc);
+  };
+
+  const clearTokenTorsoTwist = async (tokenDoc, facing = null) => {
+    if (!tokenDoc?.setFlag) return;
+    const nextFacing = facing == null ? getTokenFacingDegrees(tokenDoc) : normalizeDegrees(facing);
+    await tokenDoc.setFlag(SYSTEM_ID, "torsoFacing", nextFacing).catch(() => {});
+  };
+
   const getTokenFacingDegreesAfterChanges = (tokenDoc, changes) => {
     const nativeDirChg = _getNativeFacingFromChanges(changes);
     if (nativeDirChg != null) return normalizeDegrees(nativeDirChg);
@@ -2009,6 +2602,10 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
 
   const relativeMoveTokenOneStep = async (tokenDoc, { backward = false } = {}) => {
     if (!canUseRelativeMovementKeybind(tokenDoc)) return false;
+    if (tokenHasStatus(tokenDoc, "prone")) {
+      ui.notifications?.warn?.("A prone mech cannot move normally. Use facing changes or the stand-up action.");
+      return false;
+    }
 
     const currentFacing = await ensureNativeFacingForToken(tokenDoc);
     const desiredAngle = normalizeDegrees(currentFacing + (backward ? 180 : 0));
@@ -2026,6 +2623,7 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
         }
       }
     });
+    playRandomFootstepSequence({ count: 2, gapMs: 180, volume: 0.5 }).catch?.(() => {});
     return true;
   };
 
@@ -2042,6 +2640,28 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
         }
       }
     });
+    return true;
+  };
+
+  const torsoTwistTokenOneStep = async (tokenDoc, { clockwise = false } = {}) => {
+    if (!canUseRelativeMovementKeybind(tokenDoc)) return false;
+
+    const legFacing = await ensureNativeFacingForToken(tokenDoc);
+    const step = getFacingStepDegrees();
+    const currentTorso = getTokenTorsoFacingDegrees(tokenDoc);
+    const currentDeltaSteps = Math.round(signedAngleDelta(legFacing, currentTorso) / step);
+    const nextDeltaSteps = clamp(currentDeltaSteps + (clockwise ? 1 : -1), -1, 1);
+    const nextTorso = normalizeDegrees(legFacing + (nextDeltaSteps * step));
+
+    await tokenDoc.update({
+      flags: {
+        [SYSTEM_ID]: {
+          facing: legFacing,
+          torsoFacing: nextTorso
+        }
+      }
+    }, { atowTorsoTwist: true });
+    playTorsoTwistEffect({ volume: 0.7 }).catch?.(() => {});
     return true;
   };
 
@@ -2098,6 +2718,12 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
 
     foundry.utils.setProperty(changes, getNativeFacingFlagPath(), desiredFacing);
 
+    const torsoPath = `flags.${SYSTEM_ID}.torsoFacing`;
+    const hasTorsoChange = foundry.utils.getProperty(changes, torsoPath) !== undefined;
+    if (!options?.atowTorsoTwist && !hasTorsoChange) {
+      foundry.utils.setProperty(changes, torsoPath, desiredFacing);
+    }
+
     if (hasRotationChange || (incomingFacing != null && _nativeFacingArtRotationEnabled())) {
       changes.rotation = _nativeFacingArtRotationEnabled()
         ? desiredFacing
@@ -2146,19 +2772,37 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
       container.removeChildren().forEach(child => child.destroy?.());
     }
 
-    const graphics = new PIXI.Graphics();
-    graphics.lineStyle(2, color, 0.95);
-    graphics.beginFill(color, 0.55);
-    graphics.moveTo(distance, 0);
-    graphics.lineTo(distance - 14, -8);
-    graphics.lineTo(distance - 14, 8);
-    graphics.lineTo(distance, 0);
-    graphics.endFill();
-    graphics.moveTo(0, 0);
-    graphics.lineTo(distance - 12, 0);
-    graphics.scale.set(scale, scale);
+    const makeArrow = ({ arrowColor, alpha = 0.55, arrowDistance = distance, arrowScale = scale, lineWidth = 2 } = {}) => {
+      const graphics = new PIXI.Graphics();
+      graphics.lineStyle(lineWidth, arrowColor, 0.95);
+      graphics.beginFill(arrowColor, alpha);
+      graphics.moveTo(arrowDistance, 0);
+      graphics.lineTo(arrowDistance - 14, -8);
+      graphics.lineTo(arrowDistance - 14, 8);
+      graphics.lineTo(arrowDistance, 0);
+      graphics.endFill();
+      graphics.moveTo(0, 0);
+      graphics.lineTo(arrowDistance - 12, 0);
+      graphics.scale.set(arrowScale, arrowScale);
+      return graphics;
+    };
 
-    container.addChild(graphics);
+    const legArrow = makeArrow({ arrowColor: color });
+    container.addChild(legArrow);
+
+    const torsoFacing = getTokenTorsoFacingDegrees(token.document);
+    if (torsoFacing != null && Math.abs(signedAngleDelta(facing, torsoFacing)) > 0.0001) {
+      const torsoArrow = makeArrow({
+        arrowColor: 0x36d7ff,
+        alpha: 0.72,
+        arrowDistance: distance * 0.78,
+        arrowScale: scale * 0.9,
+        lineWidth: 3
+      });
+      torsoArrow.angle = signedAngleDelta(facing, torsoFacing);
+      container.addChild(torsoArrow);
+    }
+
     container.x = width / 2;
     container.y = height / 2;
     container.angle = facing;
@@ -2168,7 +2812,9 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
   };
 
   ATOW.api.getTokenFacingDegrees = getTokenFacingDegrees;
+  ATOW.api.getTokenTorsoFacingDegrees = getTokenTorsoFacingDegrees;
   ATOW.api.ensureTokenFacing = ensureNativeFacingForToken;
+  ATOW.api.torsoTwistTokenOneStep = torsoTwistTokenOneStep;
   ATOW.api.drawFacingIndicator = drawFacingIndicator;
 
   Hooks.on("canvasReady", async () => {
@@ -2282,6 +2928,17 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
       const mv = _computeBaseMoveFromEngine(nextEngine, nextTonnage);
       if (!mv) return;
 
+      const legLoss = getActorLegLossCount(actor);
+      if (legLoss >= 2) {
+        mv.walk = 0;
+        mv.run = 0;
+        mv.jump = 0;
+      } else if (legLoss >= 1) {
+        mv.walk = 1;
+        mv.run = 2;
+        mv.jump = 0;
+      }
+
       changes.system = changes.system ?? {};
       changes.system.movement = changes.system.movement ?? {};
       changes.system.movement.walk = mv.walk;
@@ -2316,14 +2973,15 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
     let jump = baseJump; // (heat jump penalties can be added later if desired)
 
     // Leg loss movement overrides (rest of battle)
-    const legLoss = Number(actor?.getFlag?.(SYSTEM_ID, "legLoss") ?? actor?.flags?.[SYSTEM_ID]?.legLoss ?? 0) || 0;
+    const legLoss = getActorLegLossCount(actor);
     if (legLoss >= 2) {
       walk = 0;
       run = 0;
       jump = 0;
     } else if (legLoss >= 1) {
       walk = 1;
-      run = 1;
+      run = 2;
+      jump = 0;
     }
 
 
@@ -2767,6 +3425,7 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
 
           // Apply the core "Jumped" status effect so attack TN modifiers are automatic.
           await setTokenStatusEffect(tokenDoc, "atow-jumped", true);
+          await _dedupeActorStatusEffects(actor, "atow-jumped", { active: true });
           return;
         }
       } finally {
@@ -2781,6 +3440,114 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
 
   // Expose for the mech sheet button.
   ATOW.api.beginJumpMove = beginJumpMove;
+
+  const spendPostureMovement = async (tokenDoc, actor, cost) => {
+    const stamp = getCombatStamp(game.combat);
+    const priorStamp = tokenDoc.getFlag(SYSTEM_ID, "turnStamp") ?? null;
+    const sameTurn = priorStamp === stamp;
+    const currentMp = Math.max(0, Number(tokenDoc.getFlag(SYSTEM_ID, "mpSpentThisTurn") ?? 0) || 0);
+    const currentPostureMp = Math.max(0, Number(tokenDoc.getFlag(SYSTEM_ID, "postureMpSpentThisTurn") ?? 0) || 0);
+    const currentMoved = Math.max(0, Number(tokenDoc.getFlag(SYSTEM_ID, "movedThisTurn") ?? 0) || 0);
+    const currentSpaces = Math.max(0, Number(tokenDoc.getFlag(SYSTEM_ID, "spacesMovedThisTurn") ?? 0) || 0);
+    const { run } = getMoveSpeeds(actor);
+    const maxMp = Number(run ?? 0) || 0;
+    const nextMp = currentMp + cost;
+    const nextPostureMp = currentPostureMp + cost;
+
+    if (maxMp > 0 && nextMp > maxMp) {
+      ui.notifications?.warn?.(`Not enough movement points remaining (${Math.max(0, maxMp - currentMp)} MP left, ${cost} MP required).`);
+      return false;
+    }
+
+    await tokenDoc.update({
+      flags: {
+        [SYSTEM_ID]: {
+          turnStamp: stamp,
+          turnStart: tokenDoc.getFlag(SYSTEM_ID, "turnStart") ?? { x: tokenDoc.x, y: tokenDoc.y },
+          lastPos: tokenDoc.getFlag(SYSTEM_ID, "lastPos") ?? { x: tokenDoc.x, y: tokenDoc.y },
+          mpSpentThisTurn: nextMp,
+          postureMpSpentThisTurn: nextPostureMp,
+          movedThisTurn: currentMoved,
+          spacesMovedThisTurn: currentSpaces,
+          moveMode: "walk"
+        }
+      }
+    }, { atowPostureMove: true });
+    return true;
+  };
+
+  const rollStandUpPSR = async (tokenDoc, actor) => {
+    const piloting = Number(actor?.system?.pilot?.piloting ?? 0) || 0;
+    const legLossMod = getLegLossPSRTNMod(actor);
+    const tn = 8 + legLossMod;
+    const roll = await (new Roll(`2d6 + ${piloting}`)).evaluate();
+    const success = Number(roll?.total ?? 0) >= tn;
+    await ChatMessage.create({
+      speaker: ChatMessage.getSpeaker({ token: tokenDoc.object ?? tokenDoc, actor }),
+      rolls: [roll],
+      content: [
+        `<div class="atow-chat-card atow-mech-attack">`,
+        `<header><b>Stand Up PSR</b></header>`,
+        `<div><b>${actor?.name ?? tokenDoc?.name ?? "Mech"}</b></div>`,
+        `<div><b>Roll:</b> ${roll.total} (2d6 + Piloting ${piloting}) vs <b>TN ${tn}</b>${legLossMod ? ` (leg destroyed +${legLossMod})` : ""} -> <b>${success ? "STANDS" : "FAILS"}</b></div>`,
+        `<div>${success ? "Prone removed. 2 MP spent and 1 Heat generated." : "The mech remains Prone. 2 MP spent and 1 Heat generated."}</div>`,
+        `</div>`
+      ].join(""),
+      flags: { [SYSTEM_ID]: { action: "standUpPSR", success } }
+    });
+    return { roll, success };
+  };
+
+  const toggleMechPosture = async ({ actor = null, tokenDoc = null } = {}) => {
+    if (!canvas?.ready) {
+      ui.notifications?.warn?.("Canvas is not ready.");
+      return false;
+    }
+    if (!game.combat?.started) {
+      ui.notifications?.warn?.("Changing prone/standing posture requires active combat.");
+      return false;
+    }
+
+    const activeCombatToken = game.combat?.combatant?.token ?? null;
+    if (!tokenDoc) tokenDoc = activeCombatToken;
+    if (!actor) actor = tokenDoc?.actor ?? null;
+    if (!tokenDoc || !actor || actor.type !== "mech") {
+      ui.notifications?.warn?.("Select or open a mech to change posture.");
+      return false;
+    }
+    if (activeCombatToken?.id && tokenDoc.id !== activeCombatToken.id) {
+      ui.notifications?.warn?.("Only the active combatant can change posture right now.");
+      return false;
+    }
+
+    const prone = tokenHasStatus(tokenDoc, "prone");
+    if (!prone) {
+      if (!(await spendPostureMovement(tokenDoc, actor, 1))) return false;
+      await lockMovementResetForTurn(actor, tokenDoc, "went prone");
+      await setTokenStatusEffect(tokenDoc, "prone", true);
+      await _dedupeActorStatusEffects(actor, "prone", { active: true });
+      refreshTokenConditionVisuals(tokenDoc);
+      await ChatMessage.create({
+        speaker: ChatMessage.getSpeaker({ token: tokenDoc.object ?? tokenDoc, actor }),
+        content: `<div class="atow-chat-card atow-mech-attack"><header><b>Go Prone</b></header><div><b>${actor.name}</b> goes Prone and spends 1 MP.</div></div>`,
+        flags: { [SYSTEM_ID]: { action: "goProne" } }
+      }).catch(() => {});
+      return true;
+    }
+
+    if (!(await spendPostureMovement(tokenDoc, actor, 2))) return false;
+    await addActorPendingHeat(actor, 1);
+    await lockMovementResetForTurn(actor, tokenDoc, "stand up PSR");
+    const psr = await rollStandUpPSR(tokenDoc, actor);
+    if (psr.success) {
+      await setTokenStatusEffect(tokenDoc, "prone", false);
+      await _dedupeActorStatusEffects(actor, "prone", { active: false });
+    }
+    refreshTokenConditionVisuals(tokenDoc);
+    return true;
+  };
+
+  ATOW.api.toggleMechPosture = toggleMechPosture;
 
   const resolveHeaderActionContext = ({ actorId = null, tokenId = null, actor = null, token = null } = {}) => {
     const scopedTokenDoc = token?.document ?? token ?? null;
@@ -2843,6 +3610,23 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
         await beginJumpMove({ actor: actorDoc, tokenDoc });
         return true;
 
+      case "posture":
+        if (!actorDoc || actorDoc.type !== "mech") {
+          ui.notifications?.warn?.("Select or open a mech to use this action.");
+          return false;
+        }
+        return await toggleMechPosture({ actor: actorDoc, tokenDoc });
+
+      case "reset-move":
+      case "resetmove":
+      case "resetmovement": {
+        if (!actorDoc || actorDoc.type !== "mech") {
+          ui.notifications?.warn?.("Select or open a mech to reset movement.");
+          return false;
+        }
+        return await resetMovementToTurnStart({ actor: actorDoc, tokenDoc });
+      }
+
       case "shutdown": {
         if (!actorDoc || actorDoc.type !== "mech") {
           ui.notifications?.warn?.("Select or open a mech to use this action.");
@@ -2869,6 +3653,17 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
         const next = !Boolean(actorDoc?.getFlag?.(SYSTEM_ID, "dazzleMode"));
         await actorDoc.setFlag(SYSTEM_ID, "dazzleMode", next);
         ui.notifications?.info?.(`${actorDoc.name}: Dazzle Mode ${next ? "enabled" : "disabled"}.`);
+        return true;
+      }
+
+      case "ams": {
+        if (!actorDoc || actorDoc.type !== "mech") {
+          ui.notifications?.warn?.("Select or open a mech to toggle AMS.");
+          return false;
+        }
+        const next = actorDoc.getFlag?.(SYSTEM_ID, "amsEnabled") === false;
+        await actorDoc.setFlag(SYSTEM_ID, "amsEnabled", next);
+        ui.notifications?.info?.(`${actorDoc.name}: AMS ${next ? "enabled" : "disabled"}.`);
         return true;
       }
 
@@ -2929,7 +3724,7 @@ return await runner({
     return macro ?? null;
   };
 
-  const executeWeaponAttack = async ({ actorId = null, tokenId = null, itemUuid = null, weaponFireKey = "", defaultSide = "front", actor = null, token = null } = {}) => {
+  const executeWeaponAttack = async ({ actorId = null, tokenId = null, itemUuid = null, weaponFireKey = "", weaponMountLoc = "", weaponRearMounted = false, defaultSide = "front", actor = null, token = null } = {}) => {
     const { actor: resolvedActor, tokenDoc } = resolveHeaderActionContext({ actorId, tokenId, actor, token });
     const actorDoc = tokenDoc?.actor ?? resolvedActor;
     if (!actorDoc || String(actorDoc.type ?? "").toLowerCase() !== "mech") {
@@ -2959,17 +3754,21 @@ return await runner({
     await promptAndRollWeaponAttack(actorDoc, weapon, {
       defaultSide: String(defaultSide ?? "front").trim().toLowerCase() || "front",
       attackerToken: tokenDoc ?? null,
-      weaponFireKey: String(weaponFireKey ?? "").trim()
+      weaponFireKey: String(weaponFireKey ?? "").trim(),
+      weaponMountLoc: String(weaponMountLoc ?? "").trim(),
+      weaponRearMounted: Boolean(weaponRearMounted)
     });
     return true;
   };
 
-  const buildWeaponAttackMacroCommand = ({ actorId = null, tokenId = null, itemUuid = null, weaponFireKey = "", defaultSide = "front" } = {}) => {
+  const buildWeaponAttackMacroCommand = ({ actorId = null, tokenId = null, itemUuid = null, weaponFireKey = "", weaponMountLoc = "", weaponRearMounted = false, defaultSide = "front" } = {}) => {
     const payload = JSON.stringify({
       actorId: actorId ? String(actorId) : null,
       tokenId: tokenId ? String(tokenId) : null,
       itemUuid: itemUuid ? String(itemUuid) : null,
       weaponFireKey: String(weaponFireKey ?? "").trim(),
+      weaponMountLoc: String(weaponMountLoc ?? "").trim(),
+      weaponRearMounted: Boolean(weaponRearMounted),
       defaultSide: String(defaultSide ?? "front").trim().toLowerCase() || "front"
     });
     return `const base = ${payload};
@@ -2997,18 +3796,20 @@ const mod = await import("/systems/${SYSTEM_ID}/module/mech-attack.js");
 return await mod.promptAndRollWeaponAttack(actorDoc, weapon, {
   defaultSide: base.defaultSide || "front",
   attackerToken: tokenDoc ?? null,
-  weaponFireKey: String(base.weaponFireKey ?? "").trim()
+  weaponFireKey: String(base.weaponFireKey ?? "").trim(),
+  weaponMountLoc: String(base.weaponMountLoc ?? "").trim(),
+  weaponRearMounted: Boolean(base.weaponRearMounted)
 });`;
   };
 
-  const ensureWeaponAttackMacro = async ({ label = null, img = null, actorId = null, tokenId = null, itemUuid = null, weaponFireKey = "", defaultSide = "front" } = {}) => {
+  const ensureWeaponAttackMacro = async ({ label = null, img = null, actorId = null, tokenId = null, itemUuid = null, weaponFireKey = "", weaponMountLoc = "", weaponRearMounted = false, defaultSide = "front" } = {}) => {
     const normalizedUuid = String(itemUuid ?? "").trim();
     const normalizedKey = String(weaponFireKey ?? "").trim();
     if (!normalizedUuid || !normalizedKey) return null;
 
     const macroLabel = String(label ?? "Weapon Attack").trim() || "Weapon Attack";
     const macroImg = String(img ?? "icons/svg/dice-target.svg").trim() || "icons/svg/dice-target.svg";
-    const command = buildWeaponAttackMacroCommand({ actorId, tokenId, itemUuid: normalizedUuid, weaponFireKey: normalizedKey, defaultSide });
+    const command = buildWeaponAttackMacroCommand({ actorId, tokenId, itemUuid: normalizedUuid, weaponFireKey: normalizedKey, weaponMountLoc, weaponRearMounted, defaultSide });
     const macroName = `AToW: ${macroLabel} [${normalizedKey}]`;
 
     let macro = game.macros?.find?.(m =>
@@ -3047,6 +3848,7 @@ return await mod.promptAndRollWeaponAttack(actorDoc, weapon, {
 
   ATOW.api.executeHeaderAction = executeHeaderAction;
   ATOW.api.runHeaderActionMacro = executeHeaderAction;
+  ATOW.api.resetMovementToTurnStart = resetMovementToTurnStart;
   ATOW.api.buildHeaderActionMacroCommand = buildHeaderActionMacroCommand;
   ATOW.api.ensureHeaderActionMacro = ensureHeaderActionMacro;
   ATOW.api.executeWeaponAttack = executeWeaponAttack;
@@ -3088,6 +3890,111 @@ return await mod.promptAndRollWeaponAttack(actorDoc, weapon, {
   };
 
   const getCombatStamp = (combat) => `${combat?.id ?? "no-combat"}:${combat?.round ?? 0}:${combat?.turn ?? 0}`;
+  const TAGGED_STATUS_ID = "tagged";
+  const engineHeatTurnState = globalThis.__ATOW_BT_ENGINE_HEAT_TURN_STATE__ ??= new Map();
+
+  const applyEngineHeatForCompletedTurn = async (entry) => {
+    const actor = entry?.tokenDoc?.actor ?? entry?.actor ?? null;
+    if (!actor || actor.type !== "mech") return;
+
+    const heat = getEngineHitHeatGeneration(actor);
+    if (heat <= 0) return;
+
+    const stamp = String(entry?.stamp ?? "");
+    const flagDoc = entry?.tokenDoc ?? actor;
+    const appliedStamp = String(flagDoc?.getFlag?.(SYSTEM_ID, "engineHeatAppliedStamp") ?? "");
+    if (stamp && appliedStamp === stamp) return;
+
+    await addActorPendingHeat(actor, heat);
+    if (stamp && flagDoc?.setFlag) await flagDoc.setFlag(SYSTEM_ID, "engineHeatAppliedStamp", stamp).catch(() => {});
+
+    const hits = clamp(Math.floor(Number(actor.system?.critHits?.engine ?? 0) || 0), 0, 3);
+    await ChatMessage.create({
+      speaker: ChatMessage.getSpeaker({ actor }),
+      content: `<b>${actor.name}</b> generates <b>+${heat} heat</b> from ${hits} engine hit${hits === 1 ? "" : "s"}.`
+    }).catch(() => {});
+  };
+
+  const rememberActiveEngineHeatTurn = (combat) => {
+    if (!combat?.started) return;
+    const combatKey = String(combat?.id ?? "no-combat");
+    const c = combat.combatant;
+    const tokenDoc = c?.token ?? null;
+    engineHeatTurnState.set(combatKey, {
+      stamp: getCombatStamp(combat),
+      actor: c?.actor ?? tokenDoc?.actor ?? null,
+      tokenDoc
+    });
+  };
+
+  try { rememberActiveEngineHeatTurn(game.combat); } catch (_) {}
+  Hooks.on("combatStart", (combat) => rememberActiveEngineHeatTurn(combat));
+
+  const tagEffectMatchesCombatant = (effect, combatant, combat) => {
+    const tag = effect?.flags?.[SYSTEM_ID]?.tag ?? effect?.getFlag?.(SYSTEM_ID, "tag") ?? null;
+    if (!tag) return false;
+    const combatId = String(tag.combatId ?? "");
+    if (combatId && combat?.id && combatId !== String(combat.id)) return false;
+
+    const sourceActorIds = new Set([
+      tag.attackerActorId,
+      tag.attackerActorUuid
+    ].filter(Boolean).map(String));
+    const currentActorIds = new Set([
+      combatant?.actorId,
+      combatant?.actor?.id,
+      combatant?.actor?.uuid,
+      combatant?.token?.actor?.id,
+      combatant?.token?.actor?.uuid
+    ].filter(Boolean).map(String));
+
+    const sourceTokenIds = new Set([
+      tag.attackerTokenId,
+      tag.attackerTokenUuid
+    ].filter(Boolean).map(String));
+    const currentTokenIds = new Set([
+      combatant?.tokenId,
+      combatant?.token?.id,
+      combatant?.token?.uuid
+    ].filter(Boolean).map(String));
+
+    for (const id of sourceActorIds) {
+      if (currentActorIds.has(id)) return true;
+    }
+    for (const id of sourceTokenIds) {
+      if (currentTokenIds.has(id)) return true;
+    }
+    return false;
+  };
+
+  const clearTaggedEffectsForCombatant = async (combatant, combat) => {
+    const actors = new Map();
+    for (const actor of game.actors?.contents ?? []) {
+      if (actor?.id) actors.set(actor.uuid ?? actor.id, actor);
+    }
+    for (const scene of game.scenes?.contents ?? []) {
+      for (const tokenDoc of scene.tokens?.contents ?? []) {
+        const actor = tokenDoc?.actor;
+        if (actor) actors.set(actor.uuid ?? `${scene.id}:${tokenDoc.id}`, actor);
+      }
+    }
+
+    for (const actor of actors.values()) {
+      const effects = Array.from(actor?.effects ?? []);
+      for (const effect of effects) {
+        const sid = (effect.getFlag?.("core", "statusId") ?? effect.flags?.core?.statusId) ?? null;
+        const hasTaggedStatus = sid === TAGGED_STATUS_ID ||
+          effect.statuses?.has?.(TAGGED_STATUS_ID) ||
+          (Array.isArray(effect.statuses) && effect.statuses.includes(TAGGED_STATUS_ID));
+        if (!hasTaggedStatus) continue;
+        if (!tagEffectMatchesCombatant(effect, combatant, combat)) continue;
+
+        if (!effect.disabled && typeof effect.update === "function") await effect.update({ disabled: true }).catch(() => {});
+        else if (typeof effect.delete === "function") await effect.delete().catch(() => {});
+      }
+    }
+  };
+
   const resetWeaponFireTrackingForCombatant = async (combatant, combat) => {
     const stamp = getCombatStamp(combat);
     const tracker = { stamp, keys: [] };
@@ -3121,8 +4028,22 @@ return await mod.promptAndRollWeaponAttack(actorDoc, weapon, {
     if (!game.user?.isGM) return;
     if (!("turn" in changed || "round" in changed)) return;
 
+    const combatKey = String(combat?.id ?? "no-combat");
+    const stamp = getCombatStamp(combat);
+    const previous = engineHeatTurnState.get(combatKey);
+    if (previous && previous.stamp !== stamp) {
+      try {
+        await applyEngineHeatForCompletedTurn(previous);
+      } catch (err) {
+        console.warn(`${SYSTEM_ID} | Failed to apply end-of-turn engine heat`, err);
+      }
+    }
+
     const c = combat.combatant;
     const tokenDoc = c?.token;
+    rememberActiveEngineHeatTurn(combat);
+
+    await clearTaggedEffectsForCombatant(c, combat);
     if (!tokenDoc) return;
 
     // Start of this combatant's turn: clear movement statuses and set turn start position
@@ -3137,8 +4058,10 @@ return await mod.promptAndRollWeaponAttack(actorDoc, weapon, {
     await tokenDoc.setFlag("atow-battletech", "turnedThisTurn", 0);
     await tokenDoc.setFlag("atow-battletech", "movedThisTurn", 0);      // spaces moved this turn (backwards-compat)
     await tokenDoc.setFlag("atow-battletech", "spacesMovedThisTurn", 0); // alias for spaces moved (preferred name)
+    await tokenDoc.setFlag("atow-battletech", "postureMpSpentThisTurn", 0);
     await tokenDoc.setFlag("atow-battletech", "displacementThisTurn", 0); // net displacement from turn start (used for TMM)
     await tokenDoc.setFlag("atow-battletech", "mpSpentThisTurn", 0);     // total MP spent (preferred)
+    await tokenDoc.setFlag("atow-battletech", "terrainMpThisTurn", 0);    // extra MP from terrain entry costs
     await tokenDoc.setFlag("atow-battletech", "backwardUsedThisTurn", false);
 
     // Facing bookkeeping
@@ -3158,9 +4081,10 @@ return await mod.promptAndRollWeaponAttack(actorDoc, weapon, {
       const stamp = getCombatStamp(combat);
       const heatActor = tokenDoc.actor ?? c.actor ?? null;
       if (heatResolvedStamp !== stamp) {
-        await resolveActorHeatForTurn(heatActor);
+        await resolveActorHeatForTurn(heatActor, { tokenDoc });
         await tokenDoc.setFlag("atow-battletech", "heatResolvedStamp", stamp);
       }
+      await storeMovementResetSnapshot(tokenDoc, combat);
     } catch (err) {
       console.warn(`${SYSTEM_ID} | Failed to resolve turn-start heat`, err);
     }
@@ -3175,9 +4099,11 @@ return await mod.promptAndRollWeaponAttack(actorDoc, weapon, {
 
     const activeTokenId = game.combat?.combatant?.token?.id;
     if (activeTokenId && tokenDoc.id !== activeTokenId) return;
+    const prone = tokenHasStatus(tokenDoc, "prone");
 
     // Allow our own jump teleport updates to bypass the normal movement accounting.
     if (options?.atowJumpMove) return;
+    if (options?.atowTorsoTwist) return;
 
     const isMove = ("x" in changes || "y" in changes);
     if (isMove && (("x" in changes) !== ("y" in changes))) return;
@@ -3186,6 +4112,12 @@ return await mod.promptAndRollWeaponAttack(actorDoc, weapon, {
     const isAboutFaceTurn = _aboutFaceActive() && (_getAboutFaceDirFromChanges(changes) != null);
     const isFacingTurn = isTurn || isNativeFacingTurn || isAboutFaceTurn;
     if (!isMove && !isFacingTurn) return;
+
+    if (prone && isMove) {
+      changes.x = tokenDoc.x;
+      changes.y = tokenDoc.y;
+      ui.notifications?.warn?.("A prone mech cannot move normally. It may only change facing or stand up.");
+    }
 
     // If movement has been explicitly ended (e.g., after a Jump), disallow further turning or translation.
     const ended = Boolean(tokenDoc.getFlag(SYSTEM_ID, "movementEndedThisTurn"));
@@ -3221,12 +4153,14 @@ return await mod.promptAndRollWeaponAttack(actorDoc, weapon, {
     let movedHexes = Number(tokenDoc.getFlag("atow-battletech", "movedHexesThisTurn") ?? 0) || 0;
     movedHexes = Math.max(0, Math.round(movedHexes));
     let turned = Number(tokenDoc.getFlag("atow-battletech", "turnedThisTurn") ?? 0) || 0;
+    let terrainMp = Number(tokenDoc.getFlag("atow-battletech", "terrainMpThisTurn") ?? 0) || 0;
     let backwardUsedThisTurn = Boolean(tokenDoc.getFlag("atow-battletech", "backwardUsedThisTurn"));
 
     const resetForTurn = (priorStamp !== stamp);
     if (resetForTurn) {
       movedHexes = 0;
       turned = 0;
+      terrainMp = 0;
       backwardUsedThisTurn = false;
       changes.flags = changes.flags ?? {};
       changes.flags["atow-battletech"] = changes.flags["atow-battletech"] ?? {};
@@ -3236,6 +4170,7 @@ return await mod.promptAndRollWeaponAttack(actorDoc, weapon, {
       changes.flags["atow-battletech"].movedHexesThisTurn = 0;
       changes.flags["atow-battletech"].turnedThisTurn = 0;
       changes.flags["atow-battletech"].mpSpentThisTurn = 0;
+      changes.flags["atow-battletech"].terrainMpThisTurn = 0;
       changes.flags["atow-battletech"].movedThisTurn = 0;
       changes.flags["atow-battletech"].spacesMovedThisTurn = 0;
       changes.flags["atow-battletech"].displacementThisTurn = 0;
@@ -3273,7 +4208,8 @@ return await mod.promptAndRollWeaponAttack(actorDoc, weapon, {
       const toFacing = getTokenFacingDegreesAfterChanges(tokenDoc, changes);
       deltaTurns = facingStepsFromRotationDelta(fromFacing, toFacing);
 
-      const spentNow = movedHexes + turned;
+      const postureMpSpent = Number(tokenDoc.getFlag(SYSTEM_ID, "postureMpSpentThisTurn") ?? 0) || 0;
+      const spentNow = movedHexes + turned + terrainMp + postureMpSpent;
       if (maxAllowedMp > 0 && (spentNow + deltaTurns) > maxAllowedMp) {
         // No MP remaining for turns, revert the facing change.
         if (isTurn) changes.rotation = tokenDoc.rotation;
@@ -3307,7 +4243,9 @@ return await mod.promptAndRollWeaponAttack(actorDoc, weapon, {
         // ignore
       }
 
-      const spentNow = movedHexes + turned + deltaTurns;
+      const terrainEntryCost = getTerrainEntryMpCost(tokenDoc, dest);
+      const postureMpSpent = Number(tokenDoc.getFlag(SYSTEM_ID, "postureMpSpentThisTurn") ?? 0) || 0;
+      const spentNow = movedHexes + turned + terrainMp + deltaTurns + postureMpSpent;
       if (backwardThisMove && (maxWalk <= 0 || spentNow >= maxWalk)) {
         changes.x = tokenDoc.x;
         changes.y = tokenDoc.y;
@@ -3336,6 +4274,7 @@ return await mod.promptAndRollWeaponAttack(actorDoc, weapon, {
         else if (rulerTotal > movedHexes) segment = rulerTotal - movedHexes;
       }
       segmentThisMove = Math.max(0, Math.round(segment));
+      const requiredMp = segmentThisMove + terrainEntryCost;
       try {
         if (game?.[SYSTEM_ID]?.config?.debugMoveTracking) {
           const cFrom = getCenterPointFromTopLeft(from.x, from.y);
@@ -3364,8 +4303,9 @@ return await mod.promptAndRollWeaponAttack(actorDoc, weapon, {
         }
       } catch (_) {}
 
-      if (maxAllowedMp > 0 && segmentThisMove > remaining) {
-        if (segmentThisMove <= 0 || remaining <= 0) {
+      if (maxAllowedMp > 0 && requiredMp > remaining) {
+        const terrainSuffix = getTerrainEntryCostLabel(tokenDoc, dest);
+        if (segmentThisMove <= 0 || remaining <= 0 || terrainEntryCost >= remaining) {
           changes.x = tokenDoc.x;
           changes.y = tokenDoc.y;
         } else {
@@ -3375,8 +4315,9 @@ return await mod.promptAndRollWeaponAttack(actorDoc, weapon, {
           const dx = to.x - from.x;
           const dy = to.y - from.y;
 
-        const scale = remaining / segmentThisMove;
-        const clamped = new PIXI.Point(from.x + dx * scale, from.y + dy * scale);
+          const movableSpaces = Math.max(0, remaining - terrainEntryCost);
+          const scale = Math.min(1, movableSpaces / segmentThisMove);
+          const clamped = new PIXI.Point(from.x + dx * scale, from.y + dy * scale);
 
           if (typeof canvas.grid.getTopLeft === "function") {
             const [gx, gy] = canvas.grid.getTopLeft(clamped.x, clamped.y);
@@ -3387,9 +4328,15 @@ return await mod.promptAndRollWeaponAttack(actorDoc, weapon, {
             changes.y = Math.round(clamped.y);
           }
         }
-        ui.notifications?.warn?.(walkOnlyThisUpdate
+        ui.notifications?.warn?.((walkOnlyThisUpdate
           ? "Movement limited to Walking MP after using backward movement."
-          : "Movement limited to Run speed for this turn.");
+          : "Movement limited to Run speed for this turn.") + terrainSuffix);
+
+        dest = {
+          x: ("x" in changes) ? changes.x : tokenDoc.x,
+          y: ("y" in changes) ? changes.y : tokenDoc.y
+        };
+        segmentThisMove = Math.max(0, Math.round(measureGridSpaces({ x: tokenDoc.x, y: tokenDoc.y }, dest)));
       }
     }
 
@@ -3400,6 +4347,7 @@ return await mod.promptAndRollWeaponAttack(actorDoc, weapon, {
 
       let movedHexesNext = movedHexes;
       let turnedNext = turned;
+      let terrainMpNext = terrainMp;
       let backwardUsedNext = backwardUsedThisTurn;
       let displacementNext = Number(tokenDoc.getFlag(SYSTEM_ID, "displacementThisTurn") ?? 0) || 0;
 
@@ -3407,6 +4355,16 @@ return await mod.promptAndRollWeaponAttack(actorDoc, weapon, {
         const finalDest = dest ?? { x: tokenDoc.x, y: tokenDoc.y };
         const segment = Math.max(0, segmentThisMove);
         movedHexesNext = Math.max(0, movedHexesNext + segment);
+        terrainMpNext = Math.max(0, terrainMpNext + getTerrainEntryMpCost(tokenDoc, finalDest));
+        if (segment > 0 && isEnteringWaterDepthOne(tokenDoc, finalDest)) {
+          const stampBase = game.combat?.started ? getCombatStamp(game.combat) : "no-combat";
+          sysFlags.waterPsrPending = {
+            stamp: `${stampBase}:${tokenDoc.id}:${Math.round(Number(finalDest.x ?? 0) || 0)}:${Math.round(Number(finalDest.y ?? 0) || 0)}`,
+            depth: 1,
+            x: finalDest.x,
+            y: finalDest.y
+          };
+        }
         sysFlags.lastPos = { x: finalDest.x, y: finalDest.y };
         backwardUsedNext = backwardUsedNext || backwardThisMove;
         displacementNext = measureTurnDisplacementSpaces(tokenDoc, finalDest);
@@ -3416,11 +4374,14 @@ return await mod.promptAndRollWeaponAttack(actorDoc, weapon, {
         turnedNext = Math.max(0, turnedNext + deltaTurns);
       }
 
-      const mpSpentNext = Math.max(0, movedHexesNext + turnedNext);
+      const postureMpNext = Math.max(0, Number(tokenDoc.getFlag(SYSTEM_ID, "postureMpSpentThisTurn") ?? 0) || 0);
+      const mpSpentNext = Math.max(0, movedHexesNext + turnedNext + terrainMpNext + postureMpNext);
       const mode = (backwardUsedNext || (walk > 0 && mpSpentNext <= walk)) ? "walk" : "run";
 
       sysFlags.movedHexesThisTurn = movedHexesNext;
       sysFlags.turnedThisTurn = turnedNext;
+      sysFlags.terrainMpThisTurn = terrainMpNext;
+      sysFlags.postureMpSpentThisTurn = postureMpNext;
       sysFlags.mpSpentThisTurn = mpSpentNext;
       sysFlags.movedThisTurn = movedHexesNext;
       sysFlags.spacesMovedThisTurn = movedHexesNext;
@@ -3435,6 +4396,26 @@ return await mod.promptAndRollWeaponAttack(actorDoc, weapon, {
 
 
   Hooks.on("updateToken", async (tokenDoc, changed, options) => {
+    if (("x" in changed || "y" in changed) && !options?.atowTerrainSync) {
+      syncTerrainStatusForToken(tokenDoc, {
+        x: ("x" in changed) ? changed.x : tokenDoc.x,
+        y: ("y" in changed) ? changed.y : tokenDoc.y
+      }).catch(err => {
+        console.warn("AToW Battletech | Terrain status sync failed", err);
+      });
+      setTimeout(() => refreshTokenConditionVisuals(tokenDoc), 0);
+    } else {
+      refreshTokenConditionVisuals(tokenDoc);
+    }
+
+    const terrainFlags = changed?.flags?.[SYSTEM_ID] ?? {};
+    if (terrainFlags.waterPsrPending && !options?.atowWaterPsr) {
+      resolveWaterDepthOnePsr(tokenDoc, terrainFlags.waterPsrPending).catch(err => {
+        console.warn("AToW Battletech | Water depth 1 PSR failed", err);
+        ui.notifications?.error?.("Water depth 1 PSR failed; see console.");
+      });
+    }
+
     // Only track movement during combat
     if (!game.combat?.started) return;
     if (options?.atowMoveSync) return;
@@ -3446,7 +4427,7 @@ return await mod.promptAndRollWeaponAttack(actorDoc, weapon, {
     const movedOrTurned =
       ("x" in changed || "y" in changed || "rotation" in changed) ||
       ("movedThisTurn" in f) || ("mpSpentThisTurn" in f) || ("moveMode" in f) ||
-      ("movedHexesThisTurn" in f) || ("turnedThisTurn" in f);
+      ("movedHexesThisTurn" in f) || ("turnedThisTurn" in f) || ("postureMpSpentThisTurn" in f);
     if (!movedOrTurned) return;
 
     const actor = tokenDoc.actor;
@@ -3470,6 +4451,7 @@ return await mod.promptAndRollWeaponAttack(actorDoc, weapon, {
     const clearMoveEffectsOnly = async () => {
       for (const id of Object.values(MOVE_EFFECT_IDS)) {
         await setTokenStatusEffect(tokenDoc, id, false);
+        await _dedupeActorStatusEffects(actor, id, { active: false });
       }
     };
 
@@ -3477,20 +4459,23 @@ return await mod.promptAndRollWeaponAttack(actorDoc, weapon, {
       for (const [m, id] of Object.entries(MOVE_EFFECT_IDS)) {
         const active = (m === mode);
         await setTokenStatusEffect(tokenDoc, id, active);
+        await _dedupeActorStatusEffects(actor, id, { active });
       }
     };
 
     const modeFlag = String(tokenDoc.getFlag("atow-battletech", "moveMode") ?? "").toLowerCase();
 
     const mpSpent = Number(tokenDoc.getFlag("atow-battletech", "mpSpentThisTurn") ?? 0) || 0;
+    const postureMpSpent = Number(tokenDoc.getFlag("atow-battletech", "postureMpSpentThisTurn") ?? 0) || 0;
 
     // If we Jumped (even if distance is 0), keep the Jump effect visible.
-    if (movedHexes < 1 && mpSpent < 1 && modeFlag !== "jump") {
+    const totalMpSpent = Math.max(0, mpSpent, postureMpSpent);
+    if (movedHexes < 1 && totalMpSpent < 1 && modeFlag !== "jump") {
       await clearMoveEffectsOnly();
       return;
     }
 
-    const mode = modeFlag || ((walk > 0 && mpSpent <= walk) ? "walk" : "run");
+    const mode = modeFlag || ((walk > 0 && totalMpSpent <= walk) ? "walk" : "run");
     await applyMoveEffectsOnly(mode);
 
     // Apply movement heat once per turn (based on hexes moved, not turns-in-place).
@@ -3574,6 +4559,11 @@ return await mod.promptAndRollWeaponAttack(actorDoc, weapon, {
     return Number.isFinite(n) ? n : 0;
   };
 
+  const getEngineHitHeatGeneration = (actor) => {
+    const hits = clamp(Math.floor(Number(actor?.system?.critHits?.engine ?? 0) || 0), 0, 3);
+    return Math.min(hits, 2) * 5;
+  };
+
   const addActorPendingHeat = async (actor, delta) => {
     if (!actor || actor.type !== "mech") return 0;
     const add = Number(delta ?? 0) || 0;
@@ -3636,6 +4626,20 @@ return await mod.promptAndRollWeaponAttack(actorDoc, weapon, {
     const sys = doc?.system ?? {};
     if (sys.isHeatSink === true) return true;
     return isHeatSinkItemName(doc?.name);
+  };
+
+  const _tokenHasStatus = (tokenDoc, statusId) => {
+    if (!tokenDoc || !statusId) return false;
+    try {
+      if (tokenDoc.hasStatusEffect) return !!tokenDoc.hasStatusEffect(statusId);
+    } catch (_) {}
+    const actor = tokenDoc.actor;
+    if (_actorHasStatus(actor, statusId)) return true;
+    try {
+      if (tokenDoc.statuses?.has) return tokenDoc.statuses.has(statusId);
+      if (Array.isArray(tokenDoc.statuses)) return tokenDoc.statuses.includes(statusId);
+    } catch (_) {}
+    return false;
   };
 
   const _fallbackHeatDissipationFromLabel = (label, { isDouble = false } = {}) => {
@@ -3793,7 +4797,7 @@ return await mod.promptAndRollWeaponAttack(actorDoc, weapon, {
         if (destroyed) continue;
 
         if (uuid) uuidSet.add(uuid);
-        starts.push({ uuid, label });
+        starts.push({ uuid, label, locKey });
       }
     }
 
@@ -3808,6 +4812,7 @@ return await mod.promptAndRollWeaponAttack(actorDoc, weapon, {
 
     let sinkCount = 0;
     let sinkDissipation = 0;
+    const sinkCountByLoc = {};
     let otherDissipation = 0;
 
     for (const st of starts) {
@@ -3822,6 +4827,7 @@ return await mod.promptAndRollWeaponAttack(actorDoc, weapon, {
       const isSink = doc ? _isHeatSinkDoc(doc) : isHeatSinkItemName(label);
       if (isSink) {
         sinkCount += 1;
+        sinkCountByLoc[st.locKey] = (sinkCountByLoc[st.locKey] ?? 0) + 1;
         sinkDissipation += diss;
       } else {
         otherDissipation += diss;
@@ -3831,11 +4837,31 @@ return await mod.promptAndRollWeaponAttack(actorDoc, weapon, {
     return {
       sinkCount: Math.max(0, sinkCount),
       sinkDissipation: Math.max(0, sinkDissipation),
+      sinkCountByLoc,
       otherDissipation: Math.max(0, otherDissipation)
     };
   };
 
-  const calcTotalCooling = async (actor) => {
+  const getSubmergedHeatSinkBonus = (actor, tokenDoc, { engineSinksUsed = 0, crit = null, embedded = null } = {}) => {
+    if (!actor || !tokenDoc) return 0;
+    if (!_tokenHasStatus(tokenDoc, "in-water")) return 0;
+
+    const critSinkCount = Number(crit?.sinkCount ?? 0) || 0;
+    const embeddedSinkCount = Number(embedded?.sinkCount ?? 0) || 0;
+    const installedSinkCount = (critSinkCount > 0) ? critSinkCount : embeddedSinkCount;
+    const prone = _tokenHasStatus(tokenDoc, "prone");
+
+    if (prone) {
+      return Math.max(0, Math.floor(Number(engineSinksUsed ?? 0) || 0) + Math.floor(installedSinkCount));
+    }
+
+    // Standing in depth-1 water submerges the legs. Only location-aware crit-slot
+    // sinks can receive this bonus; embedded equipment has no known location.
+    const byLoc = crit?.sinkCountByLoc ?? {};
+    return Math.max(0, Math.floor(Number(byLoc.ll ?? 0) || 0) + Math.floor(Number(byLoc.rl ?? 0) || 0));
+  };
+
+  const calcTotalCooling = async (actor, { tokenDoc = null } = {}) => {
     if (!actor) return 0;
 
     const sys = actor.system ?? {};
@@ -3859,19 +4885,24 @@ return await mod.promptAndRollWeaponAttack(actorDoc, weapon, {
     // Other cooling sources always stack.
     const otherDissipation = (crit.otherDissipation + embedded.otherDissipation);
 
-    const total = Math.max(0, baseCooling + installedSinkDissipation + otherDissipation);
+    const submergedBonus = getSubmergedHeatSinkBonus(actor, tokenDoc, { engineSinksUsed, crit, embedded });
+
+    const total = Math.max(0, baseCooling + installedSinkDissipation + otherDissipation + submergedBonus);
     return Math.round(total * 100) / 100;
   };
 
 
 
-  const resolveActorHeatForTurn = async (actor) => {
+  const resolveActorHeatForTurn = async (actor, { tokenDoc = null } = {}) => {
     if (!actor) return;
     if (actor.type && actor.type !== "mech") return;
 
     const storedCooling = Number(actor.system?.heat?.dissipation ?? NaN);
-    const computedCooling = await calcTotalCooling(actor);
-    const totalCooling = Number.isFinite(storedCooling) && storedCooling > 0 ? storedCooling : computedCooling;
+    const computedCooling = await calcTotalCooling(actor, { tokenDoc });
+    const baseComputedCooling = await calcTotalCooling(actor);
+    const submergedBonus = Math.max(0, computedCooling - baseComputedCooling);
+    const fallbackStoredCooling = Number.isFinite(storedCooling) && storedCooling > 0 ? storedCooling : 0;
+    const totalCooling = (baseComputedCooling > 0 ? baseComputedCooling : fallbackStoredCooling) + submergedBonus;
     const cur = getActorStoredHeat(actor);
     const max = Number(actor.system?.heat?.max ?? 30) || 30;
     const next = clamp(cur - totalCooling, 0, HEAT_HARD_CAP);
@@ -3942,11 +4973,24 @@ return await mod.promptAndRollWeaponAttack(actorDoc, weapon, {
       "system.heat.shutdown": shutdown
     });
 
+    if (next >= 15 && Number(actor.system?.critHits?.lifeSupport ?? 0) > 0) {
+      const stamp = getCombatStamp(game.combat);
+      const flagDoc = tokenDoc ?? actor;
+      const appliedStamp = String(flagDoc?.getFlag?.(SYSTEM_ID, "lifeSupportHeatPilotHitStamp") ?? "");
+      if (stamp && appliedStamp !== stamp) {
+        await applyMechPilotHit(actor, { reason: "Extreme heat with damaged life support", token: tokenDoc?.object ?? tokenDoc ?? null }).catch(err => {
+          console.warn(`${SYSTEM_ID} | Failed to apply life-support heat pilot hit`, err);
+        });
+        await flagDoc?.setFlag?.(SYSTEM_ID, "lifeSupportHeatPilotHitStamp", stamp).catch(() => {});
+      }
+    }
+
     try { await _syncShutdownAndImmobileOnActorTokens(actor); } catch (_) {}
   };
 
   game[SYSTEM_ID].api.computeHeatEffects = computeHeatEffects;
   game[SYSTEM_ID].api.getActorStoredHeat = getActorStoredHeat;
+  game[SYSTEM_ID].api.getEngineHitHeatGeneration = getEngineHitHeatGeneration;
   game[SYSTEM_ID].api.addActorPendingHeat = addActorPendingHeat;
   game[SYSTEM_ID].api.resolveActorHeatForTurn = resolveActorHeatForTurn;
 
@@ -4004,14 +5048,22 @@ Hooks.once("ready", () => {
     let jump = Number(mv.jump ?? mv.Jump ?? mv.j ?? 0) || 0;
 
     // Leg loss movement overrides (rest of battle)
-    const legLoss = Number(actor?.getFlag?.(SYSTEM_ID, "legLoss") ?? actor?.flags?.[SYSTEM_ID]?.legLoss ?? 0) || 0;
+    const flagLegLoss = Number(actor?.getFlag?.(SYSTEM_ID, "legLoss") ?? actor?.flags?.[SYSTEM_ID]?.legLoss ?? 0) || 0;
+    const isLegDestroyed = (locKey) => {
+      const loc = actor?.system?.structure?.[locKey] ?? {};
+      const max = Number(loc.max ?? 0) || 0;
+      const dmg = Number(loc.dmg ?? 0) || 0;
+      return max > 0 && dmg >= max;
+    };
+    const legLoss = Math.min(2, Math.max(0, flagLegLoss, (isLegDestroyed("ll") ? 1 : 0) + (isLegDestroyed("rl") ? 1 : 0)));
     if (legLoss >= 2) {
       walk = 0;
       run = 0;
       jump = 0;
     } else if (legLoss >= 1) {
       walk = 1;
-      run = 1;
+      run = 2;
+      jump = 0;
     }
 
     return { walk, run, jump };
@@ -4081,6 +5133,28 @@ Hooks.once("ready", () => {
     const next = clamp(cur - totalCooling, 0, max);
     if (next !== cur) await actor.update({ "system.heat.value": next, "system.heat.current": next, "system.heat.max": max, "system.heat.dissipation": totalCooling });
   });
+
+  Hooks.on("canvasReady", () => {
+    for (const token of canvas?.tokens?.placeables ?? []) {
+      const tokenDoc = token?.document ?? null;
+      if (!tokenDoc) continue;
+      if (game.user?.isGM) {
+        syncTerrainStatusForToken(tokenDoc).catch(err => {
+          console.warn("AToW Battletech | Initial terrain status sync failed", err);
+        });
+      } else {
+        refreshTokenConditionVisuals(tokenDoc);
+      }
+    }
+  });
+
+  for (const hookName of ["createActiveEffect", "updateActiveEffect", "deleteActiveEffect"]) {
+    Hooks.on(hookName, (effect) => {
+      const actor = effect?.parent;
+      if (actor?.type !== "mech") return;
+      setTimeout(() => refreshActorConditionVisuals(actor), 0);
+    });
+  }
 
 });
 
@@ -4270,6 +5344,9 @@ async function preloadHandlebarsTemplates() {
     `systems/${SYSTEM_ID}/templates/skill-sheet.hbs`,
     `systems/${SYSTEM_ID}/templates/trait-sheet.hbs`,
     `systems/${SYSTEM_ID}/templates/combat-vehicle.hbs`,
+    `systems/${SYSTEM_ID}/templates/dropship-sheet.hbs`,
+    `systems/${SYSTEM_ID}/templates/company-sheet.hbs`,
+    `systems/${SYSTEM_ID}/templates/vehicle-attack.hbs`,
     `systems/${SYSTEM_ID}/templates/mech-weapon.hbs`,
     `systems/${SYSTEM_ID}/templates/mech-equipment.hbs`,
     `systems/${SYSTEM_ID}/templates/character-weapon.hbs`,
@@ -4316,11 +5393,20 @@ async function rollCheck({
 } = {}) {
   const useTN = (tn === undefined) ? game.settings.get(SYSTEM_ID, "defaultTN") : tn;
 
-  // Leg loss penalty: +5 TN to Pilot checks (we apply to any TN-based check rolled by the mech actor).
+  // Leg loss penalty: +5 TN to Piloting Skill Rolls.
   let finalTN = useTN;
   if (finalTN !== null && finalTN !== undefined && actor) {
-    const legLoss = Number(actor.getFlag?.(SYSTEM_ID, "legLoss") ?? actor.flags?.[SYSTEM_ID]?.legLoss ?? 0) || 0;
-    if (legLoss >= 1) finalTN = Number(finalTN) + 5;
+    const checkText = `${label ?? ""} ${flavor ?? ""}`;
+    const isPSR = /\bpsr\b|pilot|piloting/i.test(checkText);
+    const flagLegLoss = Number(actor.getFlag?.(SYSTEM_ID, "legLoss") ?? actor.flags?.[SYSTEM_ID]?.legLoss ?? 0) || 0;
+    const isLegDestroyed = (locKey) => {
+      const loc = actor?.system?.structure?.[locKey] ?? {};
+      const max = Number(loc.max ?? 0) || 0;
+      const dmg = Number(loc.dmg ?? 0) || 0;
+      return max > 0 && dmg >= max;
+    };
+    const legLoss = Math.min(2, Math.max(0, flagLegLoss, (isLegDestroyed("ll") ? 1 : 0) + (isLegDestroyed("rl") ? 1 : 0)));
+    if (legLoss >= 1 && isPSR) finalTN = Number(finalTN) + 5;
   }
 
   const mod = Number(modifier ?? 0);

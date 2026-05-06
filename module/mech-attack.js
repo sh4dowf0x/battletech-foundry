@@ -6,6 +6,14 @@
 import { enqueueActorAudioCues } from "./audio-helper.js";
 
 const SYSTEM_ID = "atow-battletech";// ------------------------------------------------------------
+const VEHICLE_ATTACK_TEMPLATE = `systems/${SYSTEM_ID}/templates/vehicle-attack.hbs`;
+const TAGGED_STATUS_ID = "tagged";
+const ARROW_IV_INDIRECT_FLAG = "arrowIVIndirectStrikes";
+const ARROW_IV_INDIRECT_MIN_HEXES = 17;
+const ARROW_IV_LAUNCH_VFX = "jb2a.smoke.puff.side.grey";
+const ARROW_IV_IMPACT_VFX = "jb2a.explosion.08.orange";
+const ARROW_IV_LAUNCH_SFX = `systems/${SYSTEM_ID}/assets/sounds/weapon-missile-medium.ogg`;
+const ARROW_IV_IMPACT_SFX = `systems/${SYSTEM_ID}/assets/sounds/effect-explosion1.ogg`;
 
 function getATOWSocket() {
   return game?.[SYSTEM_ID]?.socket ?? null;
@@ -218,6 +226,41 @@ async function markWeaponFiredThisTurn(actor, weaponItem, opts = {}) {
   }
 }
 
+async function markMovementResetLockedThisTurn(actor, opts = {}) {
+  if (!game.combat?.started) return;
+  const stamp = getCombatTurnStamp();
+  await actor?.setFlag?.(SYSTEM_ID, "movementResetLockedStamp", stamp).catch?.(() => {});
+  const tokenDoc = opts?.attackerToken?.document ?? opts?.attackerToken ?? opts?.token?.document ?? opts?.token ?? null;
+  await tokenDoc?.setFlag?.(SYSTEM_ID, "movementResetLockedStamp", stamp).catch?.(() => {});
+}
+
+function hasActorChargedThisTurn(actor, tokenDoc = null) {
+  if (!game.combat?.started) return false;
+  const stamp = getCombatTurnStamp();
+  const actorStamp = String(actor?.getFlag?.(SYSTEM_ID, "chargeAttackStamp") ?? "");
+  const tokenStamp = String(tokenDoc?.getFlag?.(SYSTEM_ID, "chargeAttackStamp") ?? "");
+  return actorStamp === stamp || tokenStamp === stamp;
+}
+
+function hasAnyWeaponFiredThisTurn(actor, opts = {}) {
+  if (!game.combat?.started) return false;
+  if (!isWeaponFireLimitEnforced()) return false;
+  const target = getWeaponFireTrackerTarget(actor, opts);
+  const currentStamp = getCombatTurnStamp();
+  const targetTurnStamp = String(target?.getFlag?.(SYSTEM_ID, "turnStamp") ?? "");
+  const consumedThisTurn = target?.getFlag?.(SYSTEM_ID, "weaponFireConsumedThisTurn");
+  if (targetTurnStamp !== currentStamp || consumedThisTurn !== true) return false;
+  const tracker = getWeaponFireTracker(actor, opts);
+  return tracker.stamp === currentStamp && Array.isArray(tracker.keys) && tracker.keys.length > 0;
+}
+
+async function markActorChargedThisTurn(actor, tokenDoc = null) {
+  if (!game.combat?.started) return;
+  const stamp = getCombatTurnStamp();
+  await actor?.setFlag?.(SYSTEM_ID, "chargeAttackStamp", stamp).catch?.(() => {});
+  await tokenDoc?.setFlag?.(SYSTEM_ID, "chargeAttackStamp", stamp).catch?.(() => {});
+}
+
 async function _resolveActorFromUuid(actorUuid) {
   if (!actorUuid) return null;
   try {
@@ -225,6 +268,16 @@ async function _resolveActorFromUuid(actorUuid) {
     return (doc?.documentName === "Actor") ? doc : null;
   } catch (_) {
     return null;
+  }
+}
+
+async function _resolveSceneFromUuid(sceneUuid) {
+  if (!sceneUuid) return canvas?.scene ?? game.scenes?.active ?? null;
+  try {
+    const doc = await fromUuid(sceneUuid);
+    return (doc?.documentName === "Scene") ? doc : null;
+  } catch (_) {
+    return canvas?.scene ?? game.scenes?.active ?? null;
   }
 }
 
@@ -242,6 +295,12 @@ async function _gmApplyDamageToVehicleActor(actorUuid, hitLoc, damage, opts = {}
   return applyDamageToVehicleActor(targetActor, hitLoc, damage, opts);
 }
 
+async function _gmApplyDamageToDropshipActor(actorUuid, hitLoc, damage, opts = {}) {
+  const targetActor = await _resolveActorFromUuid(actorUuid);
+  if (!targetActor) return { ok: false, reason: "No target actor" };
+  return applyDamageToDropshipActor(targetActor, hitLoc, damage, opts);
+}
+
 async function _gmApplyDamageToAbominationActor(actorUuid, damage) {
   const targetActor = await _resolveActorFromUuid(actorUuid);
   if (!targetActor) return { ok: false, reason: "No target actor" };
@@ -254,6 +313,183 @@ async function _gmResolveAmmoExplosionEvent(actorUuid, event = {}) {
   return _resolveAmmoExplosionEventLocal(targetActor, event);
 }
 
+async function _gmApplyActorStatus(actorUuid, statusId, active = true) {
+  const targetActor = await _resolveActorFromUuid(actorUuid);
+  if (!targetActor) return { ok: false, reason: "No target actor" };
+  return applyActorStatus(targetActor, statusId, active);
+}
+
+async function _gmScheduleArrowIVIndirectStrike(sceneUuid, strikeData = {}) {
+  const scene = await _resolveSceneFromUuid(sceneUuid);
+  if (!scene?.setFlag) return { ok: false, reason: "No scene" };
+  const existing = scene.getFlag(SYSTEM_ID, ARROW_IV_INDIRECT_FLAG);
+  const strikes = Array.isArray(existing) ? foundry.utils.deepClone(existing) : [];
+  strikes.push(strikeData);
+  await scene.setFlag(SYSTEM_ID, ARROW_IV_INDIRECT_FLAG, strikes);
+  return { ok: true, id: strikeData?.id ?? null };
+}
+
+function isTAGWeapon(item) {
+  const name = String(item?.name ?? item?.system?.name ?? "").trim().toLowerCase();
+  return name === "tag";
+}
+
+function isAMSWeapon(item) {
+  const name = String(item?.name ?? item?.system?.name ?? "").trim().toLowerCase();
+  return name === "ams" || /\banti\s*-?\s*missile\s+system\b/i.test(name);
+}
+
+function isArrowIVSystemWeapon(item) {
+  const name = String(item?.name ?? item?.system?.name ?? "").trim().toLowerCase();
+  return name === "arrow iv system" || name === "arrow iv system (c)";
+}
+
+function getStatusDefinition(statusId) {
+  try {
+    return (CONFIG.statusEffects ?? []).find(e => e?.id === statusId) ?? null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function buildTagEffectData(source = {}) {
+  const def = getStatusDefinition(TAGGED_STATUS_ID);
+  const combat = game.combat?.started ? game.combat : null;
+  const attackerToken = source.attackerToken?.document ?? source.attackerToken ?? null;
+  const attackerActor = source.attackerActor ?? attackerToken?.actor ?? null;
+  const sourceActorUuid = source.attackerActorUuid ?? attackerActor?.uuid ?? null;
+  const sourceActorId = source.attackerActorId ?? attackerActor?.id ?? null;
+  const sourceTokenUuid = source.attackerTokenUuid ?? attackerToken?.uuid ?? null;
+  const sourceTokenId = source.attackerTokenId ?? attackerToken?.id ?? null;
+  const attackerCombatant = combat
+    ? (combat.combatants?.find?.(c => {
+      const tokenId = String(c?.tokenId ?? c?.token?.id ?? "");
+      const actorId = String(c?.actorId ?? c?.actor?.id ?? "");
+      return (sourceTokenId && tokenId === String(sourceTokenId)) ||
+        (sourceActorId && actorId === String(sourceActorId));
+    }) ?? null)
+    : null;
+
+  return {
+    name: def?.name ?? def?.label ?? "Tagged",
+    icon: def?.icon ?? `systems/${SYSTEM_ID}/assets/status/tagged.svg`,
+    disabled: false,
+    statuses: [TAGGED_STATUS_ID],
+    flags: {
+      core: { statusId: TAGGED_STATUS_ID },
+      [SYSTEM_ID]: {
+        tag: {
+          attackerActorUuid: sourceActorUuid,
+          attackerActorId: sourceActorId,
+          attackerTokenUuid: sourceTokenUuid,
+          attackerTokenId: sourceTokenId,
+          attackerCombatantId: attackerCombatant?.id ?? null,
+          combatId: combat?.id ?? null,
+          appliedRound: combat?.round ?? null,
+          appliedTurn: combat?.turn ?? null
+        }
+      }
+    }
+  };
+}
+
+async function applyTaggedToTargetActor(targetActor, source = {}) {
+  if (!targetActor) return { ok: false, reason: "No target actor" };
+  if (!game.user?.isGM && !targetActor.isOwner) return { ok: false, reason: "No permission to tag target" };
+
+  const effectData = buildTagEffectData(source);
+  const effects = Array.from(targetActor.effects ?? []);
+  const matches = effects.filter(e => {
+    const sid = (e.getFlag?.("core", "statusId") ?? e.flags?.core?.statusId) ?? null;
+    if (sid === TAGGED_STATUS_ID) return true;
+    if (e.statuses?.has && e.statuses.has(TAGGED_STATUS_ID)) return true;
+    if (Array.isArray(e.statuses) && e.statuses.includes(TAGGED_STATUS_ID)) return true;
+    return false;
+  });
+
+  if (matches.length) {
+    const keep = matches.find(e => !e.disabled) ?? matches[0];
+    await keep.update({
+      disabled: false,
+      statuses: [TAGGED_STATUS_ID],
+      flags: foundry.utils.mergeObject(keep.flags ?? {}, effectData.flags ?? {}, { inplace: false })
+    });
+
+    for (const e of matches) {
+      if (e?.id === keep?.id) continue;
+      if (!e.disabled && typeof e.update === "function") await e.update({ disabled: true }).catch(() => {});
+      else if (typeof e.delete === "function") await e.delete().catch(() => {});
+    }
+
+    return { ok: true, effectId: keep.id, refreshed: true };
+  }
+
+  const created = await targetActor.createEmbeddedDocuments("ActiveEffect", [effectData]);
+  return { ok: true, effectId: created?.[0]?.id ?? null, refreshed: false };
+}
+
+async function _gmApplyTaggedToTargetActor(actorUuid, source = {}) {
+  const targetActor = await _resolveActorFromUuid(actorUuid);
+  if (!targetActor) return { ok: false, reason: "No target actor" };
+  return applyTaggedToTargetActor(targetActor, source);
+}
+
+async function applyTaggedToTargetActorAuto(targetActor, source = {}) {
+  if (!targetActor) return { ok: false, reason: "No target actor" };
+  if (game.user?.isGM || targetActor.isOwner) return applyTaggedToTargetActor(targetActor, source);
+  const socket = getATOWSocket();
+  if (!socket) return { ok: false, reason: "AToW socket is not ready" };
+  return socket.executeAsGM("gmApplyTaggedToTargetActor", targetActor.uuid, source);
+}
+
+async function applyActorStatus(targetActor, statusId, active = true) {
+  if (!targetActor || !statusId) return { ok: false, reason: "No target actor or status" };
+  if (!game.user?.isGM && !targetActor.isOwner) return { ok: false, reason: "No permission to update target status" };
+
+  const def = getStatusDefinition(statusId);
+  const effects = Array.from(targetActor.effects ?? []);
+  const existing = effects.find(e => {
+    const sid = (e.getFlag?.("core", "statusId") ?? e.flags?.core?.statusId) ?? null;
+    if (sid === statusId) return true;
+    if (e.statuses?.has && e.statuses.has(statusId)) return true;
+    if (Array.isArray(e.statuses) && e.statuses.includes(statusId)) return true;
+    return false;
+  });
+
+  if (typeof targetActor.toggleStatusEffect === "function") {
+    try {
+      await targetActor.toggleStatusEffect(statusId, { active: Boolean(active) });
+      return { ok: true, statusId, active: Boolean(active), toggled: true };
+    } catch (_) {}
+  }
+
+  if (active) {
+    if (existing) {
+      if (existing.disabled) await existing.update({ disabled: false }).catch(() => {});
+      return { ok: true, statusId, active: true, effectId: existing.id };
+    }
+    const created = await targetActor.createEmbeddedDocuments("ActiveEffect", [{
+      name: def?.name ?? def?.label ?? statusId,
+      icon: def?.icon ?? "icons/svg/daze.svg",
+      disabled: false,
+      statuses: [statusId],
+      flags: { core: { statusId } }
+    }]);
+    return { ok: true, statusId, active: true, effectId: created?.[0]?.id ?? null };
+  }
+
+  if (existing && !existing.disabled) await existing.update({ disabled: true }).catch(() => {});
+  return { ok: true, statusId, active: false, effectId: existing?.id ?? null };
+}
+
+async function applyActorStatusAuto(targetActor, statusId, active = true) {
+  if (!targetActor) return { ok: false, reason: "No target actor" };
+  if (game.user?.isGM || targetActor.isOwner) return applyActorStatus(targetActor, statusId, active);
+  const socket = getATOWSocket();
+  if (!socket) return { ok: false, reason: "AToW socket is not ready" };
+  return socket.executeAsGM("gmApplyActorStatus", targetActor.uuid, statusId, active);
+}
+
 async function applyDamageToTargetActorAuto(targetActor, hitLoc, damage, opts = {}) {
   if (!targetActor) return { ok: false, reason: "No target actor" };
   if (game.user?.isGM) return _gmApplyDamageToTargetActor(targetActor.uuid, hitLoc, damage, opts);
@@ -262,12 +498,24 @@ async function applyDamageToTargetActorAuto(targetActor, hitLoc, damage, opts = 
   return socket.executeAsGM("gmApplyDamageToTargetActor", targetActor.uuid, hitLoc, damage, opts);
 }
 
+export async function applyMechDamageCluster(targetActor, hitLoc, damage, opts = {}) {
+  return applyDamageToTargetActorAuto(targetActor, hitLoc, damage, opts);
+}
+
 async function applyDamageToVehicleActorAuto(targetActor, hitLoc, damage, opts = {}) {
   if (!targetActor) return { ok: false, reason: "No target actor" };
   if (game.user?.isGM) return _gmApplyDamageToVehicleActor(targetActor.uuid, hitLoc, damage, opts);
   const socket = getATOWSocket();
   if (!socket) return { ok: false, reason: "AToW socket is not ready" };
   return socket.executeAsGM("gmApplyDamageToVehicleActor", targetActor.uuid, hitLoc, damage, opts);
+}
+
+async function applyDamageToDropshipActorAuto(targetActor, hitLoc, damage, opts = {}) {
+  if (!targetActor) return { ok: false, reason: "No target actor" };
+  if (game.user?.isGM) return _gmApplyDamageToDropshipActor(targetActor.uuid, hitLoc, damage, opts);
+  const socket = getATOWSocket();
+  if (!socket) return { ok: false, reason: "AToW socket is not ready" };
+  return socket.executeAsGM("gmApplyDamageToDropshipActor", targetActor.uuid, hitLoc, damage, opts);
 }
 
 async function applyDamageToAbominationActorAuto(targetActor, damage) {
@@ -291,12 +539,16 @@ export function registerATOWAttackSockets() {
     return null;
   }
 
-  if (!socket.functions?.has?.("gmApplyDamageToTargetActor")) {
-    socket.register("gmApplyDamageToTargetActor", _gmApplyDamageToTargetActor);
-    socket.register("gmApplyDamageToVehicleActor", _gmApplyDamageToVehicleActor);
-    socket.register("gmApplyDamageToAbominationActor", _gmApplyDamageToAbominationActor);
-    socket.register("gmResolveAmmoExplosionEvent", _gmResolveAmmoExplosionEvent);
-  }
+  if (!socket.functions?.has?.("gmApplyDamageToTargetActor")) socket.register("gmApplyDamageToTargetActor", _gmApplyDamageToTargetActor);
+  if (!socket.functions?.has?.("gmApplyDamageToVehicleActor")) socket.register("gmApplyDamageToVehicleActor", _gmApplyDamageToVehicleActor);
+  if (!socket.functions?.has?.("gmApplyDamageToDropshipActor")) socket.register("gmApplyDamageToDropshipActor", _gmApplyDamageToDropshipActor);
+  if (!socket.functions?.has?.("gmApplyDamageToAbominationActor")) socket.register("gmApplyDamageToAbominationActor", _gmApplyDamageToAbominationActor);
+  if (!socket.functions?.has?.("gmResolveAmmoExplosionEvent")) socket.register("gmResolveAmmoExplosionEvent", _gmResolveAmmoExplosionEvent);
+  if (!socket.functions?.has?.("gmApplyTaggedToTargetActor")) socket.register("gmApplyTaggedToTargetActor", _gmApplyTaggedToTargetActor);
+  if (!socket.functions?.has?.("gmApplyActorStatus")) socket.register("gmApplyActorStatus", _gmApplyActorStatus);
+  if (!socket.functions?.has?.("gmApplyMechPilotHit")) socket.register("gmApplyMechPilotHit", _gmApplyMechPilotHit);
+  if (!socket.functions?.has?.("gmScheduleArrowIVIndirectStrike")) socket.register("gmScheduleArrowIVIndirectStrike", _gmScheduleArrowIVIndirectStrike);
+  if (!socket.functions?.has?.("gmResolveAMSDefense")) socket.register("gmResolveAMSDefense", _gmResolveAMSDefense);
 
   game[SYSTEM_ID] = game[SYSTEM_ID] ?? {};
   game[SYSTEM_ID].socket = socket;
@@ -550,6 +802,56 @@ async function _maybePlayAutomatedAnimation(attackerToken, weaponItem, weaponMet
   }
 }
 
+async function playArrowIVSequencerEffect({ effectFile, soundFile, location, scale = 1, volume = 0.9 } = {}) {
+  if (!location && !soundFile) return;
+
+  const canSequence = typeof globalThis.Sequence === "function";
+  if (canSequence && effectFile) {
+    try {
+      const seq = new Sequence();
+      seq.effect()
+        .file(effectFile)
+        .atLocation(location)
+        .scale(scale);
+      if (soundFile) {
+        seq.sound()
+          .file(soundFile)
+          .volume(volume);
+      }
+      await seq.play();
+      return;
+    } catch (err) {
+      console.debug("AToW Battletech | Arrow IV Sequencer effect failed", err);
+    }
+  }
+
+  if (soundFile) {
+    try {
+      await AudioHelper.play({ src: soundFile, volume, autoplay: true, loop: false }, true);
+    } catch (_) {}
+  }
+}
+
+async function playArrowIVLaunchEffects(attackerToken) {
+  await playArrowIVSequencerEffect({
+    effectFile: ARROW_IV_LAUNCH_VFX,
+    soundFile: ARROW_IV_LAUNCH_SFX,
+    location: attackerToken,
+    scale: 0.8,
+    volume: 0.9
+  });
+}
+
+async function playArrowIVImpactEffects(location) {
+  await playArrowIVSequencerEffect({
+    effectFile: ARROW_IV_IMPACT_VFX,
+    soundFile: ARROW_IV_IMPACT_SFX,
+    location,
+    scale: 1.2,
+    volume: 0.95
+  });
+}
+
 
 // ------------------------------------------------------------
 // Location normalization helpers
@@ -649,8 +951,37 @@ const AMMO_EXPLOSION_DAMAGE = {
   "srm-6": 180,
   "srm-4": 200,
   "srm-2": 200,
-  "mg": 400
+  "mg": 400,
+  "ams": 48,
+  "atm-3": 100,
+  "atm-3-er": 100,
+  "atm-3-he": 100,
+  "atm-6": 100,
+  "atm-6-er": 100,
+  "atm-6-he": 100,
+  "atm-9": 100,
+  "atm-9-er": 100,
+  "atm-9-he": 100,
+  "atm-12": 100,
+  "atm-12-er": 100,
+  "atm-12-he": 100
 };
+
+const AMMO_EXPLOSION_DAMAGE_CAP = 20;
+const AMMO_EXPLOSION_CASE_DAMAGE_CAP = 10;
+const AMMO_EXPLOSION_CASE_II_DAMAGE_CAP = 1;
+
+function _hasCaseIIProtection(_actor, _loc) {
+  return false;
+}
+
+function _cappedAmmoExplosionDamage(rawDamage, { caseProtected = false, caseIIProtected = false } = {}) {
+  const raw = Math.max(0, Number(rawDamage ?? 0) || 0);
+  const cap = caseIIProtected
+    ? AMMO_EXPLOSION_CASE_II_DAMAGE_CAP
+    : (caseProtected ? AMMO_EXPLOSION_CASE_DAMAGE_CAP : AMMO_EXPLOSION_DAMAGE_CAP);
+  return Math.min(raw, cap);
+}
 
 function _ammoKeyFromType(typeText) {
   const t = String(typeText ?? "").trim().toLowerCase();
@@ -667,8 +998,20 @@ function _ammoKeyFromType(typeText) {
   m = t.match(/\bsrm\s*[- ]?\s*(\d+)\b/i);
   if (m?.[1]) return `srm-${Number(m[1])}`;
 
+  // ATM 6, ATM-6 ER, ATM/9 HE
+  m = t.match(/\batm\s*[-/]?\s*(3|6|9|12)\b/i);
+  if (m?.[1]) {
+    const variant = /\ber\b/i.test(t) ? "-er" : (/\bhe\b/i.test(t) ? "-he" : "");
+    return `atm-${Number(m[1])}${variant}`;
+  }
+
   // Machine Gun / MG
   if (t.includes("machine gun") || /^mg\b/.test(t)) return "mg";
+
+  // Anti-Missile System
+  if (t === "ams" || /\banti\s*-?\s*missile\s+system\b/i.test(t)) return "ams";
+
+  if (/\barrow\s*iv\b/i.test(t) && /\bhoming\b/i.test(t)) return "arrow-iv-homing";
 
   return null;
 }
@@ -708,17 +1051,20 @@ async function _playAtowSfx(src, { volume = 1.0 } = {}) {
   }
 }
 
-async function _postAmmoExplosionChat({ actor, loc, label, damage, caseProtected = null }) {
+async function _postAmmoExplosionChat({ actor, loc, label, damage, rawDamage = null, caseProtected = null, caseIIProtected = false }) {
   try {
     const locName = String(loc ?? "").toUpperCase();
     const nice = String(label ?? "").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     const protectedByCase = (caseProtected === null) ? isLocationProtectedByCASE(actor, loc) : Boolean(caseProtected);
-    const caseLine = `<p style="margin:0.25rem 0 0 0;">CASE: <b>${protectedByCase ? "Yes" : "No"}</b>${protectedByCase ? " (contained)" : ""}</p>`;
+    const rawLine = Number.isFinite(Number(rawDamage)) && Number(rawDamage) !== Number(damage)
+      ? ` <span style="opacity:0.75;">(raw ${Number(rawDamage)}, capped)</span>`
+      : "";
+    const caseLine = `<p style="margin:0.25rem 0 0 0;">CASE: <b>${caseIIProtected ? "CASE II" : (protectedByCase ? "Yes" : "No")}</b>${(protectedByCase || caseIIProtected) ? " (contained)" : " (vented, no transfer)"}</p>`;
     const content = `
       <div class="atow-bt ammo-explosion">
         <h2 style="margin:0 0 0.25rem 0;">AMMO EXPLOSION!</h2>
         <p style="margin:0;"><b>${actor?.name ?? "Unknown"}</b> — <b>${locName}</b>: ${nice}</p>
-        <p style="margin:0.25rem 0 0 0;">Damage: <b>${damage}</b> (internal first)</p>
+        <p style="margin:0.25rem 0 0 0;">Damage: <b>${damage}</b>${rawLine} (location only, internal first)</p>
         ${caseLine}
 </div>`;
     await ChatMessage.create({
@@ -770,12 +1116,21 @@ async function _maybeResolveAmmoExplosions(targetActor, trigger, { side = "front
 
 
     const caseProtected = isLocationProtectedByCASE(targetActor, loc);
+    const caseIIProtected = _hasCaseIIProtection(targetActor, loc);
+    const rawDamage = damage;
+    const cappedDamage = _cappedAmmoExplosionDamage(rawDamage, { caseProtected, caseIIProtected });
     const key = `${targetActor.id}|${loc}|${ev.idx ?? ""}|${String(label)}`;
     if (processed.has(key)) continue;
     processed.add(key);
 
     await _playAtowSfx(AMMO_EXPLOSION_SFX, { volume: 1.0 });
-    await _postAmmoExplosionChat({ actor: targetActor, loc, label, damage, caseProtected });
+    await _postAmmoExplosionChat({ actor: targetActor, loc, label, damage: cappedDamage, rawDamage, caseProtected, caseIIProtected });
+
+    if (!caseProtected && isMechActor(targetActor)) {
+      await applyMechPilotHit(targetActor, { reason: "Ammo explosion without CASE" }).catch(err => {
+        console.warn("AToW Battletech | Pilot hit from ammo explosion failed", err);
+      });
+    }
 
     // Best-effort: zero the matching ammo bin (if present) so it can't be fired after the detonation.
     const updateAmmo = {};
@@ -795,7 +1150,7 @@ async function _maybeResolveAmmoExplosions(targetActor, trigger, { side = "front
     }
 
     // Apply explosion damage (internal structure first on the starting location)
-    const res = await applyDamageToTargetActor(targetActor, loc, damage, { side, internalFirstStartLoc: true, preventTransfer: caseProtected });
+    const res = await applyDamageToTargetActor(targetActor, loc, cappedDamage, { side, internalFirstStartLoc: true, preventTransfer: true });
 
     // If the actor died as a side effect, you still get the chain from the damage result,
     // but we can stop once no new triggers are produced.
@@ -1028,6 +1383,13 @@ function isVehicleActor(actor) {
   if (actor.type === "vehicle" || actor.type === "wheeledvehicle") return true;
   const v = actor?.system?.vehicle;
   return Boolean(v && typeof v === "object");
+}
+
+function isDropshipActor(actor) {
+  if (!actor) return false;
+  if (actor.type === "dropship") return true;
+  const ds = actor?.system?.dropship;
+  return Boolean(ds && typeof ds === "object");
 }
 
 function _getAbominationTrackConfig(actor) {
@@ -1400,6 +1762,123 @@ async function applyDamageToVehicleActor(targetActor, hitLoc, damage, { attackSi
   };
 }
 
+function _normalizeDropshipLocation(loc) {
+  const raw = String(loc ?? "").trim().toLowerCase();
+  if (!raw) return null;
+  if (["nose", "left", "right", "aft"].includes(raw)) return raw;
+  if (["front", "fore"].includes(raw)) return "nose";
+  if (["rear", "back", "stern"].includes(raw)) return "aft";
+  if (["left side", "port"].includes(raw)) return "left";
+  if (["right side", "starboard"].includes(raw)) return "right";
+  return null;
+}
+
+const DROPSHIP_HIT_LOCATION_TABLES = {
+  front: {
+    2: "left",
+    3: "nose",
+    4: "nose",
+    5: "left",
+    6: "nose",
+    7: "nose",
+    8: "nose",
+    9: "right",
+    10: "nose",
+    11: "nose",
+    12: "right"
+  },
+  rear: {
+    2: "left",
+    3: "aft",
+    4: "aft",
+    5: "left",
+    6: "aft",
+    7: "aft",
+    8: "aft",
+    9: "right",
+    10: "aft",
+    11: "aft",
+    12: "right"
+  },
+  left: {
+    2: "nose",
+    3: "left",
+    4: "left",
+    5: "nose",
+    6: "left",
+    7: "left",
+    8: "left",
+    9: "aft",
+    10: "left",
+    11: "left",
+    12: "aft"
+  },
+  right: {
+    2: "nose",
+    3: "right",
+    4: "right",
+    5: "nose",
+    6: "right",
+    7: "right",
+    8: "right",
+    9: "aft",
+    10: "right",
+    11: "right",
+    12: "aft"
+  }
+};
+
+async function rollDropshipHitLocation(attackSide = "front") {
+  const side = ["front", "rear", "left", "right"].includes(String(attackSide ?? "").toLowerCase())
+    ? String(attackSide).toLowerCase()
+    : "front";
+  const table = DROPSHIP_HIT_LOCATION_TABLES[side] ?? DROPSHIP_HIT_LOCATION_TABLES.front;
+  const roll = await (new Roll("2d6")).evaluate();
+  const loc = table[roll.total] ?? (side === "rear" ? "aft" : side === "left" ? "left" : side === "right" ? "right" : "nose");
+
+  return {
+    roll,
+    loc,
+    display: loc
+  };
+}
+
+async function applyDamageToDropshipActor(targetActor, hitLoc, damage) {
+  if (!targetActor) return { ok: false, reason: "No target actor" };
+
+  const loc = _normalizeDropshipLocation(hitLoc);
+  if (!loc) return { ok: false, reason: "No hit location" };
+
+  const armorNode = targetActor.system?.armor?.[loc] ?? {};
+  const armorMax = Number(armorNode.max ?? 0) || 0;
+  const armorDmg = Number(armorNode.dmg ?? 0) || 0;
+  const armorRemaining = Math.max(0, armorMax - armorDmg);
+
+  let remaining = num(damage, 0);
+  const armorApplied = Math.min(remaining, armorRemaining);
+  remaining -= armorApplied;
+
+  const siNode = targetActor.system?.structure?.si ?? {};
+  const siMax = Number(siNode.max ?? 0) || 0;
+  const siDmg = Number(siNode.dmg ?? 0) || 0;
+  const structureRemaining = Math.max(0, siMax - siDmg);
+  const structureApplied = Math.min(remaining, structureRemaining);
+  remaining -= structureApplied;
+
+  const updates = {};
+  if (armorApplied > 0) updates[`system.armor.${loc}.dmg`] = clampInt(armorDmg + armorApplied, 0, armorMax, 0);
+  if (structureApplied > 0 || siMax > 0) updates["system.structure.si.dmg"] = clampInt(siDmg + structureApplied, 0, siMax, 0);
+  if (Object.keys(updates).length) await targetActor.update(updates);
+
+  return {
+    ok: true,
+    loc,
+    armorApplied,
+    structureApplied,
+    overflow: remaining
+  };
+}
+
 // Heat can exceed the normal 30-point token/resource bar maximum.
 // Keep system.heat.max at 30 for the bar, but allow stored heat.value/current up to this cap.
 const HEAT_HARD_CAP = 100;
@@ -1573,6 +2052,17 @@ function _aboutFaceFacingStringToDeg(dir) {
   return null;
 }
 
+function _getSystemTorsoFacingDeg(token) {
+  try {
+    const raw = token?.document?.getFlag?.(SYSTEM_ID, "torsoFacing");
+    const deg = Number(raw);
+    if (Number.isFinite(deg)) return normalizeDeg(deg);
+  } catch (_) {
+    // ignore
+  }
+  return null;
+}
+
 /**
  * Try to extract a "facing" angle in degrees from the token.
  * - Default: token.document.rotation (Foundry standard).
@@ -1582,7 +2072,11 @@ function _aboutFaceFacingStringToDeg(dir) {
 function getTokenFacingDeg(token) {
   if (!token?.document) return null;
 
-  // 0) Prefer the system's native facing flag when present.
+  // 0) Prefer torso facing when present; incoming hit arcs use the twisted torso.
+  const torsoFacing = _getSystemTorsoFacingDeg(token);
+  if (torsoFacing !== null) return torsoFacing;
+
+  // 1) Prefer the system's native leg facing flag when present.
   try {
     const nativeFacing = token.document.getFlag?.(SYSTEM_ID, "facing");
     if (Number.isFinite(Number(nativeFacing))) return normalizeDeg(Number(nativeFacing));
@@ -1631,6 +2125,9 @@ function getTokenFacingDeg(token) {
  * (flat-top vs pointy-top) and any Foundry internal direction mapping.
  */
 function getTokenFacingDir(token) {
+  const torsoDeg = _getSystemTorsoFacingDeg(token);
+  if (torsoDeg !== null) return getFacingDirFromDeg(token, torsoDeg);
+
   // If About Face (or another module) stores a snapped direction index, use it directly.
   // This avoids 0°-reference mismatches that can cause "rear/side" to trigger too often.
   const snapped = _extractSnappedFacingDir(token);
@@ -1639,6 +2136,10 @@ function getTokenFacingDir(token) {
   const deg = getTokenFacingDeg(token);
   if (deg === null) return null;
 
+  return getFacingDirFromDeg(token, deg);
+}
+
+function getFacingDirFromDeg(token, deg) {
   // Best: ask the grid to quantize direction by projecting a point "in front" of the token.
   try {
     const grid = canvas?.grid;
@@ -1854,11 +2355,40 @@ function slugifyAmmoKey(s) {
 function ammoKeyFromTypeLabel(typeText) {
   const t = String(typeText ?? "").trim().toLowerCase();
 
+  // Ammo-less weapons use labels like "None" or "N/A"; do not turn those into fake bins.
+  if (!t || t === "none" || t === "n/a" || t === "na" || t === "n-a" || t === "no ammo" || t === "ammo none") {
+    return null;
+  }
+
   // If already looks like our key, keep it stable
-  if (/^(ac|lrm|srm)-\d+$/.test(t)) return t;
+  if (/^(ac|lrm|srm|atm)-\d+(?:-(?:er|he))?$/.test(t)) return t;
+  if (/^lbx-\d+(?:-cluster)?$/.test(t)) return t;
+
+  // LB-X autocannon ammo: accept labels like
+  // - "LB 10-X AC"
+  // - "LB 10-X AC Slug"
+  // - "LB 10-X AC Cluster"
+  // - "LB 10-X AC 10"
+  // - "LBX AC/10"
+  // - "LBX 10"
+  let m = t.match(/\blb\s*(\d+)\s*-\s*x\s*ac\b/i);
+  if (m?.[1]) {
+    return slugifyAmmoKey(`lbx-${m[1]}${/\bcluster\b/i.test(t) ? "-cluster" : ""}`);
+  }
+  m = t.match(/\blbx\b[^\d]*(\d+)\b/i);
+  if (m?.[1]) {
+    return slugifyAmmoKey(`lbx-${m[1]}${/\bcluster\b/i.test(t) ? "-cluster" : ""}`);
+  }
+
+  // Advanced Tactical Missile ammo: "ATM 6", "ATM 6 ER", "ATM 9 HE"
+  m = t.match(/\batm\s*[-/]?\s*(3|6|9|12)\b/i);
+  if (m?.[1]) {
+    const variant = /\ber\b/i.test(t) ? "-er" : (/\bhe\b/i.test(t) ? "-he" : "");
+    return slugifyAmmoKey(`atm-${m[1]}${variant}`);
+  }
 
   // Autocannons: "AC/20", "AC 20"
-  let m = t.match(/\bac\s*\/?\s*(\d+)\b/i);
+  m = t.match(/\bac\s*\/?\s*(\d+)\b/i);
   if (m?.[1]) return slugifyAmmoKey(`ac-${m[1]}`);
 
   // LRMs / SRMs
@@ -1867,8 +2397,93 @@ function ammoKeyFromTypeLabel(typeText) {
 
   // Machine guns / other common ammo users (optional)
   if (t.includes("machine gun") || t === "mg") return "mg";
+  if (t === "ams" || /\banti\s*-?\s*missile\s+system\b/i.test(t)) return "ams";
 
   return slugifyAmmoKey(t);
+}
+
+function getLBXWeaponSize(weaponItem) {
+  const name = String(weaponItem?.name ?? "").trim().toLowerCase();
+  let m = name.match(/\blb\s*(\d+)\s*-\s*x\s*ac\b/i);
+  if (m?.[1]) return Number(m[1]);
+  m = name.match(/\blbx\b[^\d]*(\d+)\b/i);
+  if (m?.[1]) return Number(m[1]);
+  return null;
+}
+
+function isLBXWeapon(weaponItem) {
+  return Number.isFinite(getLBXWeaponSize(weaponItem));
+}
+
+function getLBXAmmoKeysForWeapon(weaponItem) {
+  const size = getLBXWeaponSize(weaponItem);
+  if (!Number.isFinite(size)) return [];
+  return [
+    slugifyAmmoKey(`lbx-${size}`),
+    slugifyAmmoKey(`lbx-${size}-cluster`)
+  ];
+}
+
+function getATMWeaponSize(weaponItem) {
+  const name = String(weaponItem?.name ?? "").trim().toLowerCase();
+  const m = name.match(/\batm\s*[-/]?\s*(3|6|9|12)\b/i);
+  if (m?.[1]) return Number(m[1]);
+  return null;
+}
+
+function isATMWeapon(weaponItem) {
+  return Number.isFinite(getATMWeaponSize(weaponItem));
+}
+
+function getATMAmmoKeysForWeapon(weaponItem) {
+  const size = getATMWeaponSize(weaponItem);
+  if (!Number.isFinite(size)) return [];
+  return [
+    slugifyAmmoKey(`atm-${size}`),
+    slugifyAmmoKey(`atm-${size}-er`),
+    slugifyAmmoKey(`atm-${size}-he`)
+  ];
+}
+
+function getATMAmmoVariant(ammoKey) {
+  const key = String(ammoKey ?? "").trim().toLowerCase();
+  if (/-er$/.test(key)) return "er";
+  if (/-he$/.test(key)) return "he";
+  return "standard";
+}
+
+function getATMProfile(weaponItem, ammoKey = null) {
+  if (!isATMWeapon(weaponItem)) return null;
+  const variant = getATMAmmoVariant(ammoKey);
+  if (variant === "er") {
+    return {
+      variant,
+      label: "ER",
+      damagePerMissile: 1,
+      groupSize: 5,
+      range: { min: 4, short: 9, medium: 18, long: 27 }
+    };
+  }
+  if (variant === "he") {
+    return {
+      variant,
+      label: "HE",
+      damagePerMissile: 3,
+      groupSize: 5,
+      range: { min: 0, short: 3, medium: 6, long: 9 }
+    };
+  }
+  return {
+    variant: "standard",
+    label: "Standard",
+    damagePerMissile: 2,
+    groupSize: 5,
+    range: null
+  };
+}
+
+function weaponSupportsAmmoSelection(weaponItem) {
+  return isLBXWeapon(weaponItem) || isATMWeapon(weaponItem);
 }
 
 function getAmmoKeyForWeapon(weaponItem) {
@@ -1887,9 +2502,22 @@ function getAmmoKeyForWeapon(weaponItem) {
     sys.ammo?.name ??
     null;
 
-  if (explicit) return ammoKeyFromTypeLabel(explicit);
+  if (explicit) {
+    const explicitKey = ammoKeyFromTypeLabel(explicit);
+    if (explicitKey) return explicitKey;
+  }
 
   const name = String(weaponItem?.name ?? "").toLowerCase();
+
+  const lbxSize = getLBXWeaponSize(weaponItem);
+  if (Number.isFinite(lbxSize)) {
+    return slugifyAmmoKey(`lbx-${lbxSize}`);
+  }
+
+  const atmSize = getATMWeaponSize(weaponItem);
+  if (Number.isFinite(atmSize)) {
+    return slugifyAmmoKey(`atm-${atmSize}`);
+  }
 
   // Autocannons: "AC/20", "AC 20"
   let m = name.match(/\bac\s*\/?\s*(\d+)\b/i);
@@ -1901,8 +2529,56 @@ function getAmmoKeyForWeapon(weaponItem) {
 
   // Machine guns
   if (name.includes("machine gun") || name.includes("mg")) return "mg";
+  if (name === "ams" || /\banti\s*-?\s*missile\s+system\b/i.test(name)) return "ams";
+  if (name === "arrow iv system" || name === "arrow iv system (c)") return ammoKeyFromTypeLabel("Arrow IV Homing");
 
   return null;
+}
+
+async function getAmmoSelectionOptions(actor, weaponItem) {
+  const options = [];
+  const { totals } = await ensureActorAmmoBins(actor);
+  const bins = actor?.system?.ammoBins ?? {};
+
+  const addOption = (key, label) => {
+    if (!key) return;
+    const bin = bins?.[key];
+    const total = num(bin?.total, totals.get(key)?.total ?? 0);
+    const current = Number.isFinite(Number(bin?.current)) ? num(bin.current, total) : total;
+    if (!bin && !totals.has(key)) return;
+    if (current <= 0) return;
+    options.push({
+      key,
+      label: label ?? String(bin?.name ?? totals.get(key)?.name ?? key),
+      current,
+      total
+    });
+  };
+
+  const lbxSize = getLBXWeaponSize(weaponItem);
+  if (Number.isFinite(lbxSize)) {
+    addOption(slugifyAmmoKey(`lbx-${lbxSize}`), `Slug (${weaponItem?.name ?? `LB ${lbxSize}-X AC`} Slug)`);
+    addOption(slugifyAmmoKey(`lbx-${lbxSize}-cluster`), `Cluster (${weaponItem?.name ?? `LB ${lbxSize}-X AC`} Cluster)`);
+  }
+
+  const atmSize = getATMWeaponSize(weaponItem);
+  if (Number.isFinite(atmSize)) {
+    addOption(slugifyAmmoKey(`atm-${atmSize}`), `Standard (ATM ${atmSize})`);
+    addOption(slugifyAmmoKey(`atm-${atmSize}-er`), `ER (ATM ${atmSize})`);
+    addOption(slugifyAmmoKey(`atm-${atmSize}-he`), `HE (ATM ${atmSize})`);
+  }
+
+  if (!options.length) return { options: [], defaultKey: null, hasMultiple: false };
+
+  const available = options.filter(opt => opt.current > 0);
+  const defaultKey = available.find(opt => !/cluster$/i.test(opt.key))?.key
+    ?? available[0]?.key
+    ?? options[0].key;
+  return {
+    options,
+    defaultKey,
+    hasMultiple: options.length > 1
+  };
 }
 
 /**
@@ -1942,6 +2618,101 @@ function buildAmmoTotalsFromCritSlots(actorSystem) {
   }
 
   return totals;
+}
+
+function actorHasOperationalAMS(actor) {
+  const crit = actor?.system?.crit ?? {};
+  for (const loc of Object.values(crit)) {
+    const slots = loc?.slots;
+    if (!slots) continue;
+    const iter = Array.isArray(slots) ? slots : Object.values(slots);
+    for (const slot of iter) {
+      if (!slot || (slot.partOf !== undefined && slot.partOf !== null)) continue;
+      if (Boolean(slot.destroyed)) continue;
+      const label = String(slot?.label ?? slot?.name ?? slot ?? "").trim().toLowerCase();
+      if (label === "ams" || /\banti\s*-?\s*missile\s+system\b/i.test(label)) return true;
+    }
+  }
+  return false;
+}
+
+async function addHeatToActor(actor, amount) {
+  const add = Math.max(0, Number(amount ?? 0) || 0);
+  if (!actor || add <= 0) return;
+  const addActorPendingHeat = game?.[SYSTEM_ID]?.api?.addActorPendingHeat ?? null;
+  if (typeof addActorPendingHeat === "function") {
+    await addActorPendingHeat(actor, add);
+    return;
+  }
+
+  const current = num(actor.system?.heat?.value ?? actor.system?.heat?.current, 0);
+  const max = num(actor.system?.heat?.max, 30);
+  const next = clamp(current + add, 0, 99);
+  await actor.update({
+    "system.heat.value": next,
+    "system.heat.current": next,
+    "system.heat.max": max,
+    "system.heat.unvented": next,
+    "system.heat.effects.unvented": next
+  }).catch(() => {});
+}
+
+async function spendActorAmmoBin(actor, key, amount = 1) {
+  if (!actor || !key) return { ok: false, reason: "No actor or ammo key" };
+  const amt = Math.max(1, num(amount, 1));
+  const { totals } = await ensureActorAmmoBins(actor);
+  const bins = actor.system?.ammoBins ?? {};
+  const bin = bins?.[key];
+  const total = num(bin?.total, totals.get(key)?.total ?? 0);
+  const current = Number.isFinite(Number(bin?.current)) ? num(bin.current, total) : total;
+  const name = String(bin?.name ?? totals.get(key)?.name ?? key);
+  if (current < amt) return { ok: false, key, name, before: current, after: current, total, reason: "No ammo" };
+  const next = Math.max(0, current - amt);
+  await actor.update({ [`system.ammoBins.${key}.current`]: next }).catch(() => {});
+  return { ok: true, key, name, before: current, after: next, total, spent: amt };
+}
+
+async function resolveAMSDefenseLocal(defenderActor, { attackerName = "", weaponName = "", streak = false } = {}) {
+  if (!defenderActor || !isMechActor(defenderActor)) return { active: false, reason: "notMech" };
+  if (defenderActor.getFlag?.(SYSTEM_ID, "amsEnabled") === false) return { active: false, reason: "disabled" };
+  if (!actorHasOperationalAMS(defenderActor)) return { active: false, reason: "noAMS" };
+
+  const stamp = getCombatTurnStamp();
+  const lastStamp = String(defenderActor.getFlag?.(SYSTEM_ID, "amsUsedStamp") ?? "");
+  if (game.combat?.started && lastStamp === stamp) return { active: false, reason: "alreadyUsed", stamp };
+
+  const ammo = await spendActorAmmoBin(defenderActor, "ams", 1);
+  if (!ammo.ok) return { active: false, reason: "noAmmo", ammo };
+
+  await defenderActor.setFlag?.(SYSTEM_ID, "amsUsedStamp", stamp).catch?.(() => {});
+  await addHeatToActor(defenderActor, 1);
+
+  return {
+    active: true,
+    streak: Boolean(streak),
+    clusterMod: streak ? 0 : -4,
+    forcedClusterTotal: streak ? 7 : null,
+    ammo,
+    heat: 1,
+    stamp,
+    defenderName: defenderActor.name,
+    attackerName,
+    weaponName
+  };
+}
+
+async function _gmResolveAMSDefense(actorUuid, source = {}) {
+  const targetActor = await _resolveActorFromUuid(actorUuid);
+  if (!targetActor) return { active: false, reason: "No target actor" };
+  return resolveAMSDefenseLocal(targetActor, source);
+}
+
+async function resolveAMSDefense(defenderActor, source = {}) {
+  if (!defenderActor) return { active: false, reason: "No defender" };
+  if (game.user?.isGM || defenderActor.isOwner) return resolveAMSDefenseLocal(defenderActor, source);
+  const socket = getATOWSocket();
+  if (!socket) return { active: false, reason: "socketUnavailable" };
+  return socket.executeAsGM("gmResolveAMSDefense", defenderActor.uuid, source);
 }
 
 /**
@@ -1989,14 +2760,14 @@ async function ensureActorAmmoBins(actor) {
   return { totals, bins: actor.system?.ammoBins ?? bins };
 }
 
-function weaponConsumesAmmo(weaponItem, actor) {
+function weaponConsumesAmmo(weaponItem, actor, { ammoKey = null } = {}) {
   const sys = weaponItem?.system ?? {};
 
   // Explicit override
   if (sys.usesAmmo === false) return false;
   if (sys.usesAmmo === true) return true;
 
-  const key = getAmmoKeyForWeapon(weaponItem);
+  const key = ammoKey ? ammoKeyFromTypeLabel(ammoKey) : getAmmoKeyForWeapon(weaponItem);
   if (!key) return false;
 
   // If the actor already has a bin, great.
@@ -2014,10 +2785,10 @@ function weaponConsumesAmmo(weaponItem, actor) {
  *  - { ok:true, spent, key, name, before, after, total }
  *  - { ok:false, key, name, before, after, total, reason }
  */
-async function spendAmmoIfApplicable(actor, weaponItem, amount = 1) {
+async function spendAmmoIfApplicable(actor, weaponItem, amount = 1, { ammoKey = null } = {}) {
   if (!actor || !weaponItem) return { ok: true, spent: 0, key: null };
 
-  const key = getAmmoKeyForWeapon(weaponItem);
+  const key = ammoKey ? ammoKeyFromTypeLabel(ammoKey) : getAmmoKeyForWeapon(weaponItem);
   if (!key) return { ok: true, spent: 0, key: null };
 
   const { totals } = await ensureActorAmmoBins(actor);
@@ -2033,7 +2804,15 @@ async function spendAmmoIfApplicable(actor, weaponItem, amount = 1) {
 
   // If we still can't find a bin or a total, treat as non-ammo weapon.
   if (!bin && !Number.isFinite(Number(totalFromCrit))) {
-    return { ok: true, spent: 0, key: null };
+    return {
+      ok: false,
+      key,
+      name,
+      before: 0,
+      after: 0,
+      total: 0,
+      reason: `No ammo of ${name} type`
+    };
   }
 
   const cur = Number.isFinite(Number(bin?.current)) ? num(bin.current, total) : total;
@@ -2060,7 +2839,10 @@ async function spendAmmoIfApplicable(actor, weaponItem, amount = 1) {
 }
 
 
-function getWeaponRanges(item) {
+function getWeaponRanges(item, { ammoKey = null } = {}) {
+  const atmProfile = getATMProfile(item, ammoKey);
+  if (atmProfile?.range) return { ...atmProfile.range };
+
   const sys = item?.system ?? {};
   const r = sys.range ?? {};
   return {
@@ -2354,6 +3136,10 @@ function getSingleTargetToken() {
   return targets[0] ?? null;
 }
 
+function isMechActor(actor) {
+  return String(actor?.type ?? "").toLowerCase() === "mech";
+}
+
 function getTokenCenter(tokenLike) {
   if (!tokenLike) return null;
 
@@ -2390,6 +3176,436 @@ function measureTokenDistance(attackerToken, targetToken) {
   return num(distances?.[0], null);
 }
 
+function measurePointDistance(fromPoint, toPoint) {
+  if (!canvas?.grid || !fromPoint || !toPoint) return null;
+  const ray = new Ray(fromPoint, toPoint);
+  const distances = canvas.grid.measureDistances([{ ray }], { gridSpaces: true });
+  return num(distances?.[0], null);
+}
+
+function getGridOffsetForPoint(point) {
+  if (!point || !canvas?.grid) return null;
+  try {
+    const off = canvas.grid.getOffset?.({ x: point.x, y: point.y });
+    if (off && Number.isFinite(Number(off.i)) && Number.isFinite(Number(off.j))) {
+      return { i: Number(off.i), j: Number(off.j) };
+    }
+  } catch (_) {}
+  try {
+    const pos = canvas.grid.getGridPositionFromPixels?.(point.x, point.y) ?? canvas.grid.getGridPosition?.(point.x, point.y);
+    if (Array.isArray(pos) && pos.length >= 2) return { i: Number(pos[0]), j: Number(pos[1]) };
+  } catch (_) {}
+  const size = Number(canvas.grid.size ?? canvas.dimensions?.size ?? 100) || 100;
+  return { i: Math.floor(Number(point.x ?? 0) / size), j: Math.floor(Number(point.y ?? 0) / size) };
+}
+
+function getGridKeyForPoint(point) {
+  const off = getGridOffsetForPoint(point);
+  if (!off) return "";
+  return `${off.i},${off.j}`;
+}
+
+function getGridCenterForPoint(point) {
+  const off = getGridOffsetForPoint(point);
+  if (!off || !canvas?.grid) return point;
+  try {
+    const center = canvas.grid.getCenterPoint?.(off);
+    if (center && Number.isFinite(center.x) && Number.isFinite(center.y)) return { x: center.x, y: center.y };
+  } catch (_) {}
+  try {
+    const topLeft = canvas.grid.getTopLeftPoint?.(off);
+    const cellW = Number(canvas.grid.sizeX ?? canvas.grid.size ?? 0) || 100;
+    const cellH = Number(canvas.grid.sizeY ?? canvas.grid.size ?? 0) || cellW;
+    if (topLeft && Number.isFinite(topLeft.x) && Number.isFinite(topLeft.y)) {
+      return { x: topLeft.x + cellW / 2, y: topLeft.y + cellH / 2 };
+    }
+  } catch (_) {}
+  try {
+    if (typeof canvas.grid.getCenter === "function") {
+      const v = canvas.grid.getCenter(off.i, off.j);
+      if (Array.isArray(v)) return { x: Number(v[0]), y: Number(v[1]) };
+      if (v && Number.isFinite(v.x) && Number.isFinite(v.y)) return { x: v.x, y: v.y };
+    }
+  } catch (_) {}
+  return point;
+}
+
+function getTokensInGridKey(sceneId, gridKey) {
+  const tokens = Array.from(canvas?.tokens?.placeables ?? []);
+  return tokens.filter(t => {
+    const doc = t?.document ?? t;
+    if (sceneId && String(doc?.parent?.id ?? canvas?.scene?.id ?? "") !== String(sceneId)) return false;
+    const center = getTokenCenter(t);
+    return center && getGridKeyForPoint(center) === gridKey;
+  });
+}
+
+function pickCanvasPointOnce() {
+  return new Promise((resolve) => {
+    const stage = canvas?.stage;
+    if (!stage) {
+      resolve(null);
+      return;
+    }
+
+    const emitters = [
+      stage,
+      canvas?.tokens,
+      canvas?.primary,
+      canvas?.interface,
+      ...(canvas?.tokens?.placeables ?? [])
+    ].filter(e => e && typeof e.on === "function" && typeof e.off === "function");
+
+    const cleanup = () => {
+      for (const emitter of emitters) {
+        try { emitter.off("pointerdown", onDown); } catch (_) {}
+        try { emitter.off("rightdown", onRight); } catch (_) {}
+      }
+      try { stage.eventMode = priorEventMode; } catch (_) {}
+      try { stage.interactive = priorInteractive; } catch (_) {}
+    };
+
+    const toPoint = (event) => {
+      try {
+        const local = event?.data?.getLocalPosition?.(stage) ?? event?.getLocalPosition?.(stage) ?? null;
+        if (local) return local;
+        const global = event?.data?.global ?? event?.global ?? null;
+        if (global && typeof stage.toLocal === "function") return stage.toLocal(global);
+        return null;
+      } catch (_) {
+        return null;
+      }
+    };
+
+    const onRight = (event) => {
+      event?.stopPropagation?.();
+      cleanup();
+      resolve(null);
+    };
+
+    const onDown = (event) => {
+      if (event?.data?.button === 2 || event?.button === 2) return onRight(event);
+      event?.stopPropagation?.();
+      const point = toPoint(event);
+      cleanup();
+      resolve(point ? { x: point.x, y: point.y } : null);
+    };
+
+    const priorEventMode = stage.eventMode;
+    const priorInteractive = stage.interactive;
+    try { stage.eventMode = "static"; } catch (_) {}
+    try { stage.interactive = true; } catch (_) {}
+    for (const emitter of emitters) {
+      try { emitter.on("pointerdown", onDown); } catch (_) {}
+      try { emitter.on("rightdown", onRight); } catch (_) {}
+    }
+  });
+}
+
+function getTerrainKeyAtPoint(point) {
+  try {
+    const fn = game?.[SYSTEM_ID]?.api?.terrain?.getTerrainKeyAtPoint;
+    if (typeof fn === "function") return fn(point);
+  } catch (_) {}
+  return null;
+}
+
+function getTerrainAtKey(key) {
+  try {
+    const fn = game?.[SYSTEM_ID]?.api?.terrain?.getTerrainAtGridKey;
+    if (typeof fn === "function") return fn(key);
+  } catch (_) {}
+  return null;
+}
+
+function getTerrainAtPointForAttack(point) {
+  try {
+    const fn = game?.[SYSTEM_ID]?.api?.terrain?.getTerrainAtPoint;
+    if (typeof fn === "function") return fn(point);
+  } catch (_) {}
+  return null;
+}
+
+function getLineOfSightTerrainKeys(attackerToken, targetToken) {
+  const a = getTokenCenter(attackerToken);
+  const b = getTokenCenter(targetToken);
+  if (!a || !b || !game?.[SYSTEM_ID]?.api?.terrain) return [];
+
+  const attackerKey = getTerrainKeyAtPoint(a);
+  const targetKey = getTerrainKeyAtPoint(b);
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const length = Math.hypot(dx, dy);
+  const gridSize = Number(canvas?.grid?.size ?? canvas?.dimensions?.size ?? 100) || 100;
+  const samples = Math.max(16, Math.ceil(length / Math.max(6, gridSize / 8)));
+  const keys = new Set();
+
+  for (let i = 1; i < samples; i++) {
+    const t = i / samples;
+    const point = { x: a.x + dx * t, y: a.y + dy * t };
+    const key = getTerrainKeyAtPoint(point);
+    if (!key || key === attackerKey || key === targetKey) continue;
+    keys.add(key);
+  }
+
+  return Array.from(keys);
+}
+
+async function scheduleArrowIVIndirectStrikeAuto(scene, strikeData) {
+  if (!scene || !strikeData) return { ok: false, reason: "No scene or strike data" };
+  if (game.user?.isGM) return _gmScheduleArrowIVIndirectStrike(scene.uuid, strikeData);
+  const socket = getATOWSocket();
+  if (!socket) return { ok: false, reason: "AToW socket is not ready" };
+  return socket.executeAsGM("gmScheduleArrowIVIndirectStrike", scene.uuid, strikeData);
+}
+
+function buildArrowIVStrikeId() {
+  try {
+    if (typeof foundry?.utils?.randomID === "function") return foundry.utils.randomID();
+  } catch (_) {}
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function currentCombatantMatchesStrike(combat, strike) {
+  const combatant = combat?.combatant ?? null;
+  if (!combatant || !strike) return false;
+  const currentCombatantId = String(combatant.id ?? "");
+  const currentActorId = String(combatant.actorId ?? combatant.actor?.id ?? "");
+  const currentTokenId = String(combatant.tokenId ?? combatant.token?.id ?? "");
+  return (strike.attackerCombatantId && currentCombatantId === String(strike.attackerCombatantId)) ||
+    (strike.attackerTokenId && currentTokenId === String(strike.attackerTokenId)) ||
+    (strike.attackerActorId && currentActorId === String(strike.attackerActorId));
+}
+
+function arrowIVStrikeIsDue(combat, strike) {
+  if (!combat?.started || !strike) return false;
+  if (strike.combatId && String(strike.combatId) !== String(combat.id ?? "")) return false;
+  if (!currentCombatantMatchesStrike(combat, strike)) return false;
+  const firedRound = Number(strike.firedRound ?? 0) || 0;
+  const currentRound = Number(combat.round ?? 0) || 0;
+  return currentRound > firedRound;
+}
+
+async function applyArrowIVIndirectDamageToToken(targetToken, damage, strike) {
+  const targetActor = targetToken?.actor;
+  if (!targetActor) return { ok: false, reason: "No target actor" };
+  const attackerToken = strike?.attackerTokenId ? (canvas?.tokens?.get?.(strike.attackerTokenId) ?? null) : null;
+  const side = attackerToken ? (getTargetSideFromFacing(attackerToken, targetToken)?.side ?? "front") : "front";
+  const locResult = await rollHitLocation(side);
+  const result = await applyDamageToTargetActorAuto(targetActor, locResult.loc, damage, { side, tac: false, tacLoc: locResult.loc });
+  return { ok: result?.ok !== false, result, locResult, side };
+}
+
+async function resolveArrowIVIndirectStrike(scene, strike) {
+  if (!scene || !strike) return { ok: false, reason: "No strike" };
+  const gridKey = String(strike.gridKey ?? "");
+  const targetTokens = getTokensInGridKey(scene.id, gridKey).filter(t => isMechActor(t?.actor));
+  const impactPoint = strike?.point ? { x: Number(strike.point.x), y: Number(strike.point.y) } : null;
+  if (impactPoint && Number.isFinite(impactPoint.x) && Number.isFinite(impactPoint.y)) {
+    await playArrowIVImpactEffects(impactPoint);
+  }
+  const attackerName = String(strike.attackerName ?? "Arrow IV");
+  const weaponName = String(strike.weaponName ?? "Arrow IV System");
+  const hexLabel = String(strike.hexLabel ?? gridKey);
+  const targetLines = [];
+  const rolls = [];
+
+  for (const targetToken of targetTokens) {
+    const roll = await (new Roll("2d6")).evaluate();
+    rolls.push(roll);
+    const hit = (roll.total ?? 0) >= 4;
+    const damage = hit ? 20 : 5;
+    const applied = await applyArrowIVIndirectDamageToToken(targetToken, damage, strike);
+    let massiveDamagePsr = null;
+    if (damage >= 20 && applied?.result?.ok) {
+      massiveDamagePsr = await resolveMassiveDamagePSR(targetToken, damage, { source: "Arrow IV indirect impact" });
+    }
+    const loc = applied?.locResult?.loc ? String(applied.locResult.loc).toUpperCase() : "?";
+    const locRoll = applied?.locResult?.roll?.total ?? "?";
+    const appliedText = applied?.result?.ok
+      ? `Applied to ${loc} (location roll ${locRoll})`
+      : `Not applied: ${applied?.result?.reason ?? applied?.reason ?? "unknown reason"}`;
+    const psrText = massiveDamagePsr?.required ? ` Massive damage PSR: ${massiveDamagePsr.success ? "passed" : "failed"}.` : "";
+    targetLines.push(`<li><b>${targetToken.name}</b>: roll ${roll.total} vs 4 - ${hit ? "HIT" : "GROUND IMPACT"}, ${damage} damage. ${appliedText}${psrText}</li>`);
+  }
+
+  const content = [
+    `<div class="atow-chat-card atow-mech-attack">`,
+    `<header><b>${weaponName}</b> - Indirect Impact</header>`,
+    `<div><b>Attacker:</b> ${attackerName}</div>`,
+    `<div><b>Designated Hex:</b> ${hexLabel}</div>`,
+    targetTokens.length
+      ? `<ul>${targetLines.join("")}</ul>`
+      : `<div>No mechs occupied the designated hex when the Arrow IV arrived.</div>`,
+    `</div>`
+  ].join("");
+  const flags = {
+    [SYSTEM_ID]: {
+      action: "weaponAttack",
+      weaponAttack: true,
+      attackMode: "arrowIVIndirectImpact",
+      weaponName,
+      attackerActorId: strike.attackerActorId ?? null,
+      attackerTokenId: strike.attackerTokenId ?? null,
+      strikeId: strike.id ?? null
+    }
+  };
+
+  await ChatMessage.create({
+    speaker: ChatMessage.getSpeaker({ alias: attackerName }),
+    content,
+    rolls,
+    type: rolls.length ? CONST.CHAT_MESSAGE_TYPES.ROLL : CONST.CHAT_MESSAGE_TYPES.OTHER,
+    flags
+  }).catch(err => console.warn("AToW Battletech | Arrow IV indirect impact chat failed", err));
+
+  return { ok: true, targets: targetTokens.length };
+}
+
+async function processDueArrowIVIndirectStrikes(combat) {
+  if (!game.user?.isGM || !combat?.started) return;
+  const scene = combat.scene ?? canvas?.scene ?? game.scenes?.active ?? null;
+  if (!scene?.getFlag || !scene?.setFlag) return;
+  const strikes = Array.isArray(scene.getFlag(SYSTEM_ID, ARROW_IV_INDIRECT_FLAG))
+    ? foundry.utils.deepClone(scene.getFlag(SYSTEM_ID, ARROW_IV_INDIRECT_FLAG))
+    : [];
+  if (!strikes.length) return;
+
+  const due = [];
+  const remaining = [];
+  for (const strike of strikes) {
+    if (arrowIVStrikeIsDue(combat, strike)) due.push(strike);
+    else remaining.push(strike);
+  }
+  if (!due.length) return;
+
+  await scene.setFlag(SYSTEM_ID, ARROW_IV_INDIRECT_FLAG, remaining);
+  for (const strike of due) {
+    try {
+      await resolveArrowIVIndirectStrike(scene, strike);
+    } catch (err) {
+      console.warn("AToW Battletech | Failed to resolve Arrow IV indirect strike", err);
+    }
+  }
+}
+
+if (!globalThis.__ATOW_BT_ARROW_IV_INDIRECT_HOOK__) {
+  globalThis.__ATOW_BT_ARROW_IV_INDIRECT_HOOK__ = true;
+  Hooks.on("updateCombat", async (combat, changed) => {
+    if (!("turn" in (changed ?? {})) && !("round" in (changed ?? {}))) return;
+    await processDueArrowIVIndirectStrikes(combat);
+  });
+}
+
+function getLineOfSightWoodsMods(attackerToken, targetToken) {
+  const keys = getLineOfSightTerrainKeys(attackerToken, targetToken);
+  if (!keys.length) {
+    return { mod: 0, blocked: false, woodsPoints: 0, light: 0, heavy: 0, keys: [], details: [] };
+  }
+
+  let light = 0;
+  let heavy = 0;
+  const woodedKeys = [];
+  for (const key of keys) {
+    const terrain = getTerrainAtKey(key);
+    const woods = String(terrain?.woods ?? "").toLowerCase();
+    if (woods === "light") {
+      light += 1;
+      woodedKeys.push({ key, woods: "light" });
+    } else if (woods === "heavy") {
+      heavy += 1;
+      woodedKeys.push({ key, woods: "heavy" });
+    }
+  }
+
+  const woodsPoints = light + (heavy * 2);
+  const details = [];
+  if (light) details.push(`${light} intervening Light Woods +${light}`);
+  if (heavy) details.push(`${heavy} intervening Heavy Woods +${heavy * 2}`);
+
+  return {
+    mod: woodsPoints,
+    blocked: woodsPoints >= 3,
+    woodsPoints,
+    light,
+    heavy,
+    keys: woodedKeys,
+    details
+  };
+}
+
+function getLineOfSightCoverMods(attackerToken, targetToken) {
+  const attackerCenter = getTokenCenter(attackerToken);
+  const targetCenter = getTokenCenter(targetToken);
+  const attackerTerrain = attackerCenter ? getTerrainAtPointForAttack(attackerCenter) : null;
+  const targetTerrain = targetCenter ? getTerrainAtPointForAttack(targetCenter) : null;
+  const attackerElevation = Number(attackerTerrain?.elevation ?? 0) || 0;
+  const targetElevation = Number(targetTerrain?.elevation ?? 0) || 0;
+  const targetWaterDepth = Number(targetTerrain?.waterDepth ?? 0) || 0;
+  const keys = getLineOfSightTerrainKeys(attackerToken, targetToken);
+  const hillKeys = [];
+  let maxInterveningElevation = 0;
+
+  for (const key of keys) {
+    const terrain = getTerrainAtKey(key);
+    const elevation = Number(terrain?.elevation ?? 0) || 0;
+    if (elevation > 0) {
+      hillKeys.push({ key, elevation });
+      maxInterveningElevation = Math.max(maxInterveningElevation, elevation);
+    }
+  }
+
+  const highEndpointElevation = Math.max(attackerElevation, targetElevation);
+  const endpointsSameElevation = attackerElevation === targetElevation;
+  const hillBlocksLos = maxInterveningElevation >= (highEndpointElevation + 2);
+  const hillPartialCover = endpointsSameElevation && maxInterveningElevation === (highEndpointElevation + 1);
+  const elevationDifferenceIgnoresHillCover = !endpointsSameElevation && maxInterveningElevation === (highEndpointElevation + 1);
+  const blocked = hillBlocksLos;
+  const partialCover = !blocked && (targetWaterDepth > 0 || hillPartialCover);
+  const details = [];
+  if (targetWaterDepth > 0) details.push(`Target in water depth ${targetWaterDepth}`);
+  if (hillPartialCover) details.push(`Intervening level ${maxInterveningElevation} hill`);
+  if (elevationDifferenceIgnoresHillCover) details.push("Elevation difference ignores hill cover");
+  if (blocked) details.push(`Intervening level ${maxInterveningElevation} hill blocks LOS`);
+
+  return {
+    partialCover,
+    blocked,
+    mod: partialCover ? 1 : 0,
+    attackerElevation,
+    targetElevation,
+    targetWaterDepth,
+    maxInterveningElevation,
+    hillPartialCover,
+    elevationDifferenceIgnoresHillCover,
+    hillKeys,
+    details
+  };
+}
+
+function applyPartialCoverToHitLocation(locResult, targetPartialCover) {
+  if (!targetPartialCover || !isLegLocationKey(locResult?.loc)) {
+    return { locResult, covered: false };
+  }
+  return {
+    locResult: {
+      ...locResult,
+      partialCoverBlocked: true
+    },
+    covered: true
+  };
+}
+
+function applyPartialCoverToPacket(packet, targetPartialCover) {
+  if (!targetPartialCover || !isLegLocationKey(packet?.loc)) return packet;
+  return {
+    ...packet,
+    partialCoverBlocked: true,
+    originalDamage: packet.damage,
+    damage: 0
+  };
+}
+
 function getMissileRack(itemOrName) {
   const rawName = (typeof itemOrName === "string" ? itemOrName : itemOrName?.name) ?? "";
   const name = String(rawName).toUpperCase();
@@ -2397,8 +3613,8 @@ function getMissileRack(itemOrName) {
   // Streak SRMs don't use the normal cluster table in tabletop; treat as non-cluster here.
   if (/\BSTREAK\s*SRM\b/i.test(name)) return null;
 
-  // Accept common formats: "LRM 15", "LRM-15", "MRM 30", etc.
-  const m = name.match(/\b(LRM|SRM|MRM)\s*[-]?\s*(\d+)\b/i);
+  // Accept common formats: "LRM 15", "LRM-15", "MRM 30", "ATM 9", etc.
+  const m = name.match(/\b(LRM|SRM|MRM|ATM)\s*[-/]?\s*(\d+)\b/i);
   if (!m) return null;
 
   const type = String(m[1]).toUpperCase();
@@ -2408,8 +3624,10 @@ function getMissileRack(itemOrName) {
   return { type, size };
 }
 
-async function rollClusterHits(rackSize, bonus = 0) {
-  const roll = await (new Roll("2d6")).evaluate();
+async function rollClusterHits(rackSize, bonus = 0, { forcedTotal = null } = {}) {
+  const roll = Number.isFinite(Number(forcedTotal))
+    ? { total: Number(forcedTotal) }
+    : await (new Roll("2d6")).evaluate();
   const baseTotal = num(roll?.total, 0);
 
   // Artemis IV FCS: +2 to the Cluster Hits Table roll, maximum modified roll of 12.
@@ -2675,15 +3893,138 @@ function isWeaponDestroyedForFireKey(actor, weaponFireKey = "") {
   return null;
 }
 
+function normalizeMechWeaponMountLoc(value) {
+  const raw = String(value ?? "").trim().toLowerCase();
+  if (!raw) return "";
+  const compact = raw.replace(/[^a-z0-9]/g, "");
+  if (["h", "hd", "head"].includes(compact)) return "head";
+  if (["ct", "centertorso", "centretorso", "center"].includes(compact)) return "ct";
+  if (["lt", "lefttorso"].includes(compact)) return "lt";
+  if (["rt", "righttorso"].includes(compact)) return "rt";
+  if (["la", "leftarm"].includes(compact)) return "la";
+  if (["ra", "rightarm"].includes(compact)) return "ra";
+  if (["ll", "leftleg"].includes(compact)) return "ll";
+  if (["rl", "rightleg"].includes(compact)) return "rl";
+  return compact;
+}
+
+function mechWeaponMountLocLabel(locKey) {
+  const map = {
+    head: "HD",
+    ct: "CT",
+    lt: "LT",
+    rt: "RT",
+    la: "LA",
+    ra: "RA",
+    ll: "LL",
+    rl: "RL"
+  };
+  return map[locKey] ?? String(locKey ?? "").toUpperCase();
+}
+
+function findWeaponMountInfoForFireKey(actor, weaponItem, weaponFireKey = "") {
+  const key = String(weaponFireKey ?? "").trim();
+  const mountMatch = /^mount:(.+)$/i.exec(key);
+  const critMatch = /^crit:([^:]+):(\d+)(?::\d+)?$/i.exec(key);
+  const itemUuid = String(weaponItem?.uuid ?? "").trim();
+  const itemId = String(weaponItem?.id ?? "").trim();
+
+  const norm = (s) =>
+    String(s ?? "")
+      .toLowerCase()
+      .replace(/[\s\-_]+/g, " ")
+      .replace(/[^\w\s\/]+/g, "")
+      .trim();
+  const itemName = norm(weaponItem?.name);
+
+  const crit = actor?.system?.crit ?? {};
+  for (const [locKey, locData] of Object.entries(crit)) {
+    const rawSlots = locData?.slots;
+    if (!rawSlots) continue;
+    const locMax = _getCritLocMax(locKey);
+    const slots = Array.isArray(rawSlots) ? rawSlots : Object.values(rawSlots);
+
+    for (let i = 0; i < Math.min(slots.length, locMax); i++) {
+      const slot = slots[i] ?? {};
+      if (!slot || (slot.partOf !== undefined && slot.partOf !== null)) continue;
+
+      const slotUuid = String(slot?.uuid ?? slot?.itemUuid ?? slot?.sourceUuid ?? slot?.documentUuid ?? "").trim();
+      const slotItemId = String(slot?.itemId ?? "").trim();
+      const label = (typeof slot === "string") ? slot : (slot?.label ?? slot?.name ?? "");
+      const slotLabel = norm(label);
+
+      let matches = false;
+      if (mountMatch) matches = String(slot?.mountId ?? "").trim() === String(mountMatch[1] ?? "").trim();
+      else if (critMatch) matches = String(locKey).toLowerCase() === String(critMatch[1] ?? "").toLowerCase() && i === Number(critMatch[2]);
+      else if (itemUuid && slotUuid) matches = slotUuid === itemUuid;
+      if (!matches && itemId) {
+        if (slotItemId && slotItemId === itemId) matches = true;
+        else if (slotUuid && (slotUuid.endsWith(`.Item.${itemId}`) || slotUuid.endsWith(itemId))) matches = true;
+      }
+      if (!matches && itemName && slotLabel && (slotLabel === itemName || slotLabel.includes(itemName))) matches = true;
+      if (!matches) continue;
+
+      const normalized = normalizeMechWeaponMountLoc(locKey);
+      return {
+        locKey: normalized,
+        locLabel: mechWeaponMountLocLabel(normalized),
+        index: i,
+        mountId: String(slot?.mountId ?? "").trim(),
+        rearMounted: Boolean(slot?.rearMounted)
+      };
+    }
+  }
+
+  const fallbackLoc = normalizeMechWeaponMountLoc(weaponItem?.system?.loc ?? weaponItem?.system?.location ?? "");
+  if (fallbackLoc) return { locKey: fallbackLoc, locLabel: mechWeaponMountLocLabel(fallbackLoc), index: null, mountId: "", rearMounted: false };
+  return { locKey: "", locLabel: "Unknown", index: null, mountId: "", rearMounted: false };
+}
+
+function getAllowedFiringArcsForWeapon(actor, weaponItem, opts = {}) {
+  const mount = findWeaponMountInfoForFireKey(actor, weaponItem, opts?.weaponFireKey ?? "");
+  const explicitLoc = normalizeMechWeaponMountLoc(opts?.weaponMountLoc ?? "");
+  if (explicitLoc) {
+    mount.locKey = explicitLoc;
+    mount.locLabel = mechWeaponMountLocLabel(explicitLoc);
+  }
+  const rearMounted = Boolean(opts?.weaponRearMounted ?? mount?.rearMounted);
+  const allowed = rearMounted ? ["rear"] : ["front"];
+  if (!rearMounted && mount.locKey === "ra") allowed.push("right");
+  if (!rearMounted && mount.locKey === "la") allowed.push("left");
+  return { mount, rearMounted, allowed };
+}
+
+function formatArcList(arcs = []) {
+  return arcs.map(a => String(a ?? "").toUpperCase()).join("/");
+}
+
+function getWeaponFiringArcInfo(actor, weaponItem, opts = {}, attackerToken = null, targetToken = null) {
+  if (!isMechActor(actor) || !attackerToken || !targetToken) return { applies: false, legal: true };
+  const { mount, rearMounted, allowed } = getAllowedFiringArcsForWeapon(actor, weaponItem, opts);
+  const arc = getTargetSideFromFacing(targetToken, attackerToken);
+  const side = arc?.side ?? "front";
+  const legal = allowed.includes(side);
+  return {
+    applies: true,
+    legal,
+    side,
+    arc,
+    mount,
+    rearMounted,
+    allowed,
+    allowedLabel: formatArcList(allowed)
+  };
+}
+
 async function isWeaponDestroyedForAttack(actor, weaponItem, opts = {}) {
   const byKey = isWeaponDestroyedForFireKey(actor, opts?.weaponFireKey ?? "");
   if (typeof byKey === "boolean") return byKey;
   return isWeaponDestroyedOnActor(actor, weaponItem);
 }
 
-export function calcRangeBandAndMod(item, distance) {
+export function calcRangeBandAndMod(item, distance, { ammoKey = null } = {}) {
   const d = num(distance, 0);
-  const { min, short, medium, long } = getWeaponRanges(item);
+  const { min, short, medium, long } = getWeaponRanges(item, { ammoKey });
 
   const minPenalty = (min > 0 && d < min) ? Math.max(0, (min - d) + 1) : 0;
 
@@ -2714,6 +4055,252 @@ export async function rollHitLocation(side = "front") {
   return { roll, loc };
 }
 
+function getMechTonnage(actor) {
+  const candidates = [
+    actor?.system?.mech?.tonnage,
+    actor?.system?.mech?.tons,
+    actor?.system?.tonnage,
+    actor?.system?.tons,
+    actor?.system?.stats?.tonnage
+  ];
+  for (const value of candidates) {
+    const n = Number(value);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  return 0;
+}
+
+function getFallSideFromRoll(rollTotal) {
+  if (rollTotal === 1) return "front";
+  if (rollTotal === 2 || rollTotal === 3) return "right";
+  if (rollTotal === 4) return "rear";
+  return "left";
+}
+
+function getFallDamageClusters(damage) {
+  const clusters = [];
+  let remaining = Math.max(0, Math.ceil(Number(damage ?? 0) || 0));
+  while (remaining > 0) {
+    const cluster = Math.min(5, remaining);
+    clusters.push(cluster);
+    remaining -= cluster;
+  }
+  return clusters;
+}
+
+function getLegLossPSRTNMod(actor) {
+  const flagLegLoss = num(actor?.getFlag?.(SYSTEM_ID, "legLoss") ?? actor?.flags?.[SYSTEM_ID]?.legLoss, 0);
+  const isLegDestroyed = (locKey) => {
+    const loc = actor?.system?.structure?.[locKey] ?? {};
+    const max = num(loc.max, 0);
+    const dmg = num(loc.dmg, 0);
+    return max > 0 && dmg >= max;
+  };
+  const legLoss = Math.min(2, Math.max(0, flagLegLoss, (isLegDestroyed("ll") ? 1 : 0) + (isLegDestroyed("rl") ? 1 : 0)));
+  return legLoss >= 1 ? 5 : 0;
+}
+
+function htmlEscape(value) {
+  const div = document.createElement("div");
+  div.textContent = String(value ?? "");
+  return div.innerHTML;
+}
+
+const PILOT_CONSCIOUSNESS_TN_BY_HIT = {
+  1: 3,
+  2: 5,
+  3: 7,
+  4: 10,
+  5: 11
+};
+
+async function markMechDefeatedForPilot(actor, { dead = false } = {}) {
+  if (!actor) return;
+  await applyActorStatusAuto(actor, "prone", true).catch(() => {});
+  await applyActorStatusAuto(actor, CONFIG?.specialStatusEffects?.DEFEATED ?? "defeated", true).catch(() => {});
+  if (dead) await applyActorStatusAuto(actor, "dead", true).catch(() => {});
+
+  try {
+    for (const combat of game.combats?.contents ?? []) {
+      const updates = [];
+      for (const combatant of combat?.combatants ?? []) {
+        const actorId = String(combatant?.actorId ?? combatant?.actor?.id ?? combatant?.token?.actor?.id ?? "");
+        const tokenActorId = String(combatant?.token?.actor?.id ?? "");
+        if (actorId !== String(actor.id) && tokenActorId !== String(actor.id)) continue;
+        if (Boolean(combatant?.defeated) === true) continue;
+        updates.push({ _id: combatant.id, defeated: true });
+      }
+      if (updates.length) await combat.updateEmbeddedDocuments("Combatant", updates).catch(() => {});
+    }
+  } catch (err) {
+    console.warn("AToW Battletech | Failed to mark pilot-defeated combatant", err);
+  }
+}
+
+export async function applyMechPilotHit(actor, { reason = "Pilot hit", token = null } = {}) {
+  if (!actor || !isMechActor(actor)) return { ok: false, reason: "Not a mech actor" };
+  if (!game.user?.isGM && !actor.isOwner) {
+    const socket = getATOWSocket();
+    if (socket) return socket.executeAsGM("gmApplyMechPilotHit", actor.uuid, { reason });
+    return { ok: false, reason: "AToW socket is not ready" };
+  }
+
+  const currentHits = clampInt(actor.system?.pilot?.hitsTaken, 0, 6, 0);
+  if (currentHits >= 6) return { ok: true, alreadyDead: true, hits: currentHits };
+
+  const nextHits = clampInt(currentHits + 1, 0, 6, 0);
+  const rolls = [];
+  const lines = [
+    `<div class="atow-chat-card atow-mech-attack">`,
+    `<header><b>Pilot Hit</b></header>`,
+    `<div><b>${htmlEscape(actor.name ?? "Mech")}</b>: ${htmlEscape(reason)}</div>`,
+    `<div><b>Pilot hits:</b> ${nextHits}/6</div>`
+  ];
+
+  const updates = { "system.pilot.hitsTaken": nextHits };
+  let result = { ok: true, hits: nextHits, unconscious: false, dead: false };
+
+  if (nextHits >= 6) {
+    updates["system.pilot.consciousness"] = "Dead";
+    await actor.update(updates).catch(() => {});
+    await markMechDefeatedForPilot(actor, { dead: true });
+    lines.push(`<div><b>Result:</b> Pilot killed. Mech defeated.</div>`);
+    result.dead = true;
+  } else {
+    const tn = PILOT_CONSCIOUSNESS_TN_BY_HIT[nextHits] ?? 11;
+    const roll = await (new Roll("2d6")).evaluate();
+    rolls.push(roll);
+    const total = Number(roll?.total ?? 0) || 0;
+    const conscious = total >= tn;
+    updates["system.pilot.consciousness"] = conscious ? String(tn) : "Unconscious";
+    await actor.update(updates).catch(() => {});
+
+    lines.push(`<div><b>Consciousness:</b> ${total} vs TN ${tn} - <b>${conscious ? "PASS" : "FAIL"}</b></div>`);
+    if (!conscious) {
+      await markMechDefeatedForPilot(actor, { dead: false });
+      lines.push(`<div><b>Result:</b> Pilot unconscious. Mech falls prone and is defeated.</div>`);
+      result.unconscious = true;
+    }
+  }
+
+  lines.push(`</div>`);
+  await ChatMessage.create({
+    speaker: ChatMessage.getSpeaker({ token, actor }),
+    rolls,
+    content: lines.join("")
+  }).catch(() => {});
+
+  return result;
+}
+
+async function _gmApplyMechPilotHit(actorUuid, opts = {}) {
+  const actor = await fromUuid(actorUuid).catch(() => null);
+  return applyMechPilotHit(actor, opts);
+}
+
+export async function resolvePilotSeatbeltCheck(actor, { source = "Fall", token = null } = {}) {
+  if (!actor || !isMechActor(actor)) return null;
+  if (!game.user?.isGM && !actor.isOwner) return null;
+
+  const piloting = num(actor.system?.pilot?.piloting, 0);
+  const legLossMod = getLegLossPSRTNMod(actor);
+  const tn = 8 + legLossMod;
+  const roll = await (new Roll(`2d6 + ${piloting}`)).evaluate();
+  const success = Number(roll?.total ?? 0) >= tn;
+  const rolls = [roll];
+  const lines = [
+    `<div class="atow-chat-card atow-mech-attack">`,
+    `<header><b>Pilot Seatbelt Check</b></header>`,
+    `<div><b>${htmlEscape(actor.name ?? "Mech")}</b>: ${htmlEscape(source)}</div>`,
+    `<div><b>Roll:</b> ${roll.total} (2d6 + Piloting ${piloting}) vs TN ${tn}${legLossMod ? ` (leg destroyed +${legLossMod})` : ""} - <b>${success ? "PASS" : "PILOT HIT"}</b></div>`
+  ];
+
+  let pilotHit = null;
+  if (!success) {
+    pilotHit = await applyMechPilotHit(actor, { reason: `${source}: failed seatbelt check`, token });
+  }
+
+  lines.push(`</div>`);
+  await ChatMessage.create({
+    speaker: ChatMessage.getSpeaker({ token, actor }),
+    rolls,
+    content: lines.join("")
+  }).catch(() => {});
+
+  return { ok: true, success, roll, pilotHit };
+}
+
+async function resolveMassiveDamagePSR(targetToken, attackDamage, { source = "Massive Damage" } = {}) {
+  const targetActor = targetToken?.actor;
+  if (!targetActor || !isMechActor(targetActor)) return null;
+  if (Number(attackDamage ?? 0) < 20) return null;
+
+  const piloting = num(targetActor.system?.pilot?.piloting, 0);
+  const legLossMod = getLegLossPSRTNMod(targetActor);
+  const tn = 8 + legLossMod;
+  const psr = await (new Roll(`2d6 + ${piloting}`)).evaluate();
+  const success = Number(psr?.total ?? 0) >= tn;
+  const rolls = [psr];
+  const lines = [
+    `<div class="atow-chat-card atow-mech-attack">`,
+    `<header><b>Massive Damage PSR</b></header>`,
+    `<div><b>Target:</b> ${htmlEscape(targetToken.name ?? targetActor.name ?? "Mech")}</div>`,
+    `<div><b>Trigger:</b> ${htmlEscape(source)} dealt ${Number(attackDamage ?? 0)} damage in a single attack.</div>`,
+    `<div><b>Roll:</b> ${psr.total} (2d6 + Piloting ${piloting}) vs <b>TN ${tn}</b>${legLossMod ? ` (leg destroyed +${legLossMod})` : ""} - <b>${success ? "PASS" : "FALL"}</b></div>`
+  ];
+
+  const result = { ok: true, required: true, success, psr, fallDamage: 0, fallResults: [] };
+
+  if (!success) {
+    const fallRoll = await (new Roll("1d6")).evaluate();
+    rolls.push(fallRoll);
+    const side = getFallSideFromRoll(Number(fallRoll?.total ?? 1));
+    const tonnage = getMechTonnage(targetActor);
+    const fallDamage = Math.max(1, Math.ceil(tonnage / 10));
+    const clusters = getFallDamageClusters(fallDamage);
+    result.side = side;
+    result.fallRoll = fallRoll;
+    result.fallDamage = fallDamage;
+
+    const proneResult = await applyActorStatusAuto(targetActor, "prone", true);
+    result.proneResult = proneResult;
+    result.seatbelt = await resolvePilotSeatbeltCheck(targetActor, { source, token: targetToken }).catch(err => {
+      console.warn("AToW Battletech | Pilot seatbelt check failed", err);
+      return null;
+    });
+
+    lines.push(`<div><b>Fall:</b> ${fallRoll.total} - ${htmlEscape(side)} side. Damage ${fallDamage}${tonnage ? ` (${tonnage} tons / 10)` : ""}.</div>`);
+    if (proneResult?.ok === false) lines.push(`<div><b>Prone:</b> Not applied - ${htmlEscape(proneResult.reason ?? "unknown reason")}</div>`);
+
+    const hitRows = [];
+    for (const cluster of clusters) {
+      const locResult = await rollHitLocation(side);
+      if (locResult?.roll) rolls.push(locResult.roll);
+      const loc = locResult?.loc ?? "ct";
+      const dmgResult = await applyDamageToTargetActorAuto(targetActor, loc, cluster, { side, tac: false, tacLoc: loc });
+      result.fallResults.push({ cluster, locResult, damage: dmgResult });
+      hitRows.push(`<li>${cluster} damage to <b>${htmlEscape(String(loc).toUpperCase())}</b> (location roll ${locResult?.roll?.total ?? "?"})${dmgResult?.ok === false ? ` - ${htmlEscape(dmgResult.reason ?? "not applied")}` : ""}</li>`);
+    }
+    if (hitRows.length) lines.push(`<ul>${hitRows.join("")}</ul>`);
+  }
+
+  lines.push(`</div>`);
+  await ChatMessage.create({
+    speaker: ChatMessage.getSpeaker({ token: targetToken, actor: targetActor }),
+    rolls,
+    content: lines.join(""),
+    flags: {
+      [SYSTEM_ID]: {
+        action: "massiveDamagePSR",
+        attackDamage,
+        success
+      }
+    }
+  }).catch(err => console.warn("AToW Battletech | Massive damage PSR chat failed", err));
+
+  return result;
+}
+
 /**
  * Core roll: 2d6 + Gunnery vs TN (>= TN hits)
  */
@@ -2722,6 +4309,17 @@ export async function rollWeaponAttack(actor, weaponItem, opts = {}) {
   // Resolve to an actual embedded Item when possible (module compatibility)
   weaponItem = await _resolveWeaponItem(actor, weaponItem);
   const isAbomChat = opts?.chatMode === "abomination";
+
+  if (isAMSWeapon(weaponItem)) {
+    ui?.notifications?.warn?.("Anti-Missile Systems fire automatically against incoming missiles and cannot be fired manually.");
+    return { ok: false, blocked: true, reason: "amsCannotFireManually" };
+  }
+
+  const chargeLockToken = opts.attackerToken ?? getAttackerToken(actor);
+  if (hasActorChargedThisTurn(actor, chargeLockToken?.document ?? chargeLockToken)) {
+    ui?.notifications?.warn?.("This mech charged this turn and cannot make weapon attacks.");
+    return { ok: false, blocked: true, reason: "chargedThisTurn" };
+  }
 
   if (await isWeaponDestroyedForAttack(actor, weaponItem, opts)) {
     ui?.notifications?.warn?.(`${weaponItem?.name ?? "This weapon"} is destroyed and cannot be fired.`);
@@ -2734,10 +4332,12 @@ export async function rollWeaponAttack(actor, weaponItem, opts = {}) {
   }
 
 // Rapid-fire jam: if this weapon jammed previously, it cannot be fired again.
-if (!isAbomChat && weaponItem?.system?.jammed) {
-  ui?.notifications?.warn?.(`${weaponItem.name} is jammed and cannot be fired.`);
-  return null;
-}
+  if (!isAbomChat && weaponItem?.system?.jammed) {
+    ui?.notifications?.warn?.(`${weaponItem.name} is jammed and cannot be fired.`);
+    return null;
+  }
+  const isTagAttack = isTAGWeapon(weaponItem);
+  const isArrowIVHomingAttack = isArrowIVSystemWeapon(weaponItem);
 
   const pilot = actor.system?.pilot ?? {};
   const crew = actor.system?.crew ?? {};
@@ -2753,6 +4353,7 @@ if (!isAbomChat && weaponItem?.system?.jammed) {
   const targetActor = targetToken?.actor;
   const isAbomTarget = isAbominationActor(targetActor);
   const isVehicleTarget = isVehicleActor(targetActor);
+  const isDropshipTarget = isDropshipActor(targetActor);
   const hasVehicleTurret = isVehicleTarget && (num(targetActor?.system?.armor?.turret?.max, 0) > 0);
 
   if (!targetToken) {
@@ -2760,8 +4361,28 @@ if (!isAbomChat && weaponItem?.system?.jammed) {
     return null;
   }
   if (!attackerToken) {
-    ui?.notifications?.warn?.("Place/control your mech token on the scene before making an attack.");
+    ui?.notifications?.warn?.("Place/control your attacker token on the scene before making an attack.");
     return null;
+  }
+  if (isArrowIVHomingAttack && !tokenHasStatus(targetToken, TAGGED_STATUS_ID)) {
+    ui?.notifications?.warn?.("Arrow IV Homing direct fire requires a Tagged target.");
+    return { ok: false, blocked: true, reason: "targetNotTagged" };
+  }
+  if (isArrowIVHomingAttack) {
+    const ammoKey = ammoKeyFromTypeLabel("Arrow IV Homing");
+    const { totals } = await ensureActorAmmoBins(actor);
+    const bins = actor.system?.ammoBins ?? {};
+    const bin = bins?.[ammoKey];
+    const total = num(bin?.total, totals.get(ammoKey)?.total ?? 0);
+    const cur = Number.isFinite(Number(bin?.current)) ? num(bin.current, total) : total;
+    if (!bin && !totals.has(ammoKey)) {
+      ui?.notifications?.error?.("Arrow IV Homing direct fire requires Ammo (Arrow IV Homing).");
+      return { ok: false, blocked: true, reason: "missingArrowIVHomingAmmo" };
+    }
+    if (cur < 1) {
+      ui?.notifications?.error?.("No Arrow IV Homing ammo remaining.");
+      return { ok: false, blocked: true, reason: "noArrowIVHomingAmmo" };
+    }
   }
 
   const distance = Number.isFinite(opts.distance) ? num(opts.distance, 0) : measureTokenDistance(attackerToken, targetToken);
@@ -2770,7 +4391,12 @@ if (!isAbomChat && weaponItem?.system?.jammed) {
     return null;
   }
 
-  const { band, mod: rangeMod, minPenalty } = calcRangeBandAndMod(weaponItem, distance);
+  let ammoKey = String(opts.ammoKey ?? "").trim();
+  ammoKey = ammoKey ? ammoKeyFromTypeLabel(ammoKey) : getAmmoKeyForWeapon(weaponItem);
+  const atmSize = getATMWeaponSize(weaponItem);
+  if (Number.isFinite(atmSize) && !ammoKey) ammoKey = slugifyAmmoKey(`atm-${atmSize}`);
+
+  const { band, mod: rangeMod, minPenalty } = calcRangeBandAndMod(weaponItem, distance, { ammoKey });
 
   // Heat-based fire modifier and shutdown (computed at turn start)
   const heatFireMod = isVehicleAttacker ? 0 : num(actor.system?.heat?.effects?.fireMod, 0);
@@ -2779,6 +4405,13 @@ if (!isAbomChat && weaponItem?.system?.jammed) {
   if (isShutdown) {
     ui?.notifications?.warn?.("This mech is shut down due to heat and cannot attack.");
     return null;
+  }
+
+  const firingArcInfo = getWeaponFiringArcInfo(actor, weaponItem, opts, attackerToken, targetToken);
+  if (firingArcInfo.applies && !firingArcInfo.legal) {
+    const mountLabel = firingArcInfo.rearMounted ? "Rear-mounted" : `${firingArcInfo.mount?.locLabel ?? "Unknown"} mounted`;
+    ui?.notifications?.warn?.(`${weaponItem.name} cannot fire into the ${String(firingArcInfo.side ?? "unknown").toUpperCase()} arc. ${mountLabel} weapons may fire ${firingArcInfo.allowedLabel}.`);
+    return { ok: false, blocked: true, reason: "weaponFiringArcBlocked", firingArcInfo };
   }
 
   const autoMove = getAutoAttackerMoveMod(actor, attackerToken);
@@ -2803,6 +4436,18 @@ if (!isAbomChat && weaponItem?.system?.jammed) {
 
   const statusTNMods = getStatusTNMods(attackerToken, targetToken);
   const envTNMods = getEnvironmentTNMods(weaponItem, canvas?.scene ?? game?.scenes?.active);
+  const losWoodsMods = getLineOfSightWoodsMods(attackerToken, targetToken);
+  const losCoverMods = getLineOfSightCoverMods(attackerToken, targetToken);
+  if (losWoodsMods.blocked) {
+    const detail = losWoodsMods.details?.length ? ` (${losWoodsMods.details.join("; ")})` : "";
+    ui?.notifications?.warn?.(`Line of sight blocked by ${losWoodsMods.woodsPoints} woods points${detail}.`);
+    return { ok: false, blocked: true, reason: "woodsLineOfSightBlocked", losWoodsMods };
+  }
+  if (losCoverMods.blocked) {
+    const detail = losCoverMods.details?.length ? ` (${losCoverMods.details.join("; ")})` : "";
+    ui?.notifications?.warn?.(`Line of sight blocked by terrain${detail}.`);
+    return { ok: false, blocked: true, reason: "hillLineOfSightBlocked", losCoverMods };
+  }
 
   const targetMoveMod = Number.isFinite(opts.targetMoveMod)
     ? num(opts.targetMoveMod, 0)
@@ -2819,22 +4464,44 @@ if (!isAbomChat && weaponItem?.system?.jammed) {
   const aimed = opts.aimedShot ?? {};
   let aimedEnabled = Boolean(aimed.enabled) && !isAbomTarget;
   let aimedDisabledReason = "";
+  if (isArrowIVHomingAttack && aimedEnabled) {
+    ui?.notifications?.warn?.("Arrow IV Homing attacks cannot make aimed shots.");
+    return null;
+  }
   if (isVehicleTarget && aimedEnabled) {
     aimedEnabled = false;
     aimedDisabledReason = "Aimed shots are not supported against vehicles.";
+  } else if (isDropshipTarget && aimedEnabled) {
+    aimedEnabled = false;
+    aimedDisabledReason = "Aimed shots are not supported against DropShips.";
   }
   let aimedLocRaw = String(aimed.location ?? "").trim().toLowerCase();
   let useTCForAim = Boolean(aimed.useTC);
   const indirectFire = Boolean(opts.indirectFire);
-  const rapidFireRating = getRapidFireRating(weaponItem);
+  const rapidFireRating = (isTagAttack || isArrowIVHomingAttack) ? 1 : getRapidFireRating(weaponItem);
   const clusterShotsOverride = num(opts.clusterShots, null);
   const hasClusterShotsOverride = Number.isFinite(clusterShotsOverride);
-  const rapidShots = hasClusterShotsOverride
+  const rapidShots = (isTagAttack || isArrowIVHomingAttack) ? 1 : (hasClusterShotsOverride
     ? clamp(Math.max(1, clusterShotsOverride), 1, Math.max(1, Math.floor(clusterShotsOverride)))
-    : clamp(Math.max(1, num(opts.rapidShots ?? 1, 1)), 1, rapidFireRating);
+    : clamp(Math.max(1, num(opts.rapidShots ?? 1, 1)), 1, rapidFireRating));
+  const lbxSize = getLBXWeaponSize(weaponItem);
+  const lbxSlugAmmoKey = Number.isFinite(lbxSize) ? slugifyAmmoKey(`lbx-${lbxSize}`) : null;
+  const lbxClusterAmmoKey = Number.isFinite(lbxSize) ? slugifyAmmoKey(`lbx-${lbxSize}-cluster`) : null;
+  if (Number.isFinite(lbxSize) && !ammoKey) ammoKey = lbxSlugAmmoKey;
+  const isLBXClusterFire = Boolean(lbxClusterAmmoKey && ammoKey === lbxClusterAmmoKey);
+  const atmProfile = getATMProfile(weaponItem, ammoKey);
+  const ammoSelectionLabel = isLBXClusterFire
+    ? `LB-X cluster ammo (${ammoKey})`
+    : (Number.isFinite(lbxSize)
+      ? `LB-X slug ammo (${ammoKey})`
+      : (atmProfile ? `ATM ${atmProfile.label} ammo (${ammoKey})` : String(ammoKey ?? "")));
 
   const targetImmobile = tokenHasStatus(targetToken, "atow-immobile") || tokenHasStatus(targetToken, "immobile");
-  const targetPartialCover = tokenHasStatus(targetToken, "partial-cover");
+  const targetHasStatusPartialCover = tokenHasStatus(targetToken, "partial-cover");
+  const targetHasWaterStatus = tokenHasStatus(targetToken, "in-water");
+  const partialCoverAlreadyAddsTN = targetHasStatusPartialCover || (targetHasWaterStatus && losCoverMods.targetWaterDepth > 0);
+  const terrainPartialCoverMod = (losCoverMods.partialCover && !partialCoverAlreadyAddsTN) ? 1 : 0;
+  const targetPartialCover = targetHasStatusPartialCover || losCoverMods.partialCover;
 
   let aimedTNMod = 0;
   let coverCancelMod = 0;
@@ -2920,7 +4587,7 @@ if (!isAbomChat && weaponItem?.system?.jammed) {
 
     // Partial Cover: ignore its TN modifier for aimed shots
     if (targetPartialCover) {
-      coverCancelMod -= 1; // cancels the +1 from statusTNMods
+      coverCancelMod -= (partialCoverAlreadyAddsTN ? 1 : 0) + terrainPartialCoverMod;
       aimedDetails.push("Ignore Partial Cover");
     }
   }
@@ -2929,18 +4596,28 @@ if (!isAbomChat && weaponItem?.system?.jammed) {
   const tcModStr = (tcMod >= 0) ? `+${tcMod}` : `${tcMod}`;
   const aimedModStr = (aimedNetMod >= 0) ? `+${aimedNetMod}` : `${aimedNetMod}`;
 
-  const tn = num(baseTN, 8) + rangeMod + attackerMoveMod + targetMoveMod + heatFireMod + statusTNMods.total + envTNMods.mod + terrainMod + otherMod + tcMod + aimedNetMod;
+  const totalTN = isArrowIVHomingAttack
+    ? 4
+    : num(baseTN, 8) + rangeMod + attackerMoveMod + targetMoveMod + heatFireMod + statusTNMods.total + envTNMods.mod + losWoodsMods.mod + terrainPartialCoverMod + terrainMod + otherMod + tcMod + aimedNetMod;
 
-  const toHit = await (new Roll(`2d6 + ${gunnery}`)).evaluate();
+  const tn = isArrowIVHomingAttack
+    ? 4
+    : num(baseTN, 8) + rangeMod + attackerMoveMod + targetMoveMod + heatFireMod + statusTNMods.total + envTNMods.mod + losWoodsMods.mod + terrainPartialCoverMod + terrainMod + otherMod + tcMod + aimedNetMod;
+
+  const toHit = await (new Roll(isArrowIVHomingAttack ? "2d6" : `2d6 + ${gunnery}`)).evaluate();
   // Missile rack size (LRM/SRM/MRM etc). Used to distinguish missile cluster weapons vs rapid-fire cluster.
-  const rack = getMissileRack(weaponItem);
+  const rack = (isTagAttack || isArrowIVHomingAttack) ? null : (isLBXClusterFire ? { type: "LBX", size: lbxSize } : getMissileRack(weaponItem));
+  const rackType = String(rack?.type ?? "").toUpperCase();
+  const rackATMProfile = (rackType === "ATM") ? (atmProfile ?? getATMProfile(weaponItem, ammoKey)) : null;
+  const rackPerHitDamage = rackATMProfile?.damagePerMissile ?? ((rackType === "SRM") ? 2 : (rackType === "LBX" ? 1 : 1));
+  const rackGroupSize = rackATMProfile?.groupSize ?? ((rackType === "SRM") ? 1 : (rackType === "LBX" ? 1 : 5));
   // Streak missile launchers: if the attack misses, the launcher does not fire (no ammo/heat).
   // If the attack hits, the Cluster Hits Table result is treated as 12 (i.e., all missiles in the rack hit).
-  const isStreakLauncher = Boolean(rack) && ["LRM", "SRM"].includes(String(rack.type ?? "").toUpperCase()) && /streak/i.test(String(weaponItem.name ?? ""));
+  const isStreakLauncher = Boolean(rack) && ["LRM", "SRM"].includes(rackType) && /streak/i.test(String(weaponItem.name ?? ""));
 
   // For Streak launchers, ensure there is at least 1 ammo available before allowing an attack.
-  if (isStreakLauncher && weaponConsumesAmmo(weaponItem, actor)) {
-    const key = getAmmoKeyForWeapon(weaponItem);
+  if (isStreakLauncher && weaponConsumesAmmo(weaponItem, actor, { ammoKey })) {
+    const key = ammoKey || getAmmoKeyForWeapon(weaponItem);
     if (key) {
       await ensureActorAmmoBins(actor);
       const bins = actor.system?.ammoBins ?? {};
@@ -2990,12 +4667,14 @@ const hit = (toHit.total ?? 0) >= tn;
   const dazzleHalvesDamage = dazzleMode && !isAbomTarget;
 
   let heat = isVehicleAttacker ? 0 : rawHeat;
-  let baseDamage = rawBaseDamage;
+  let baseDamage = isTagAttack ? 0 : rawBaseDamage;
 
   if (dazzleMode) {
     if (!isVehicleAttacker) heat = Math.max(0, Math.floor(rawHeat / 2));
     if (dazzleHalvesDamage) baseDamage = Math.max(0, Math.floor(rawBaseDamage / 2));
   }
+
+  if (isArrowIVHomingAttack) baseDamage = hit ? 20 : 5;
 
   // Streak launchers do not fire on a miss (no ammo spent, no heat generated).
   const weaponFired = !(isStreakLauncher && !hit);
@@ -3025,14 +4704,26 @@ const hit = (toHit.total ?? 0) >= tn;
   const artemisInstalled = Boolean(rack) ? (num(artemisCounts.totalArtemis, 0) > 0) : false;
   const artemisFullyLinked = Boolean(rack) ? _isArtemisFullyLinked(actor) : false;
   const artemisLinked = Boolean(rack) ? _weaponHasArtemisLink(actor, weaponItem, { fullyLinked: artemisFullyLinked, byLoc: artemisCounts.byLoc }) : false;
-  const clusterBonus = (artemisLinked && !isStreakLauncher) ? 2 : 0;
+  const amsEligible = hit && isMechActor(targetActor) && Boolean(rack) && ["LRM", "SRM"].includes(String(rack.type ?? "").toUpperCase());
+  const amsDefense = amsEligible
+    ? await resolveAMSDefense(targetActor, {
+        attackerName: attackerToken?.name ?? actor.name,
+        weaponName: weaponItem?.name ?? "Missile attack",
+        streak: isStreakLauncher
+      }).catch(err => {
+        console.warn("AToW Battletech | AMS defense failed", err);
+        return { active: false, reason: "error" };
+      })
+    : { active: false };
+  const atmBuiltInArtemis = rackType === "ATM";
+  const clusterBonus = (((artemisLinked || atmBuiltInArtemis) && !isStreakLauncher) ? 2 : 0) + ((amsDefense?.active && !isStreakLauncher) ? -4 : 0);
 
   if (hit && rack && hasClusterShotsOverride) {
     const volleyRoll = await rollClusterHits(rapidShots, 0);
     const volleyHits = clamp(Math.min(rapidShots, num(volleyRoll.hits, 0)), 0, rapidShots);
 
-    const perHitDamage = (rack.type === "SRM") ? 2 : 1;
-    const groupSize = (rack.type === "SRM") ? 1 : 5;
+    const perHitDamage = rackPerHitDamage;
+    const groupSize = rackGroupSize;
 
     const subclusters = [];
     const packets = [];
@@ -3041,8 +4732,10 @@ const hit = (toHit.total ?? 0) >= tn;
       let clusterRoll;
       let missilesHit;
       if (isStreakLauncher) {
-        clusterRoll = { roll: { total: 12 }, baseTotal: 12, mod: 0, modifiedTotal: 12, hits: rack.size };
-        missilesHit = rack.size;
+        clusterRoll = amsDefense?.active
+          ? await rollClusterHits(rack.size, 0, { forcedTotal: 7 })
+          : { roll: { total: 12 }, baseTotal: 12, mod: 0, modifiedTotal: 12, hits: rack.size };
+        missilesHit = Math.min(rack.size, num(clusterRoll.hits, 0));
       } else {
         clusterRoll = await rollClusterHits(rack.size, clusterBonus);
         missilesHit = Math.min(rack.size, num(clusterRoll.hits, 0));
@@ -3081,6 +4774,18 @@ const hit = (toHit.total ?? 0) >= tn;
           });
           continue;
         }
+        if (isDropshipTarget) {
+          const locRes = await rollDropshipHitLocation(side);
+          packets.push({
+            hits: packetHits,
+            loc: locRes.loc,
+            roll: locRes.roll,
+            tacFrom2: false,
+            damage: packetHits * perHitDamage,
+            floating: null
+          });
+          continue;
+        }
 
         let locRes = await rollHitLocation(side);
         const tacFrom2 = (locRes?.roll?.total ?? 0) === 2;
@@ -3090,14 +4795,14 @@ const hit = (toHit.total ?? 0) >= tn;
           locRes = { ...reroll, floating: { original: { loc: locRes.loc, rollTotal: 2 }, reroll: { loc: reroll.loc, rollTotal: reroll?.roll?.total ?? 0 } } };
         }
 
-        packets.push({
+        packets.push(applyPartialCoverToPacket({
           hits: packetHits,
           loc: locRes.loc,
           roll: locRes.roll,
           tacFrom2,
           damage: packetHits * perHitDamage,
           floating: locRes.floating
-        });
+        }, targetPartialCover));
       }
     }
 
@@ -3112,7 +4817,8 @@ const hit = (toHit.total ?? 0) >= tn;
       volleyRollBaseTotal: volleyRoll.baseTotal,
       volleyRollMod: volleyRoll.mod,
       volleyRollModifiedTotal: volleyRoll.modifiedTotal,
-      artemisLinked,
+      artemisLinked: artemisLinked || atmBuiltInArtemis,
+      ams: amsDefense,
       streakUsed: isStreakLauncher,
       perHitDamage,
       groupSize,
@@ -3128,15 +4834,17 @@ const hit = (toHit.total ?? 0) >= tn;
     let clusterRoll;
     let missilesHit;
     if (isStreakLauncher) {
-      clusterRoll = { roll: { total: 12 }, baseTotal: 12, mod: 0, modifiedTotal: 12, hits: rack.size };
-      missilesHit = rack.size;
+      clusterRoll = amsDefense?.active
+        ? await rollClusterHits(rack.size, 0, { forcedTotal: 7 })
+        : { roll: { total: 12 }, baseTotal: 12, mod: 0, modifiedTotal: 12, hits: rack.size };
+      missilesHit = Math.min(rack.size, num(clusterRoll.hits, 0));
     } else {
       clusterRoll = await rollClusterHits(rack.size, clusterBonus);
       missilesHit = Math.min(rack.size, num(clusterRoll.hits, 0));
     }
 
-    const perHitDamage = (rack.type === "SRM") ? 2 : 1;
-    const groupSize = (rack.type === "SRM") ? 1 : 5;
+    const perHitDamage = rackPerHitDamage;
+    const groupSize = rackGroupSize;
 
     const packets = [];
       for (const packetHits of splitIntoNs(missilesHit, groupSize)) {
@@ -3159,6 +4867,18 @@ const hit = (toHit.total ?? 0) >= tn;
             roll: locRes.roll,
             tacFrom2: false,
             vehicleCrit: locRes.critTrigger ? { trigger: true, tableLoc: locRes.critTableLoc } : null,
+            damage: packetHits * perHitDamage,
+            floating: null
+          });
+          continue;
+        }
+        if (isDropshipTarget) {
+          const locRes = await rollDropshipHitLocation(side);
+          packets.push({
+            hits: packetHits,
+            loc: locRes.loc,
+            roll: locRes.roll,
+            tacFrom2: false,
             damage: packetHits * perHitDamage,
             floating: null
           });
@@ -3193,7 +4913,8 @@ const hit = (toHit.total ?? 0) >= tn;
       clusterRollBaseTotal: clusterRoll.baseTotal,
       clusterRollMod: clusterRoll.mod,
       clusterRollModifiedTotal: clusterRoll.modifiedTotal,
-      artemisLinked,
+      artemisLinked: artemisLinked || atmBuiltInArtemis,
+      ams: amsDefense,
       streakUsed: isStreakLauncher,
       missilesHit,
       perHitDamage,
@@ -3202,7 +4923,7 @@ const hit = (toHit.total ?? 0) >= tn;
       packets
     };
 
-    damage = missilesHit * perHitDamage;
+    damage = packets.reduce((sum, p) => sum + num(p.damage, 0), 0);
 
   }
 
@@ -3238,6 +4959,18 @@ const hit = (toHit.total ?? 0) >= tn;
         });
         continue;
       }
+      if (isDropshipTarget) {
+        const locRes = await rollDropshipHitLocation(side);
+        packets.push({
+          hits: 1,
+          loc: locRes.loc,
+          roll: locRes.roll,
+          tacFrom2: false,
+          damage: baseDamage,
+          floating: null
+        });
+        continue;
+      }
 
       let locRes = await rollHitLocation(side);
       const tacFrom2 = (locRes?.roll?.total ?? 0) === 2;
@@ -3249,14 +4982,14 @@ const hit = (toHit.total ?? 0) >= tn;
         locRes = { ...reroll, floating: { original: { loc: locRes.loc, rollTotal: 2 }, reroll: { loc: reroll.loc, rollTotal: reroll?.roll?.total ?? 0 } } };
       }
 
-      packets.push({
+      packets.push(applyPartialCoverToPacket({
         hits: 1,
         loc: locRes.loc,
         roll: locRes.roll,
         tacFrom2,
         damage: baseDamage,
         floating: locRes.floating
-      });
+      }, targetPartialCover));
     }
 
     cluster = {
@@ -3276,15 +5009,18 @@ const hit = (toHit.total ?? 0) >= tn;
       packets
     };
 
-    damage = shotsHit * baseDamage;
+    damage = packets.reduce((sum, p) => sum + num(p.damage, 0), 0);
   }
 
 
   let locResult = null;
   let tacSingle = false;
-  if (hit && (opts.showLocation || opts.applyDamage) && !cluster && !isAbomTarget) {
+  const shouldResolveHitLocation = (hit || isArrowIVHomingAttack) && (opts.showLocation || opts.applyDamage) && !cluster && !isAbomTarget && !isTagAttack;
+  if (shouldResolveHitLocation) {
     if (isVehicleTarget) {
       locResult = await rollVehicleHitLocation(side, { hasTurret: hasVehicleTurret });
+    } else if (isDropshipTarget) {
+      locResult = await rollDropshipHitLocation(side);
     } else if (aimedEnabled) {
       const designated = _normalizeDamageLocation(targetToken?.actor, aimedLocRaw) ?? aimedLocRaw;
       const aimRoll = await (new Roll("2d6")).evaluate({ async: true });
@@ -3298,7 +5034,7 @@ const hit = (toHit.total ?? 0) >= tn;
           aim: { designated, roll: aimRoll, rollTotal: aimTotal, used: true, partialCoverReroll: false }
         };
       } else {
-        const fallback = (targetPartialCover ? await rollHitLocationNoLeg(side) : await rollHitLocation(side));
+        const fallback = await rollHitLocation(side);
         locResult = {
           roll: fallback.roll,
           loc: fallback.loc,
@@ -3308,18 +5044,21 @@ const hit = (toHit.total ?? 0) >= tn;
     } else {
       locResult = await rollHitLocation(side);
     }
+    const coverResult = applyPartialCoverToHitLocation(locResult, targetPartialCover && !isArrowIVHomingAttack);
+    locResult = coverResult.locResult;
+    if (coverResult.covered) tacSingle = false;
   }
 
   // TAC + optional Floating Criticals (non-cluster):
   // - Standard TAC: if the hit-location table roll was 2, we make an extra TAC critical check on that location.
   // - Floating Criticals (optional): if TAC is possible (original roll was 2), reroll location; apply TAC/criticals to the rerolled location.
-  if (hit && locResult && !cluster && !isVehicleTarget) {
+  if (hit && locResult && !cluster && !isVehicleTarget && !isDropshipTarget && !isArrowIVHomingAttack) {
     const fromHitLocationTable = !locResult.aim || locResult.aim.used === false;
     if (fromHitLocationTable && (locResult.roll?.total ?? 0) === 2) {
       tacSingle = true;
 
       if (floatingCrits) {
-        const reroll = (targetPartialCover ? await rollHitLocationNoLeg(side) : await rollHitLocation(side));
+        const reroll = await rollHitLocation(side);
         locResult = {
           roll: reroll.roll,
           loc: reroll.loc,
@@ -3329,6 +5068,9 @@ const hit = (toHit.total ?? 0) >= tn;
             reroll: { loc: reroll.loc, rollTotal: reroll?.roll?.total ?? 0 }
           }
         };
+        const coverResult = applyPartialCoverToHitLocation(locResult, targetPartialCover);
+        locResult = coverResult.locResult;
+        if (coverResult.covered) tacSingle = false;
       }
     }
   }
@@ -3358,8 +5100,8 @@ const hit = (toHit.total ?? 0) >= tn;
 // Spend ammo (1 per firing) if an ammo bin exists for this weapon.
 // This happens whether the shot hits or misses (ammo is expended when fired).
 let ammoSpend = null;
-if (weaponFired && opts.spendAmmo !== false && weaponConsumesAmmo(weaponItem, actor)) {
-  ammoSpend = await spendAmmoIfApplicable(actor, weaponItem, rapidShots);
+if (weaponFired && opts.spendAmmo !== false && (weaponConsumesAmmo(weaponItem, actor, { ammoKey }) || Boolean(ammoKey))) {
+  ammoSpend = await spendAmmoIfApplicable(actor, weaponItem, rapidShots, { ammoKey });
 
   // Abort if out of ammo
   if (ammoSpend && ammoSpend.ok === false) {
@@ -3379,6 +5121,7 @@ if (weaponFired && opts.spendAmmo !== false && weaponConsumesAmmo(weaponItem, ac
 if (weaponFired) {
   try {
     await markWeaponFiredThisTurn(actor, weaponItem, opts);
+    if (isArrowIVHomingAttack) await playArrowIVLaunchEffects(attackerToken);
     try {
       const sheet = actor?.sheet;
       if (sheet?.rendered) sheet.render(false);
@@ -3388,10 +5131,25 @@ if (weaponFired) {
   }
 }
 
+let tagApplied = null;
+if (isTagAttack && hit) {
+  tagApplied = await applyTaggedToTargetActorAuto(targetActor, {
+    attackerActorUuid: actor?.uuid ?? null,
+    attackerActorId: actor?.id ?? null,
+    attackerTokenUuid: (attackerToken?.document ?? attackerToken)?.uuid ?? null,
+    attackerTokenId: (attackerToken?.document ?? attackerToken)?.id ?? null
+  });
+  if (tagApplied?.ok === false) {
+    ui?.notifications?.warn?.(`TAG hit, but Tagged status was not applied: ${tagApplied.reason ?? "unknown reason"}`);
+  }
+}
+
 // ---- Automatic Damage Application (first pass) ----
 // If enabled, apply damage to the targeted mech immediately after resolving the hit location.
   let damageApplied = null;
-  if (hit && opts.applyDamage) {
+  let massiveDamagePsr = null;
+  const shouldApplyAttackDamage = (hit || isArrowIVHomingAttack) && opts.applyDamage && !isTagAttack;
+  if (shouldApplyAttackDamage) {
     if (!targetActor) {
       ui?.notifications?.warn?.("No target actor found to apply damage.");
     } else {
@@ -3400,11 +5158,15 @@ if (weaponFired) {
           const results = [];
           for (const p of cluster.packets) {
             let r;
-            if (isAbomTarget) {
+            if (p.partialCoverBlocked) {
+              r = { ok: true, partialCoverBlocked: true, reason: "Partial cover blocked leg hit", damage: 0, hitLoc: p.loc };
+            } else if (isAbomTarget) {
               r = await applyDamageToAbominationActorAuto(targetActor, p.damage);
               if (r?.ok) p.abomIndex = r.hitAbomination;
             } else if (isVehicleTarget) {
               r = await applyDamageToVehicleActorAuto(targetActor, p.loc, p.damage, { attackSide: side, crit: p.vehicleCrit });
+            } else if (isDropshipTarget) {
+              r = await applyDamageToDropshipActorAuto(targetActor, p.loc, p.damage);
             } else {
               r = await applyDamageToTargetActorAuto(targetActor, p.loc, p.damage, { side, tac: Boolean(p.tacFrom2), tacLoc: p.loc });
             }
@@ -3415,7 +5177,9 @@ if (weaponFired) {
           damageApplied = { type: "cluster", results };
         } else {
           let r;
-          if (isAbomTarget) {
+          if (locResult?.partialCoverBlocked) {
+            r = { ok: true, partialCoverBlocked: true, reason: "Partial cover blocked leg hit", damage: 0, hitLoc: locResult.loc };
+          } else if (isAbomTarget) {
             r = await applyDamageToAbominationActorAuto(targetActor, damage);
           } else if (isVehicleTarget) {
             let loc = locResult?.loc ?? null;
@@ -3426,6 +5190,10 @@ if (weaponFired) {
               if (fallback.critTrigger) crit = { trigger: true, tableLoc: fallback.critTableLoc };
             }
             r = await applyDamageToVehicleActorAuto(targetActor, loc, damage, { attackSide: side, crit });
+          } else if (isDropshipTarget) {
+            let loc = locResult?.loc ?? null;
+            if (!loc) loc = (await rollDropshipHitLocation(side))?.loc;
+            r = await applyDamageToDropshipActorAuto(targetActor, loc, damage);
           } else {
             const loc = locResult?.loc ?? (await rollHitLocation(side))?.loc;
             r = await applyDamageToTargetActorAuto(targetActor, loc, damage, { side, tac: tacSingle, tacLoc: loc });
@@ -3450,9 +5218,21 @@ if (weaponFired) {
             content: `<b>${actor.name}</b> attempted to auto-apply damage to <b>${targetToken?.name ?? "target"}</b> but failed: ${reason}`
           }).catch(()=>{});
         }
-      }
     }
   }
+}
+
+if (!cluster && isMechActor(targetActor) && Number(damage ?? 0) >= 20) {
+  const singleResult = damageApplied?.type === "single" ? damageApplied.result : null;
+  const damageWasApplied = singleResult?.ok && !singleResult?.partialCoverBlocked;
+  if (damageWasApplied) {
+    massiveDamagePsr = await resolveMassiveDamagePSR(targetToken, damage, { source: weaponItem?.name ?? "Weapon attack" });
+  }
+}
+
+if (isArrowIVHomingAttack && weaponFired) {
+  await playArrowIVImpactEffects(getTokenCenter(targetToken) ?? targetToken);
+}
 
 
 
@@ -3463,7 +5243,11 @@ const clusterNote = cluster
   ? (cluster.mode === "missile"
       ? (cluster.type === "SRM"
           ? "SRM damage is 2 per missile; each missile rolls its own location (group size 1)."
-          : "LRM damage is 1 per missile; packets are grouped in 5s.")
+          : (cluster.type === "LBX"
+              ? "LB-X cluster ammo deals 1 damage per pellet; each pellet rolls its own location."
+              : (cluster.type === "ATM"
+                  ? `ATM ${rackATMProfile?.label ?? "Standard"} ammo deals ${cluster.perHitDamage} damage per missile; packets are grouped in 5s.`
+                  : "LRM damage is 1 per missile; packets are grouped in 5s.")))
       : (cluster.mode === "volley"
           ? `${cluster.label ?? "Volley"}: roll to see how many attackers hit, then resolve missile clusters per hit.`
           : `${cluster.label ?? "Rapid Fire"} damage is applied per hit; each hit is resolved as its own packet.`))
@@ -3472,6 +5256,10 @@ const clusterNote = cluster
   const facingLine = arc
     ? `<div><b>Target Facing:</b> ${Math.round(arc.facingDeg)}° | <b>Attack Arc:</b> ${side.toUpperCase()}</div>`
     : `<div><b>Attack Arc:</b> ${side.toUpperCase()} (no facing data found)</div>`;
+
+  const firingArcLine = firingArcInfo.applies
+    ? `<div><b>Weapon Arc:</b> ${String(firingArcInfo.side ?? "front").toUpperCase()} target arc | ${firingArcInfo.rearMounted ? "Rear-mounted" : `${htmlEscape(firingArcInfo.mount?.locLabel ?? "Unknown")} mounted`} | Allowed ${htmlEscape(firingArcInfo.allowedLabel ?? "")}</div>`
+    : "";
 
   const weaponMeta = _getWeaponAutomationMeta(weaponItem);
 
@@ -3482,12 +5270,24 @@ const clusterNote = cluster
         : (artemisFullyLinked
             ? `<div><b>Artemis IV FCS:</b> Installed but not linked to this launcher (no bonus)</div>`
             : `<div><b>Artemis IV FCS:</b> Installed but NOT fully linked (no +2)</div>`))
-    : "";
+    : (rackType === "ATM" ? `<div><b>Artemis IV:</b> Built into ATM launcher (+2 to cluster roll)</div>` : "");
 
   const streakInfoLine = isStreakLauncher
     ? (hit
-        ? `<div><b>Streak:</b> HIT — Cluster result is automatically 12 (all missiles hit)</div>`
+        ? (amsDefense?.active
+            ? `<div><b>Streak:</b> HIT — AMS forces cluster result 7</div>`
+            : `<div><b>Streak:</b> HIT — Cluster result is automatically 12 (all missiles hit)</div>`)
         : `<div><b>Streak:</b> MISS — launcher did not fire (no ammo/heat)</div>`)
+    : "";
+
+  const amsInfoLine = amsDefense?.active
+    ? `<div><b>AMS:</b> ${htmlEscape(amsDefense.defenderName ?? targetName)} engages ${htmlEscape(weaponItem.name ?? "missiles")} (${isStreakLauncher ? "Streak uses cluster total 7" : "-4 Cluster Hits"}); ammo ${amsDefense.ammo?.after ?? "?"}/${amsDefense.ammo?.total ?? "?"}, +1 heat.</div>`
+    : "";
+
+  const arrowIVInfoLine = isArrowIVHomingAttack
+    ? (hit
+        ? `<div><b>Arrow IV Homing:</b> Guided hit. Apply 20 damage.</div>`
+        : `<div><b>Arrow IV Homing:</b> Roll 2-3. Missile scatters into the ground; apply 5 damage to the target.</div>`)
     : "";
 
 const rapidFireInfoLine = (!rack && rapidFireRating > 1)
@@ -3498,13 +5298,17 @@ const jamInfoLine = (jam && !isAbomChat && !rack && rapidShots > 1)
   ? `<div><b>Jam Check:</b> Rolled ${jam.rollTotal ?? "?"} (2d6); jams on ${jam.threshold} or less → <b>${jam.jammed ? "JAMMED" : "OK"}</b></div>`
   : "";
 
-  const weaponSummary = cluster
-    ? (cluster.mode === "missile"
+  const weaponSummary = isTagAttack
+    ? "TAG designation (no damage)"
+    : isArrowIVHomingAttack
+      ? `Arrow IV Homing (${hit ? "guided hit" : "ground impact"}), Damage ${damage}`
+    : cluster
+      ? (cluster.mode === "missile"
         ? `${cluster.type}-${cluster.rackSize} (cluster) — Missiles Hit ${cluster.missilesHit}, Total Damage ${damage}`
         : (cluster.mode === "volley"
             ? `${cluster.label ?? "Volley"} (${cluster.type}-${cluster.rackSize}) — Hits ${cluster.volleyHits}/${cluster.volleySize}, Total Damage ${damage}`
             : `${cluster.label ?? "Rapid Fire"} (cluster) — Shots Hit ${cluster.missilesHit}/${cluster.rackSize}, Total Damage ${damage}`))
-    : `Damage ${damage}`;
+      : `Damage ${damage}`;
 
   const weaponLine = `<div><b>Weapon</b>: ${weaponSummary}${(!isAbomChat && heat ? `, Heat ${heat}` : "")}</div>`;
   const dazzleInfoLine = dazzleMode
@@ -3515,12 +5319,17 @@ const jamInfoLine = (jam && !isAbomChat && !rack && rapidShots > 1)
     const isMissile = cluster.mode === "missile";
     const isVolley = cluster.mode === "volley";
     const projWord = (isMissile || isVolley) ? "missiles" : "shots";
+    const formatClusterModTag = (mod, modifiedTotal) => {
+      const n = Number(mod);
+      if (!Number.isFinite(n) || n === 0) return "";
+      return ` ${n >= 0 ? "+" : ""}${n} = ${modifiedTotal}`;
+    };
     const streakTag = (isMissile && cluster.streakUsed)
-      ? ` (Streak: auto 12)`
+      ? (cluster.ams?.active ? ` (Streak: AMS forces 7)` : ` (Streak: auto 12)`)
       : "";
     const artemisTag = (isMissile && !cluster.streakUsed)
       ? (cluster.clusterRollMod
-          ? ` +${cluster.clusterRollMod} Artemis = ${cluster.clusterRollModifiedTotal}`
+          ? formatClusterModTag(cluster.clusterRollMod, cluster.clusterRollModifiedTotal)
           : (artemisInstalled ? " (Artemis not applied)" : ""))
       : "";
 
@@ -3530,7 +5339,7 @@ const jamInfoLine = (jam && !isAbomChat && !rack && rapidShots > 1)
 
     const volleySubLines = isVolley
       ? (cluster.subclusters ?? []).map((sc, idx) => {
-          const modTag = sc.clusterRollMod ? ` +${sc.clusterRollMod} Artemis = ${sc.clusterRollModifiedTotal}` : "";
+          const modTag = formatClusterModTag(sc.clusterRollMod, sc.clusterRollModifiedTotal);
           return `<div>Attack ${idx + 1}: Cluster Roll ${sc.clusterRoll.total} (2d6)${modTag} — Missiles Hit ${sc.missilesHit}</div>`;
         }).join("")
       : "";
@@ -3543,13 +5352,14 @@ const jamInfoLine = (jam && !isAbomChat && !rack && rapidShots > 1)
       const tacTag = (p?.tacFrom2 && p?.roll?.total === 2) ? " — <b>TAC check</b>" : "";
       const floatTag = p?.floating ? ` — Floating: 2 → ${String(p.floating.reroll.loc).toUpperCase()} (rolled ${p.floating.reroll.rollTotal})` : "";
       const vehicleCritTag = (isVehicleTarget && p?.vehicleCrit?.trigger) ? " — <b>Vehicle Critical</b>" : "";
+      const coverTag = p?.partialCoverBlocked ? " — <b>Partial cover: leg hit ignored</b>" : "";
       const qty = isMissile ? `${p.hits} ${projWord}` : `${p.hits} shot(s)`;
       const locLabel = Number.isFinite(p?.abomIndex) ? `ABOM ${p.abomIndex}` : String(p.loc).toUpperCase();
       const rollText = Number.isFinite(p?.abomIndex)
         ? ` (${qty})`
         : (isVehicleTarget
             ? ` (location roll ${p.roll.total}; ${qty}${vehicleCritTag})`
-            : ` (location roll ${p.roll.total}; ${qty}${tacTag}${floatTag})`);
+            : ` (location roll ${p.roll.total}; ${qty}${tacTag}${floatTag}${coverTag})`);
       return `<li>${p.damage} dmg to ${locLabel}${rollText}</li>`;
     }).join("");
 
@@ -3561,6 +5371,7 @@ const jamInfoLine = (jam && !isAbomChat && !rack && rapidShots > 1)
       `<ul>${list}</ul>` +
       `<div><i>${clusterNote}</i></div>`;
   })() : "";
+  const ammoModeLine = ammoKey ? `<div><b>Ammo Mode:</b> ${htmlEscape(ammoSelectionLabel)}</div>` : "";
 
   let parts = [
     `<div class="atow-chat-card atow-mech-attack">`,
@@ -3572,13 +5383,14 @@ const jamInfoLine = (jam && !isAbomChat && !rack && rapidShots > 1)
     }),
     `<div><b>Attacker:</b> ${attackerName} | <b>Target:</b> ${targetName}</div>`,
     facingLine,
+    firingArcLine,
     `<div><b>Distance:</b> ${distance} (${band})</div>`,
-    `<div><b>Roll:</b> ${toHit.total} (2d6 + ${skillLabel} ${gunnery}) vs <b>TN:</b> ${tn} → <b>${hit ? "HIT" : "MISS"}</b></div>`,
+    `<div><b>Roll:</b> ${toHit.total} (${isArrowIVHomingAttack ? "2d6" : `2d6 + ${skillLabel} ${gunnery}`}) vs <b>TN:</b> ${tn} -> <b>${hit ? "HIT" : "MISS"}</b></div>`,
     buildAttackDetailsOpen(),
     `<hr/>`,
     `<div><b>Breakdown</b></div>`,
     `<ul>`,
-    `<li>Base TN: ${baseTN}</li>`,
+    `<li>Base TN: ${isArrowIVHomingAttack ? "Arrow IV Homing 4+" : baseTN}</li>`,
     `<li>Range (${band}${minPenalty ? `, min +${minPenalty}` : ""}): +${rangeMod}</li>`,
     `<li>Attacker movement: +${attackerMoveMod}${(String(opts.attackerMoveMode ?? 'auto').toLowerCase() === 'auto') ? ` (auto: ${autoMove.mode.toUpperCase()}, moved ${autoMove.moved})` : ''}</li>`,
     `<li>Target movement: +${targetMoveMod}${Number.isFinite(opts.targetHexes) ? ` (entered: ${opts.targetHexes})` : ` (auto: moved ${autoTargetMove.moved})`}</li>`,
@@ -3587,6 +5399,8 @@ const jamInfoLine = (jam && !isAbomChat && !rack && rapidShots > 1)
     `<li>Aimed Shot: ${aimedEnabled ? aimedModStr : "+0"}${(aimedDetails.length) ? ` (${aimedDetails.join('; ')})` : ``}${(!aimedEnabled && aimedDisabledReason) ? ` (${aimedDisabledReason})` : ""}</li>`,
     `<li>Statuses: +${statusTNMods.total}${statusTNMods.details?.length ? ` (${statusTNMods.details.join('; ')})` : ''}</li>`,
     `<li>Environment: +${envTNMods.mod}${envTNMods.details?.length ? ` (${envTNMods.details.join('; ')})` : ''}</li>`,
+    `<li>Intervening Woods: +${losWoodsMods.mod}${losWoodsMods.details?.length ? ` (${losWoodsMods.details.join('; ')})` : ''}</li>`,
+    `<li>Partial Cover: +${terrainPartialCoverMod}${losCoverMods.details?.length ? ` (${losCoverMods.details.join('; ')})` : ''}</li>`,
     `<li>Terrain: +${terrainMod}</li>`,
     `<li>Other: +${otherMod}</li>`,
     `</ul>`,
@@ -3595,8 +5409,12 @@ const jamInfoLine = (jam && !isAbomChat && !rack && rapidShots > 1)
     `${rapidFireInfoLine}`,
     `${jamInfoLine}`,
     `${artemisInfoLine}`,
+    `${amsInfoLine}`,
     `${streakInfoLine}`,
+    `${arrowIVInfoLine}`,
+    `${ammoModeLine}`,
     `${ammoSpend?.key ? `<div><b>Ammo</b>: ${ammoSpend.after}/${ammoSpend.total} (${ammoSpend.key.toUpperCase()})</div>` : ""}`,
+    `${isTagAttack ? `<div><b>TAG:</b> ${hit ? (tagApplied?.ok ? "Target marked with Tagged status until the TAG user's next turn." : `Hit, but status was not applied (${tagApplied?.reason ?? "unknown reason"}).`) : "No mark applied on miss."}</div>` : ""}`,
     `${clusterPacketsHtml}`,
   ];
 
@@ -3611,6 +5429,9 @@ const jamInfoLine = (jam && !isAbomChat && !rack && rapidShots > 1)
 
   if (locResult && opts.showLocation) {
     parts.push(`<div><b>Hit Location:</b> ${locResult.loc.toUpperCase()} (rolled ${locResult.roll.total})</div>`);
+    if (locResult.partialCoverBlocked) {
+      parts.push(`<div><b>Partial Cover:</b> Leg hit ignored.</div>`);
+    }
 
     if (isVehicleTarget && locResult.critTrigger) {
       parts.push(`<div><b>Vehicle Critical:</b> Triggered (${String(locResult.critTableLoc).toUpperCase()} table)</div>`);
@@ -3698,13 +5519,17 @@ const jamInfoLine = (jam && !isAbomChat && !rack && rapidShots > 1)
     } else if (damageApplied.type === "single") {
       const r = damageApplied.result;
       if (r?.ok) {
-        if (isAbomTarget) {
+        if (r?.partialCoverBlocked) {
+          parts.push(`<div><b>Damage Ignored:</b> Partial cover blocked the leg hit.</div>`);
+        } else if (isAbomTarget) {
           const hitIdx = Number.isFinite(r.hitAbomination) ? r.hitAbomination : "?";
           parts.push(`<div><b>Damage Applied:</b> ${r.damage} to Abomination ${hitIdx}</div>`);
         } else if (isVehicleTarget) {
           parts.push(`<div><b>Damage Applied:</b> ${damage} to ${String(r.loc).toUpperCase()} — Armor ${r.armorApplied}, Structure ${r.structureApplied}${r.overflow ? ` (Overflow ${r.overflow})` : ""}</div>`);
           const vehicleCritHtml = renderVehicleCrit(r.vehicleCrit);
           if (vehicleCritHtml) parts.push(vehicleCritHtml);
+        } else if (isDropshipTarget) {
+          parts.push(`<div><b>Damage Applied:</b> ${damage} to ${String(r.loc).toUpperCase()} — Armor ${r.armorApplied}, SI ${r.structureApplied}${r.overflow ? ` (Overflow ${r.overflow})` : ""}</div>`);
         } else {
           parts.push(`<div><b>Damage Applied:</b> ${r.damage} to ${String(r.hitLoc).toUpperCase()} → Armor ${r.armorApplied}, Structure ${r.structureApplied}${r.overflow ? ` (Overflow ${r.overflow})` : ""}</div>`);
           const critHtml = renderCritEvents(r.critEvents);
@@ -3723,13 +5548,17 @@ const jamInfoLine = (jam && !isAbomChat && !rack && rapidShots > 1)
           const vehicleCrits = (damageApplied.results ?? []).map(p => p?.result?.vehicleCrit).filter(Boolean);
           const vehicleCritHtml = renderVehicleCrits(vehicleCrits);
           if (vehicleCritHtml) parts.push(vehicleCritHtml);
-        } else {
+        } else if (!isDropshipTarget) {
           const allCritEvents = (damageApplied.results ?? []).flatMap(p => p?.result?.critEvents ?? []);
           const critHtml = renderCritEvents(allCritEvents);
           if (critHtml) parts.push(critHtml);
         }
       }
     }
+  }
+
+  if (massiveDamagePsr?.required) {
+    parts.push(`<div><b>Massive Damage PSR:</b> ${massiveDamagePsr.success ? "Passed" : "Failed - target fell prone."}</div>`);
   }
 
   parts.push(`</div></details></div>`);
@@ -3765,21 +5594,202 @@ const jamInfoLine = (jam && !isAbomChat && !rack && rapidShots > 1)
     heatFireMod,
     statusMods: statusTNMods,
     environmentMods: envTNMods,
+    losWoodsMods,
+    losCoverMods,
     terrainMod,
     otherMod,
     gunnery,
     heat,
     damage,
     baseDamage,
+    isTagAttack,
+    isArrowIVHomingAttack,
+    tagApplied,
     side,
     arc,
     locResult,
     cluster,
     ammoSpend,
     damageApplied,
+    massiveDamagePsr,
     attackerTokenId: attackerToken?.id,
     targetTokenId: targetToken?.id
   };
+}
+
+async function scheduleArrowIVIndirectAttack(actor, weaponItem, opts = {}) {
+  if (!actor || !weaponItem) return null;
+  weaponItem = await _resolveWeaponItem(actor, weaponItem);
+  if (!isArrowIVSystemWeapon(weaponItem)) return null;
+
+  if (!game.combat?.started) {
+    ui?.notifications?.warn?.("Arrow IV indirect fire requires an active combat.");
+    return { ok: false, blocked: true, reason: "noCombat" };
+  }
+  if (await isWeaponDestroyedForAttack(actor, weaponItem, opts)) {
+    ui?.notifications?.warn?.(`${weaponItem?.name ?? "This weapon"} is destroyed and cannot be fired.`);
+    return { ok: false, blocked: true, reason: "destroyedWeapon" };
+  }
+  if (hasWeaponFiredThisTurn(actor, weaponItem, opts)) {
+    ui?.notifications?.warn?.(`${weaponItem?.name ?? "This weapon"} has already been fired this turn.`);
+    return { ok: false, blocked: true, reason: "alreadyFiredThisTurn" };
+  }
+
+  const attackerToken = opts.attackerToken ?? getAttackerToken(actor);
+  if (!attackerToken) {
+    ui?.notifications?.warn?.("Place/control your attacker token on the scene before making an indirect Arrow IV attack.");
+    return null;
+  }
+  const attackerCenter = getTokenCenter(attackerToken);
+  if (!attackerCenter) {
+    ui?.notifications?.warn?.("Couldn't determine the attacker's hex.");
+    return null;
+  }
+
+  const ammoKey = ammoKeyFromTypeLabel("Arrow IV Homing");
+  const { totals } = await ensureActorAmmoBins(actor);
+  const bins = actor.system?.ammoBins ?? {};
+  const bin = bins?.[ammoKey];
+  const total = num(bin?.total, totals.get(ammoKey)?.total ?? 0);
+  const cur = Number.isFinite(Number(bin?.current)) ? num(bin.current, total) : total;
+  if (!bin && !totals.has(ammoKey)) {
+    ui?.notifications?.error?.("Arrow IV indirect fire requires Ammo (Arrow IV Homing).");
+    return { ok: false, blocked: true, reason: "missingArrowIVHomingAmmo" };
+  }
+  if (cur < 1) {
+    ui?.notifications?.error?.("No Arrow IV Homing ammo remaining.");
+    return { ok: false, blocked: true, reason: "noArrowIVHomingAmmo" };
+  }
+
+  let designatedPoint = opts.designatedPoint ?? null;
+  while (!designatedPoint) {
+    ui?.notifications?.info?.(`Arrow IV indirect fire: click a target hex more than ${ARROW_IV_INDIRECT_MIN_HEXES} hexes away. Right-click to cancel.`);
+    const picked = await pickCanvasPointOnce();
+    if (!picked) return null;
+    const center = getGridCenterForPoint(picked);
+    const distance = measurePointDistance(attackerCenter, center);
+    if (!Number.isFinite(distance)) {
+      ui?.notifications?.warn?.("Couldn't measure distance to that hex.");
+      continue;
+    }
+    if (distance <= ARROW_IV_INDIRECT_MIN_HEXES) {
+      ui?.notifications?.warn?.(`Arrow IV indirect fire must target a hex more than ${ARROW_IV_INDIRECT_MIN_HEXES} hexes away. That hex is ${distance} away.`);
+      continue;
+    }
+    designatedPoint = center;
+  }
+
+  const designatedDistance = measurePointDistance(attackerCenter, designatedPoint);
+  if (!Number.isFinite(designatedDistance) || designatedDistance <= ARROW_IV_INDIRECT_MIN_HEXES) {
+    ui?.notifications?.warn?.(`Arrow IV indirect fire must target a hex more than ${ARROW_IV_INDIRECT_MIN_HEXES} hexes away.`);
+    return { ok: false, blocked: true, reason: "targetTooClose" };
+  }
+  if (!game.user?.isGM && !getATOWSocket()) {
+    ui?.notifications?.error?.("AToW socket is not ready, so the GM cannot schedule this indirect strike.");
+    return { ok: false, blocked: true, reason: "socketNotReady" };
+  }
+
+  let ammoSpend = null;
+  if (opts.spendAmmo !== false && weaponConsumesAmmo(weaponItem, actor, { ammoKey: opts.ammoKey })) {
+    ammoSpend = await spendAmmoIfApplicable(actor, weaponItem, 1, { ammoKey: opts.ammoKey });
+    if (ammoSpend?.ok === false) {
+      ui?.notifications?.error?.(ammoSpend.reason || `No ammo remaining for ${ammoSpend.name || "this weapon"}.`);
+      return null;
+    }
+  }
+
+  const isVehicleAttacker = isVehicleActor(actor);
+  const heat = isVehicleAttacker ? 0 : num(weaponItem.system?.heat, 0);
+  if (!isVehicleAttacker && opts.applyHeat !== false && heat) {
+    const heatActor = attackerToken?.actor ?? actor;
+    const addActorPendingHeat = game?.[SYSTEM_ID]?.api?.addActorPendingHeat ?? null;
+    if (typeof addActorPendingHeat === "function") {
+      await addActorPendingHeat(heatActor, heat);
+    } else {
+      const curHeat = num((heatActor.system?.heat?.value ?? heatActor.system?.heat?.current), 0);
+      const barMax = num(heatActor.system?.heat?.max, 30);
+      const next = clamp(curHeat + heat, 0, HEAT_HARD_CAP);
+      await heatActor.update({
+        "system.heat.value": next,
+        "system.heat.current": next,
+        "system.heat.unvented": next,
+        "system.heat.effects.unvented": next,
+        "system.heat.max": barMax
+      });
+    }
+  }
+
+  await markWeaponFiredThisTurn(actor, weaponItem, opts);
+  await playArrowIVLaunchEffects(attackerToken);
+
+  const combat = game.combat;
+  const attackerTokenDoc = attackerToken?.document ?? attackerToken;
+  const attackerCombatant = combat?.combatants?.find?.(c => {
+    const tokenId = String(c?.tokenId ?? c?.token?.id ?? "");
+    const actorId = String(c?.actorId ?? c?.actor?.id ?? "");
+    return (attackerTokenDoc?.id && tokenId === String(attackerTokenDoc.id)) ||
+      (actor?.id && actorId === String(actor.id));
+  }) ?? combat?.combatant ?? null;
+  const offset = getGridOffsetForPoint(designatedPoint);
+  const gridKey = getGridKeyForPoint(designatedPoint);
+  const strike = {
+    id: buildArrowIVStrikeId(),
+    type: "arrowIVIndirect",
+    action: "weaponAttack",
+    weaponAttack: true,
+    attackMode: "arrowIVIndirectLaunch",
+    combatId: combat?.id ?? null,
+    sceneId: canvas?.scene?.id ?? null,
+    attackerActorId: actor?.id ?? null,
+    attackerActorUuid: actor?.uuid ?? null,
+    attackerTokenId: attackerTokenDoc?.id ?? null,
+    attackerTokenUuid: attackerTokenDoc?.uuid ?? null,
+    attackerCombatantId: attackerCombatant?.id ?? null,
+    attackerName: attackerToken?.name ?? actor.name,
+    weaponName: weaponItem.name ?? "Arrow IV System",
+    weaponUuid: weaponItem.uuid ?? null,
+    firedRound: combat?.round ?? 0,
+    firedTurn: combat?.turn ?? 0,
+    gridKey,
+    hex: offset,
+    hexLabel: offset ? `${offset.i}, ${offset.j}` : gridKey,
+    point: { x: designatedPoint.x, y: designatedPoint.y },
+    distance: designatedDistance
+  };
+
+  const scheduled = await scheduleArrowIVIndirectStrikeAuto(canvas?.scene ?? game.scenes?.active, strike);
+  if (scheduled?.ok === false) {
+    ui?.notifications?.error?.(`Could not schedule Arrow IV indirect strike: ${scheduled.reason ?? "unknown reason"}`);
+    return scheduled;
+  }
+
+  const weaponMeta = _getWeaponAutomationMeta(weaponItem);
+  const chatFlags = foundry.utils.mergeObject(weaponMeta.flags ?? {}, {
+    [SYSTEM_ID]: {
+      action: "weaponAttack",
+      weaponAttack: true,
+      attackMode: "arrowIVIndirectLaunch",
+      indirect: true,
+      strikeId: strike.id
+    }
+  }, { inplace: false });
+  const ammoLine = ammoSpend?.key ? `<div><b>Ammo</b>: ${ammoSpend.after}/${ammoSpend.total} (${ammoSpend.key.toUpperCase()})</div>` : "";
+  await ChatMessage.create({
+    speaker: ChatMessage.getSpeaker({ actor }),
+    content: [
+      `<div class="atow-chat-card atow-mech-attack">`,
+      `<header><b>${weaponMeta.name}</b> - Indirect Fire</header>`,
+      `<div><b>Attacker:</b> ${strike.attackerName}</div>`,
+      `<div><b>Designated Hex:</b> ${strike.hexLabel} (${designatedDistance} hexes)</div>`,
+      `<div>Impact will resolve at the start of this attacker's next turn in the following round.</div>`,
+      ammoLine,
+      `</div>`
+    ].join(""),
+    flavor: `${weaponMeta.name} Indirect Fire`,
+    flags: chatFlags
+  }).catch(err => console.warn("AToW Battletech | Arrow IV indirect scheduling chat failed", err));
+
+  return { ok: true, indirect: true, strike, ammoSpend };
 }
 
 
@@ -3921,6 +5931,7 @@ export async function rollMeleeWeaponAttack(actor, weaponItem, opts = {}) {
   let locResult = null;
   let tacMelee = false;
   let damageApplied = null;
+  let massiveDamagePsr = null;
 
   if (hit && (opts.showLocation || opts.applyDamage)) {
     if (isVehicleTarget) {
@@ -3963,6 +5974,10 @@ export async function rollMeleeWeaponAttack(actor, weaponItem, opts = {}) {
       console.warn("AToW Battletech | Melee weapon damage application threw", err);
       damageApplied = { ok: false, reason: String(err?.message ?? err) };
     }
+  }
+
+  if (!isVehicleTarget && isMechActor(targetActor) && hit && damage >= 20 && damageApplied?.ok) {
+    massiveDamagePsr = await resolveMassiveDamagePSR(targetToken, damage, { source: weaponItem?.name ?? "Melee weapon attack" });
   }
 
   // Chat card
@@ -4018,6 +6033,7 @@ export async function rollMeleeWeaponAttack(actor, weaponItem, opts = {}) {
                 : `<div><b>Applied:</b> Armor ${damageApplied.armorApplied}, Structure ${damageApplied.structureApplied}</div>`)
             : `<div style="color:#c00"><b>NOT applied:</b> ${damageApplied.reason}</div>`)
         : ""}`,
+      `${massiveDamagePsr?.required ? `<div><b>Massive Damage PSR:</b> ${massiveDamagePsr.success ? "Passed" : "Failed - target fell prone."}</div>` : ""}`,
       `</div></details></div>`
     ];
 
@@ -4057,6 +6073,7 @@ export async function rollMeleeWeaponAttack(actor, weaponItem, opts = {}) {
     damage,
     locResult,
     damageApplied,
+    massiveDamagePsr,
     attackerTokenId: attackerToken?.id,
     targetTokenId: targetToken?.id
   };
@@ -4092,7 +6109,8 @@ export async function promptAndRollMeleeWeaponAttack(actor, weaponItem, { defaul
   const statusTNMods = getStatusTNMods(attackerToken, targetToken);
   const weaponTNMod = getMeleeWeaponTNMod(weaponItem);
 
-  const rapidFireRating = getRapidFireRating(weaponItem);
+  const isSpecialDesignationAttack = isTAGWeapon(weaponItem) || isArrowIVSystemWeapon(weaponItem);
+  const rapidFireRating = isSpecialDesignationAttack ? 1 : getRapidFireRating(weaponItem);
   const rapidFireHtml = (rapidFireRating > 1)
     ? `
     <div class="form-group">
@@ -4273,10 +6291,121 @@ export async function promptAndRollMeleeWeaponAttack(actor, weaponItem, { defaul
  * Convenience UI: requires 1 targeted token, auto-measures distance, then prompts for the remaining mods.
  * Defaults "Hit Side" to the computed attack arc (from target facing), but you can override it.
  */
-export async function promptAndRollWeaponAttack(actor, weaponItem, { defaultSide = "front", attackerToken = null, weaponFireKey = "" } = {}) {
+function addDialogMod(mods, label, value) {
+  const n = num(value, 0);
+  if (!n) return;
+  mods.push({ label, value: n });
+}
+
+function addDetailDialogMods(mods, details = []) {
+  for (const detail of details) {
+    const text = String(detail ?? "").trim();
+    if (!text) continue;
+    const match = text.match(/^(.*?)([+-]\d+)\s*$/);
+    if (!match) continue;
+    const label = match[1].trim().replace(/\s+/g, " ");
+    const value = Number(match[2]);
+    if (!label || !Number.isFinite(value) || !value) continue;
+    mods.push({ label, value });
+  }
+}
+
+function buildAttackDialogMods({ statusMods, envMods, losWoodsMods, losCoverMods, terrainCoverMod = 0 }) {
+  const mods = [];
+  const blockedNotes = [];
+
+  addDetailDialogMods(mods, statusMods?.details);
+  addDetailDialogMods(mods, envMods?.details);
+  addDialogMod(mods, "Intervening Woods", losWoodsMods?.mod);
+  addDialogMod(mods, "Cover", terrainCoverMod);
+
+  if (losWoodsMods?.blocked) {
+    const detail = losWoodsMods.details?.length ? ` (${losWoodsMods.details.join("; ")})` : "";
+    blockedNotes.push(`Line of sight blocked by ${losWoodsMods.woodsPoints} woods points${detail}.`);
+  }
+
+  if (losCoverMods?.blocked) {
+    const detail = losCoverMods.details?.length ? ` (${losCoverMods.details.join("; ")})` : "";
+    blockedNotes.push(`Line of sight blocked by terrain${detail}.`);
+  }
+
+  return { mods, blockedNotes };
+}
+
+function enrichAmmoSelectionOptionsForDialog(options, weaponItem, distance, baseTNWithoutRange) {
+  return (Array.isArray(options) ? options : []).map(opt => {
+    const range = calcRangeBandAndMod(weaponItem, distance, { ammoKey: opt?.key });
+    return {
+      ...opt,
+      rangeBand: range.band,
+      rangeMod: num(range.mod, 0),
+      totalTN: num(baseTNWithoutRange, 0) + num(range.mod, 0)
+    };
+  });
+}
+
+function bindAttackDialogTNUpdater(html) {
+  const form = html?.[0]?.querySelector?.("form.atow-attack-dialog") ?? html?.querySelector?.("form.atow-attack-dialog");
+  if (!form) return;
+  const ammoSelect = form.querySelector("select[name='ammoKey']");
+  const attackerMoveSelect = form.querySelector("select[name='attackerMoveMode']");
+  const targetHexesInput = form.querySelector("input[name='targetHexes']");
+  const otherModInput = form.querySelector("input[name='otherMod']");
+  const totalEl = form.querySelector("[data-attack-total-tn]");
+  const bandEl = form.querySelector("[data-attack-band]");
+
+  const targetMoveModForHexes = (hexes) => {
+    const h = Number(hexes);
+    if (!Number.isFinite(h) || h <= 2) return 0;
+    if (h <= 4) return 1;
+    if (h <= 6) return 2;
+    if (h <= 9) return 3;
+    if (h <= 17) return 4;
+    if (h <= 24) return 5;
+    return 6;
+  };
+  const attackerMoveMod = () => {
+    const value = String(attackerMoveSelect?.value ?? "auto").toLowerCase();
+    if (value === "walk") return 1;
+    if (value === "run") return 2;
+    if (value === "jump") return 3;
+    if (value === "stationary") return 0;
+    return num(form.dataset.autoAttackerMoveMod, 0);
+  };
+  const updateTN = () => {
+    const selected = ammoSelect?.selectedOptions?.[0] ?? null;
+    const rangeMod = num(selected?.dataset?.rangeMod ?? form.dataset.rangeMod, 0);
+    const rangeBand = selected?.dataset?.rangeBand ?? null;
+    const base = num(form.dataset.baseTnWithoutRange, 8);
+    const targetMoveMod = targetMoveModForHexes(targetHexesInput?.value ?? 0);
+    const otherMod = num(otherModInput?.value, 0);
+    const total = base + rangeMod + attackerMoveMod() + targetMoveMod + otherMod;
+    if (totalEl) totalEl.textContent = String(total);
+    if (bandEl && rangeBand) bandEl.textContent = rangeBand;
+  };
+
+  ammoSelect?.addEventListener?.("change", updateTN);
+  attackerMoveSelect?.addEventListener?.("change", updateTN);
+  targetHexesInput?.addEventListener?.("input", updateTN);
+  otherModInput?.addEventListener?.("input", updateTN);
+  updateTN();
+}
+
+export async function promptAndRollWeaponAttack(actor, weaponItem, { defaultSide = "front", attackerToken = null, weaponFireKey = "", weaponMountLoc = "", weaponRearMounted = false } = {}) {
   // If this weapon is a melee weapon (hatchet/sword/etc.), use the melee weapon workflow.
   if (isMeleeWeaponItem(weaponItem)) {
     return promptAndRollMeleeWeaponAttack(actor, weaponItem, { defaultSide });
+  }
+
+  if (isAMSWeapon(weaponItem)) {
+    ui?.notifications?.warn?.("Anti-Missile Systems fire automatically against incoming missiles and cannot be fired manually.");
+    return null;
+  }
+
+  const chargeLockToken = attackerToken ?? getAttackerToken(actor);
+  if (hasActorChargedThisTurn(actor, chargeLockToken?.document ?? chargeLockToken)) {
+    ui?.notifications?.warn?.("This mech charged this turn and cannot make weapon attacks.");
+    return null;
   }
 
   if (await isWeaponDestroyedForAttack(actor, weaponItem, { weaponFireKey })) {
@@ -4286,119 +6415,110 @@ export async function promptAndRollWeaponAttack(actor, weaponItem, { defaultSide
 
   const attackerTok = attackerToken ?? getAttackerToken(actor);
   const targetToken = getSingleTargetToken();
+  const isArrowIVAttack = isArrowIVSystemWeapon(weaponItem);
 
-  if (!targetToken) {
+  if (!targetToken && !isArrowIVAttack) {
     ui?.notifications?.warn?.("Select exactly 1 target token before making an attack.");
     return null;
   }
   if (!attackerTok) {
-    ui?.notifications?.warn?.("Place/control your mech token on the scene before making an attack.");
+    ui?.notifications?.warn?.("Place/control your attacker token on the scene before making an attack.");
     return null;
   }
 
-  const distance = measureTokenDistance(attackerTok, targetToken);
+  const distance = targetToken ? measureTokenDistance(attackerTok, targetToken) : 0;
   if (distance === null) {
     ui?.notifications?.warn?.("Couldn't measure distance (no canvas/grid?).");
     return null;
   }
 
-  const { band } = calcRangeBandAndMod(weaponItem, distance);
-
-  const arc = getTargetSideFromFacing(attackerTok, targetToken);
+  const arc = targetToken ? getTargetSideFromFacing(attackerTok, targetToken) : null;
   const computedSide = arc?.side ?? defaultSide;
+  const firingArcInfo = targetToken
+    ? getWeaponFiringArcInfo(actor, weaponItem, { weaponFireKey, weaponMountLoc, weaponRearMounted }, attackerTok, targetToken)
+    : { applies: false, legal: true };
 
-  const autoTargetMove = getAutoTargetMoveData(targetToken);
+  const ammoSelection = weaponSupportsAmmoSelection(weaponItem) ? await getAmmoSelectionOptions(actor, weaponItem) : { options: [], defaultKey: null, hasMultiple: false };
+  const selectedAmmoKey = ammoSelection.defaultKey ?? getAmmoKeyForWeapon(weaponItem);
+  const { band } = targetToken ? calcRangeBandAndMod(weaponItem, distance, { ammoKey: selectedAmmoKey }) : { band: "Indirect" };
 
-  const rapidFireRating = getRapidFireRating(weaponItem);
-  const rapidFireHtml = (rapidFireRating > 1)
-    ? `
-    <div class="form-group">
-      <label>Rapid-Fire Shots (R${rapidFireRating})</label>
-      <input type="number" name="rapidShots" value="1" min="1" max="${rapidFireRating}"/>
-      <small>Each shot spends 1 ammo and adds +${num(weaponItem.system?.heat, 0)} Heat (damage scales per shot too).</small>
-    </div>`
-    : `<input type="hidden" name="rapidShots" value="1"/>`;
+  const autoTargetMove = targetToken ? getAutoTargetMoveData(targetToken) : { moved: 0, mod: 0 };
+  const dialogStatusMods = targetToken ? getStatusTNMods(attackerTok, targetToken) : { total: 0, details: [] };
+  const dialogEnvMods = getEnvironmentTNMods(weaponItem);
+  const dialogLosWoodsMods = targetToken ? getLineOfSightWoodsMods(attackerTok, targetToken) : { mod: 0, blocked: false, details: [] };
+  const dialogLosCoverMods = targetToken ? getLineOfSightCoverMods(attackerTok, targetToken) : { partialCover: false, blocked: false, mod: 0, targetWaterDepth: 0, details: [] };
+  const targetHasStatusPartialCover = targetToken ? tokenHasStatus(targetToken, "partial-cover") : false;
+  const targetHasWaterStatus = targetToken ? tokenHasStatus(targetToken, "in-water") : false;
+  const partialCoverAlreadyAddsTN = targetHasStatusPartialCover || (targetHasWaterStatus && dialogLosCoverMods.targetWaterDepth > 0);
+  const dialogTerrainCoverMod = (dialogLosCoverMods.partialCover && !partialCoverAlreadyAddsTN) ? 1 : 0;
+  const dialogBaseTN = 8;
+  const dialogAttackerMoveMod = getAutoAttackerMoveMod(actor, attackerTok).mod;
+  const dialogTargetMoveMod = autoTargetMove.mod;
+  const dialogHeatFireMod = num(actor.system?.heat?.effects?.fireMod, 0);
+  const dialogBaseWithoutRange = dialogBaseTN
+    + dialogEnvMods.mod
+    + dialogLosWoodsMods.mod
+    + dialogTerrainCoverMod
+    + dialogStatusMods.total
+    + dialogAttackerMoveMod
+    + dialogTargetMoveMod
+    + dialogHeatFireMod;
+  const dialogRangeMod = num(calcRangeBandAndMod(weaponItem, distance, { ammoKey: selectedAmmoKey }).mod, 0);
+  const dialogTN = dialogBaseWithoutRange + dialogRangeMod;
 
-  const dialogHtml = `
-  <form class="atow-attack-dialog">
-    <div class="form-group">
-      <label>Target</label>
-      <div><b>${targetToken.name}</b></div>
-    </div>
+  const isSpecialDesignationAttack = isTAGWeapon(weaponItem) || isArrowIVSystemWeapon(weaponItem);
+  const rapidFireRating = isSpecialDesignationAttack ? 1 : getRapidFireRating(weaponItem);
+  const { mods, blockedNotes } = buildAttackDialogMods({
+    statusMods: dialogStatusMods,
+    envMods: dialogEnvMods,
+    losWoodsMods: dialogLosWoodsMods,
+    losCoverMods: dialogLosCoverMods,
+    terrainCoverMod: dialogTerrainCoverMod
+  });
+  if (firingArcInfo.applies && !firingArcInfo.legal) {
+    const mountLabel = firingArcInfo.rearMounted ? "Rear-mounted" : `${firingArcInfo.mount?.locLabel ?? "Unknown"} mounted`;
+    blockedNotes.push(`${mountLabel} weapon cannot fire into the ${String(firingArcInfo.side ?? "unknown").toUpperCase()} arc. Allowed: ${firingArcInfo.allowedLabel}.`);
+  }
 
-    <div class="form-group">
-      <label>Distance</label>
-      <div>${distance} (${band})</div>
-      <input type="hidden" name="distance" value="${distance}"/>
-    </div>
+  const firingArcNote = firingArcInfo.applies
+    ? ` Weapon arc: ${String(firingArcInfo.side ?? "front").toUpperCase()} target arc; ${firingArcInfo.rearMounted ? "rear-mounted" : `${firingArcInfo.mount?.locLabel ?? "Unknown"} mounted`}; allowed ${firingArcInfo.allowedLabel}.`
+    : "";
 
-    <div class="form-group">
-      <label>Auto status mods</label>
-      <div><small>Applied automatically: +${getStatusTNMods(attackerToken, targetToken).total} (${getStatusTNMods(attackerToken, targetToken).details.join("; ") || "none"})</small></div>
-    </div>
+  const ammoSelectionOptions = enrichAmmoSelectionOptionsForDialog(ammoSelection.options, weaponItem, distance, dialogBaseWithoutRange);
+  const selectedAmmoRange = targetToken ? calcRangeBandAndMod(weaponItem, distance, { ammoKey: selectedAmmoKey }) : { band: "Indirect", mod: 0 };
 
-    <div class="form-group">
-      <label>Auto environment mods</label>
-      <div><small>Applied automatically: +${getEnvironmentTNMods(weaponItem).mod} (${getEnvironmentTNMods(weaponItem).details.join("; ") || "none"})</small></div>
-    </div>
+  const dialogHtml = await renderTemplate(VEHICLE_ATTACK_TEMPLATE, {
+    weaponName: weaponItem.name,
+    attackerName: attackerTok.name ?? actor.name,
+    targetName: targetToken?.name ?? "Designated hex",
+    distance,
+    band,
+    mods,
+    hasMods: mods.length > 0,
+    blockedNotes,
+    hasBlockedNotes: blockedNotes.length > 0,
+    autoTargetMove: autoTargetMove.moved,
+    computedSide,
+    arcNote: arc
+      ? `Target facing ${Math.round(arc.facingDeg)} degrees; hit arc ${computedSide.toUpperCase()}.${firingArcNote}`
+      : `No facing data found; defaulting hit arc to ${computedSide.toUpperCase()}.${firingArcNote}`,
+    totalTN: dialogTN,
+    showRapidFire: !isSpecialDesignationAttack && rapidFireRating > 1,
+    rapidFireRating,
+    weaponHeat: num(weaponItem.system?.heat, 0),
+    showArrowIVIndirectControl: isArrowIVAttack,
+    showAmmoSelection: weaponSupportsAmmoSelection(weaponItem) && ammoSelection.options.length > 0,
+    ammoSelectionOptions,
+    selectedAmmoKey,
+    selectedRangeMod: num(selectedAmmoRange.mod, 0),
+    baseTNWithoutRange: dialogBaseTN + dialogEnvMods.mod + dialogLosWoodsMods.mod + dialogTerrainCoverMod + dialogStatusMods.total + dialogHeatFireMod,
+    autoAttackerMoveMod: dialogAttackerMoveMod
+  });
 
-    <div class="form-group">
-      <label>Attacker Move</label>
-      <select name="attackerMoveMode">
-        <option value="auto" selected>Auto (from movement)</option>
-        <option value="stationary">Stationary</option>
-        <option value="walk">Walk (+1)</option>
-        <option value="run">Run (+2)</option>
-        <option value="jump">Jump (+3)</option>
-      </select>
-    </div>
-
-    <div class="form-group">
-      <label>Target Hexes Moved</label>
-      <input type="number" name="targetHexes" value="${autoTargetMove.moved}" min="0"/>
-      <small>Auto-filled from target displacement this turn. Override if needed.</small>
-    </div>
-
-    <div class="form-group">
-      <label>Terrain Mod</label>
-      <input type="number" name="terrainMod" value="0"/>
-    </div>
-
-    <div class="form-group">
-      <label>Other Mod</label>
-      <input type="number" name="otherMod" value="0"/>
-    </div>
-
-    ${rapidFireHtml}
-
-    <div class="form-group">
-      <label>Hit Side (auto-detected)</label>
-      <select name="side">
-        <option value="front" ${computedSide === "front" ? "selected" : ""}>Front</option>
-        <option value="rear"  ${computedSide === "rear" ? "selected" : ""}>Rear</option>
-        <option value="left"  ${computedSide === "left" ? "selected" : ""}>Left</option>
-        <option value="right" ${computedSide === "right" ? "selected" : ""}>Right</option>
-      </select>
-      <small>${arc ? `Target facing ${Math.round(arc.facingDeg)}° → arc ${computedSide.toUpperCase()}` : `No facing data found; defaulting to ${computedSide.toUpperCase()}`}</small>
-    </div>
-
-    <div class="form-group">
-    <div class="form-group">
-      <label><input type="checkbox" name="applyDamage" checked/> Apply Damage (auto)</label>
-      <small>Automatically applies damage to the targeted mech if you have permission.</small>
-    </div>
-
-      <label><input type="checkbox" name="applyHeat" checked/> Apply Heat on Fire</label>
-    </div>
-
-    <div class="form-group">
-      <label><input type="checkbox" name="showLocation" checked/> Roll Hit Location on Hit</label>
-    </div>
-  </form>`;
 
   return new Promise((resolve) => {
     new Dialog({
-      title: `${weaponItem.name} — Attack`,
+      title: `${weaponItem.name} - Attack`,
       content: dialogHtml,
       buttons: {
         roll: {
@@ -4413,15 +6533,28 @@ export async function promptAndRollWeaponAttack(actor, weaponItem, { defaultSide
               distance: num(fd.get("distance"), 0),
               attackerMoveMode: String(fd.get("attackerMoveMode") ?? "auto"),
               targetHexes: num(fd.get("targetHexes"), 0),
-              terrainMod: num(fd.get("terrainMod"), 0),
+              terrainMod: 0,
               otherMod: num(fd.get("otherMod"), 0),
               side: String(fd.get("side") ?? computedSide),
-              applyDamage: fd.get("applyDamage") === "on",
-              applyHeat: fd.get("applyHeat") === "on",
-              showLocation: fd.get("showLocation") === "on",
+              applyDamage: true,
+              applyHeat: true,
+              showLocation: true,
               rapidShots: num(fd.get("rapidShots"), 1),
-              weaponFireKey
+              ammoKey: String(fd.get("ammoKey") ?? selectedAmmoKey ?? ""),
+              weaponFireKey,
+              weaponMountLoc,
+              weaponRearMounted
             };
+            if (isArrowIVAttack && fd.get("arrowIVIndirect") === "on") {
+              const result = await scheduleArrowIVIndirectAttack(actor, weaponItem, { ...opts, attackerToken: attackerTok });
+              resolve(result);
+              return;
+            }
+            if (!targetToken) {
+              ui?.notifications?.warn?.("Select exactly 1 target token for direct fire.");
+              resolve(null);
+              return;
+            }
             const result = await rollWeaponAttack(actor, weaponItem, { ...opts, attackerToken: attackerTok, targetToken });
             resolve(result);
           }
@@ -4431,7 +6564,8 @@ export async function promptAndRollWeaponAttack(actor, weaponItem, { defaultSide
           callback: () => resolve(null)
         }
       },
-      default: "roll"
+      default: "roll",
+      render: bindAttackDialogTNUpdater
     }).render(true);
   });
 }
@@ -4819,6 +6953,7 @@ export async function rollPunchAttack(actor, opts = {}) {
 
   // Trigger Automated Animations directly (if installed)
   await _maybePlayAutomatedAnimation(attackerToken, null, _getWeaponAutomationMeta({ name: "Punch" }), { targetToken, hit: anyHit });
+  await markMovementResetLockedThisTurn(actor, { attackerToken });
 
   return {
     attackerTokenId: attackerToken?.id,
@@ -5035,6 +7170,7 @@ export async function rollKickAttack(actor, opts = {}) {
   let hit = false;
   let locResult = null;
   let damageApplied = null;
+  let massiveDamagePsr = null;
 
   if (!hipsOk) {
     // Can't even attempt
@@ -5065,6 +7201,10 @@ export async function rollKickAttack(actor, opts = {}) {
         damageApplied = { ok: false, reason: String(err?.message ?? err) };
       }
     }
+  }
+
+  if (!isVehicleTarget && isMechActor(targetActor) && hit && damage >= 20 && damageApplied?.ok) {
+    massiveDamagePsr = await resolveMassiveDamagePSR(targetToken, damage, { source: "Kick attack" });
   }
 
   // Chat card
@@ -5121,6 +7261,7 @@ export async function rollKickAttack(actor, opts = {}) {
             ? `<div>Applied: Armor ${damageApplied.armorApplied}, Structure ${damageApplied.structureApplied}</div>`
             : `<div style="color:#c00">NOT applied: ${damageApplied.reason}</div>`)
         : "",
+      massiveDamagePsr?.required ? `<div><b>Massive Damage PSR:</b> ${massiveDamagePsr.success ? "Passed" : "Failed - target fell prone."}</div>` : "",
       psrNote,
       ...notes,
       `</div></details></div>`
@@ -5140,6 +7281,7 @@ export async function rollKickAttack(actor, opts = {}) {
 
   // Trigger Automated Animations directly (if installed)
   await _maybePlayAutomatedAnimation(attackerToken, null, _getWeaponAutomationMeta({ name: "Kick" }), { targetToken, hit });
+  await markMovementResetLockedThisTurn(actor, { attackerToken });
 
   return {
     attackerTokenId: attackerToken?.id,
@@ -5161,14 +7303,285 @@ export async function rollKickAttack(actor, opts = {}) {
     damage,
     locResult,
     actuator,
-    damageApplied
+    damageApplied,
+    massiveDamagePsr
+  };
+}
+
+function _tokenJumpedThisTurn(tokenDoc) {
+  return Boolean(tokenDoc?.getFlag?.(SYSTEM_ID, "jumpedThisTurn")) ||
+    String(tokenDoc?.getFlag?.(SYSTEM_ID, "moveMode") ?? "").toLowerCase() === "jump" ||
+    tokenHasStatus(tokenDoc, "atow-jumped");
+}
+
+function _chargeMovementAllowance(actor, tokenDoc) {
+  const speeds = getActorMoveSpeeds(actor);
+  const mode = String(tokenDoc?.getFlag?.(SYSTEM_ID, "moveMode") ?? "").toLowerCase();
+  const moved = num(tokenDoc?.getFlag?.(SYSTEM_ID, "movedHexesThisTurn") ?? tokenDoc?.getFlag?.(SYSTEM_ID, "movedThisTurn"), 0);
+  const turned = num(tokenDoc?.getFlag?.(SYSTEM_ID, "turnedThisTurn"), 0);
+  const terrainMp = num(tokenDoc?.getFlag?.(SYSTEM_ID, "terrainMpThisTurn"), 0);
+  const spent = num(tokenDoc?.getFlag?.(SYSTEM_ID, "mpSpentThisTurn"), moved + turned + terrainMp);
+  const max = (mode === "walk" || Boolean(tokenDoc?.getFlag?.(SYSTEM_ID, "backwardUsedThisTurn")))
+    ? num(speeds.walk, 0)
+    : Math.max(num(speeds.run, 0), num(speeds.walk, 0));
+  return { moved, turned, terrainMp, spent, max, remaining: Math.max(0, max - spent), mode: mode || "auto" };
+}
+
+function calcChargeTargetDamage(attackerActor, hexesMoved) {
+  const tons = _mechTonnage(attackerActor);
+  const hexes = Math.max(0, Math.floor(num(hexesMoved, 0)));
+  return Math.max(0, Math.ceil(tons / 10) * hexes);
+}
+
+function calcChargeAttackerDamage(targetActor) {
+  const tons = _mechTonnage(targetActor);
+  return Math.max(1, Math.ceil(tons / 10));
+}
+
+async function applyGroupedMechDamage(targetActor, side, totalDamage, { label = "Charge", applyDamage = true } = {}) {
+  const groups = splitIntoNs(Math.max(0, Math.floor(num(totalDamage, 0))), 5);
+  const packets = [];
+  if (!targetActor || !groups.length) return packets;
+
+  for (const damage of groups) {
+    const locResult = await rollHitLocation(side);
+    let damageApplied = null;
+    if (applyDamage) {
+      try {
+        damageApplied = await applyDamageToTargetActorAuto(targetActor, locResult.loc, damage, { side });
+      } catch (err) {
+        console.warn(`AToW Battletech | ${label} grouped damage application threw`, err);
+        damageApplied = { ok: false, reason: String(err?.message ?? err) };
+      }
+    }
+    packets.push({ damage, locResult, damageApplied });
+  }
+  return packets;
+}
+
+/**
+ * Roll a charge attack.
+ *
+ * Charge uses the physical attack TN chassis (2d6 + Piloting vs base 8 + mods),
+ * requires the target to be adjacent when the attack is rolled, and uses hexes
+ * moved so far this Movement Phase for target damage.
+ */
+export async function rollChargeAttack(actor, opts = {}) {
+  if (!actor) return null;
+
+  const weaponMeta = _getWeaponAutomationMeta({ name: "Charge" });
+  const attackerToken = opts.attackerToken ?? getAttackerToken(actor);
+  const targetToken = opts.targetToken ?? getSingleTargetToken();
+
+  if (!targetToken) {
+    ui?.notifications?.warn?.("Select exactly 1 target token before making a charge attack.");
+    return null;
+  }
+  if (!attackerToken) {
+    ui?.notifications?.warn?.("Place/control your mech token on the scene before making a charge attack.");
+    return null;
+  }
+
+  const tokenDoc = attackerToken?.document ?? attackerToken;
+  if (_tokenJumpedThisTurn(tokenDoc)) {
+    ui?.notifications?.warn?.("A mech that jumped this turn cannot charge.");
+    return null;
+  }
+  if (hasAnyWeaponFiredThisTurn(actor, { attackerToken })) {
+    ui?.notifications?.warn?.("A mech that has fired weapons this turn cannot charge.");
+    return null;
+  }
+  if (hasActorChargedThisTurn(actor, tokenDoc)) {
+    ui?.notifications?.warn?.("This mech has already charged this turn.");
+    return null;
+  }
+
+  const targetActor = targetToken?.actor;
+  if (!isMechActor(targetActor)) {
+    ui?.notifications?.warn?.("Charge automation currently supports mech targets.");
+    return null;
+  }
+
+  const isShutdown = Boolean(actor.system?.heat?.shutdown) || Boolean(tokenDoc?.getFlag?.(SYSTEM_ID, "shutdown"));
+  if (isShutdown) {
+    ui?.notifications?.warn?.("This mech is shut down due to heat and cannot charge.");
+    return null;
+  }
+
+  const distance = Number.isFinite(opts.distance) ? num(opts.distance, 0) : measureTokenDistance(attackerToken, targetToken);
+  if (distance === null) {
+    ui?.notifications?.warn?.("Couldn't measure distance (no canvas/grid?).");
+    return null;
+  }
+  if (distance > 1) {
+    ui?.notifications?.warn?.("Charge attacks are rolled from 1 hex away.");
+    return null;
+  }
+
+  const allowance = _chargeMovementAllowance(actor, tokenDoc);
+  if (allowance.max > 0 && allowance.remaining < 1 && opts.ignoreRemainingMp !== true) {
+    ui?.notifications?.warn?.("This mech does not have enough MP remaining to enter the target hex.");
+    return null;
+  }
+
+  const pilot = actor.system?.pilot ?? {};
+  const piloting = num(pilot.piloting, 0);
+  if (!piloting) ui?.notifications?.warn?.("No Piloting skill found on this mech (system.pilot.piloting). Using 0.");
+
+  const autoMove = getAutoAttackerMoveMod(actor, attackerToken);
+  const attackerMoveMod = Number.isFinite(opts.attackerMoveMod)
+    ? num(opts.attackerMoveMod, 0)
+    : (() => {
+        const mode = String(opts.attackerMoveMode ?? "auto").toLowerCase();
+        if (mode === "auto" || mode === "sheet" || mode === "token") return autoMove.mod;
+        switch (mode) {
+          case "walk": return 1;
+          case "run": return 2;
+          case "jump": return 3;
+          case "stationary":
+          default: return 0;
+        }
+      })();
+
+  const autoTargetMove = getAutoTargetMoveData(targetToken);
+  const targetHexesUsed = Number.isFinite(opts.targetHexes) ? num(opts.targetHexes, 0) : autoTargetMove.moved;
+  const targetMoveMod = Number.isFinite(opts.targetMoveMod) ? num(opts.targetMoveMod, 0) : calcTargetMoveModFromHexes(targetHexesUsed);
+  const terrainMod = num(opts.terrainMod, 0);
+  const otherMod = num(opts.otherMod, 0);
+  const statusTNMods = getStatusTNMods(attackerToken, targetToken);
+  const baseTN = 8;
+  const tn = baseTN + attackerMoveMod + targetMoveMod + statusTNMods.total + terrainMod + otherMod;
+
+  const arc = getTargetSideFromFacing(attackerToken, targetToken);
+  const side = (opts.side && ["front", "rear", "left", "right"].includes(opts.side)) ? opts.side : (arc?.side ?? "front");
+  const chargeHexes = Math.max(0, Math.floor(num(opts.chargeHexes, allowance.moved)));
+  const targetDamage = calcChargeTargetDamage(actor, chargeHexes);
+  const attackerDamage = calcChargeAttackerDamage(targetActor);
+
+  const toHit = await (new Roll(`2d6 + ${piloting}`)).evaluate();
+  const hit = (toHit.total ?? 0) >= tn;
+
+  let targetPackets = [];
+  let attackerPackets = [];
+  let massiveDamagePsr = null;
+  if (hit) {
+    targetPackets = await applyGroupedMechDamage(targetActor, side, targetDamage, { label: "Charge target", applyDamage: opts.applyDamage !== false });
+    attackerPackets = await applyGroupedMechDamage(actor, "front", attackerDamage, { label: "Charge attacker", applyDamage: opts.applyDamage !== false });
+    if (targetDamage >= 20 && targetPackets.some(p => p.damageApplied?.ok)) {
+      massiveDamagePsr = await resolveMassiveDamagePSR(targetToken, targetDamage, { source: "Charge attack" });
+    }
+  }
+
+  await markActorChargedThisTurn(actor, tokenDoc);
+  await markMovementResetLockedThisTurn(actor, { attackerToken });
+
+  try {
+    const attackerName = attackerToken?.name ?? actor.name;
+    const targetName = targetToken?.name ?? "Target";
+    const facingLine = arc
+      ? `<div><b>Target Facing:</b> ${Math.round(arc.facingDeg)}Â° | <b>Attack Arc:</b> ${side.toUpperCase()}</div>`
+      : `<div><b>Attack Arc:</b> ${side.toUpperCase()} (no facing data found)</div>`;
+    const packetLine = (packets, ownerLabel) => packets.length
+      ? `<div><b>${ownerLabel} Damage Groups</b></div><ul>${packets.map(p => {
+          const loc = String(p.locResult?.loc ?? "?").toUpperCase();
+          const roll = p.locResult?.roll?.total ?? "?";
+          const applied = (opts.applyDamage !== false && p.damageApplied)
+            ? (p.damageApplied.ok
+                ? ` | Applied: Armor ${p.damageApplied.armorApplied}, Structure ${p.damageApplied.structureApplied}`
+                : ` | <span style="color:#c00">NOT applied: ${p.damageApplied.reason}</span>`)
+            : "";
+          return `<li>${p.damage} dmg to ${loc} (location roll ${roll})${applied}</li>`;
+        }).join("")}</ul>`
+      : "";
+
+    const guidance = hit
+      ? `<div><b>Movement:</b> If the attacker survives, move it into the target hex. If the target survives, displace it one hex in the charge direction unless prohibited terrain, board edge, or another mech changes the result.</div>`
+      : `<div><b>Movement:</b> Missed charge. Attacker chooses the legal hex to the left or right of its forward arc; if neither is legal, it does not move.</div>`;
+    const backwardNote = Boolean(tokenDoc?.getFlag?.(SYSTEM_ID, "backwardUsedThisTurn"))
+      ? `<div><small>Backward movement was used this turn; charge damage should count only hexes after the last reversal. The dialog value was used for this roll.</small></div>`
+      : "";
+
+    const lines = [
+      `<div class="atow-chat-card atow-mech-attack">`,
+      `<header><b>${weaponMeta.name}</b> â€” Physical Attack</header>`,
+      buildAttackResultBanner({ hit, detail: `Roll ${toHit.total} vs TN ${tn}` }),
+      `<div><b>Attacker:</b> ${attackerName} | <b>Target:</b> ${targetName}</div>`,
+      facingLine,
+      `<div><b>Distance:</b> ${distance} (adjacent)</div>`,
+      `<hr/>`,
+      `<div><b>Mods</b></div>`,
+      `<ul>`,
+      `<li>Base TN: ${baseTN}</li>`,
+      `<li>Attacker movement: +${attackerMoveMod}${(String(opts.attackerMoveMode ?? 'auto').toLowerCase() === 'auto') ? ` (auto: ${autoMove.mode.toUpperCase()}, moved ${autoMove.moved})` : ''}</li>`,
+      `<li>Target movement: +${targetMoveMod}${Number.isFinite(opts.targetHexes) ? ` (entered: ${opts.targetHexes})` : ` (auto: moved ${autoTargetMove.moved})`}</li>`,
+      `<li>Statuses: +${statusTNMods.total}${statusTNMods.details?.length ? ` (${statusTNMods.details.join('; ')})` : ''}</li>`,
+      `<li>Terrain: +${terrainMod}</li>`,
+      `<li>Other: +${otherMod}</li>`,
+      `</ul>`,
+      `<div><b>Result:</b> Roll ${toHit.total} (2d6 + Piloting ${piloting}) vs <b>TN ${tn}</b> â†’ <b>${hit ? "HIT" : "MISS"}</b></div>`,
+      `<div><b>Charge Hexes:</b> ${chargeHexes} | <b>Target Damage:</b> ${targetDamage} | <b>Attacker Damage:</b> ${attackerDamage}</div>`,
+      backwardNote,
+      hit ? packetLine(targetPackets, targetName) : "",
+      hit ? packetLine(attackerPackets, attackerName) : "",
+      massiveDamagePsr?.required ? `<div><b>Massive Damage PSR:</b> ${massiveDamagePsr.success ? "Passed" : "Failed - target fell prone."}</div>` : "",
+      hit ? `<div><b>PSR:</b> Target should make the required Piloting Skill Roll to avoid falling after the charge.</div>` : "",
+      guidance,
+      `<div><small>Weapon attacks are blocked for this mech for the rest of this combat turn.</small></div>`,
+      `</div></details></div>`
+    ];
+
+    await ChatMessage.create({
+      speaker: ChatMessage.getSpeaker({ actor }),
+      content: lines.join(""),
+      flavor: `${weaponMeta.name} Attack`,
+      rolls: [toHit, ...targetPackets.map(p => p.locResult?.roll).filter(Boolean), ...attackerPackets.map(p => p.locResult?.roll).filter(Boolean)],
+      type: CONST.CHAT_MESSAGE_TYPES.ROLL,
+      flags: {
+        ...weaponMeta.flags,
+        [SYSTEM_ID]: {
+          ...(weaponMeta.flags?.[SYSTEM_ID] ?? {}),
+          action: "chargeAttack",
+          chargeAttack: true,
+          hit,
+          targetDamage,
+          attackerDamage,
+          chargeHexes
+        }
+      }
+    }).catch(()=>{});
+  } catch (err) {
+    console.warn("AToW Battletech | Charge chat card failed", err);
+  }
+
+  await _maybePlayAutomatedAnimation(attackerToken, null, weaponMeta, { targetToken, hit });
+
+  return {
+    attackerTokenId: attackerToken?.id,
+    targetTokenId: targetToken?.id,
+    distance,
+    side,
+    piloting,
+    attackerMoveMod,
+    targetMoveMod,
+    terrainMod,
+    otherMod,
+    statusMods: statusTNMods,
+    chargeHexes,
+    targetDamage,
+    attackerDamage,
+    tn,
+    toHit,
+    hit,
+    targetPackets,
+    attackerPackets,
+    massiveDamagePsr
   };
 }
 
 export async function promptAndRollMeleeAttack(actor, meleeType = "punch", { defaultSide = "front" } = {}) {
   const type = String(meleeType ?? "punch").toLowerCase();
 
-  if (type !== "punch" && type !== "kick") {
+  if (type !== "punch" && type !== "kick" && type !== "charge") {
     ui?.notifications?.warn?.(`${String(meleeType)} is not implemented yet.`);
     return null;
   }
@@ -5191,7 +7604,8 @@ export async function promptAndRollMeleeAttack(actor, meleeType = "punch", { def
     return null;
   }
   if (distance > 1) {
-    ui?.notifications?.warn?.(`${type === "kick" ? "Kick" : "Punch"} attacks require the target to be adjacent (range 1).`);
+    const label = type === "kick" ? "Kick" : type === "charge" ? "Charge" : "Punch";
+    ui?.notifications?.warn?.(`${label} attacks require the target to be adjacent (range 1).`);
     return null;
   }
 
@@ -5200,6 +7614,26 @@ export async function promptAndRollMeleeAttack(actor, meleeType = "punch", { def
 
   const autoTargetMove = getAutoTargetMoveData(targetToken);
   const statusTNMods = getStatusTNMods(attackerToken, targetToken);
+  const tokenDoc = attackerToken?.document ?? attackerToken;
+  const chargeAllowance = _chargeMovementAllowance(actor, tokenDoc);
+  if (type === "charge") {
+    if (_tokenJumpedThisTurn(tokenDoc)) {
+      ui?.notifications?.warn?.("A mech that jumped this turn cannot charge.");
+      return null;
+    }
+    if (hasAnyWeaponFiredThisTurn(actor, { attackerToken })) {
+      ui?.notifications?.warn?.("A mech that has fired weapons this turn cannot charge.");
+      return null;
+    }
+    if (hasActorChargedThisTurn(actor, tokenDoc)) {
+      ui?.notifications?.warn?.("This mech has already charged this turn.");
+      return null;
+    }
+    if (chargeAllowance.max > 0 && chargeAllowance.remaining < 1) {
+      ui?.notifications?.warn?.("This mech does not have enough MP remaining to enter the target hex.");
+      return null;
+    }
+  }
 
   const commonFields = `
     <div class="form-group">
@@ -5296,13 +7730,25 @@ export async function promptAndRollMeleeAttack(actor, meleeType = "punch", { def
     </div>
   `;
 
+  const chargeFields = `
+    <div class="form-group">
+      <label>Charge Hexes Moved</label>
+      <input type="number" name="chargeHexes" value="${Math.max(0, Math.floor(chargeAllowance.moved))}" min="0"/>
+      <small>Do not count the target hex. If movement reversed, enter only hexes after the last reversal.</small>
+    </div>
+    <div class="form-group">
+      <label>MP Check</label>
+      <div><small>Remaining MP before target hex: ${chargeAllowance.remaining}/${chargeAllowance.max || "?"}${chargeAllowance.mode ? ` (${chargeAllowance.mode})` : ""}</small></div>
+    </div>
+  `;
+
   const dialogHtml = `
   <form class="atow-attack-dialog">
     ${commonFields}
-    ${type === "punch" ? punchFields : kickFields}
+    ${type === "punch" ? punchFields : type === "kick" ? kickFields : chargeFields}
   </form>`;
 
-  const title = (type === "kick") ? `Kick — Physical Attack` : `Punch — Physical Attack`;
+  const title = (type === "kick") ? `Kick — Physical Attack` : (type === "charge") ? `Charge — Physical Attack` : `Punch — Physical Attack`;
 
   return new Promise((resolve) => {
     new Dialog({
@@ -5336,8 +7782,15 @@ export async function promptAndRollMeleeAttack(actor, meleeType = "punch", { def
               return;
             }
 
-            opts.leg = String(fd.get("leg") ?? "right");
-            const result = await rollKickAttack(actor, opts);
+            if (type === "kick") {
+              opts.leg = String(fd.get("leg") ?? "right");
+              const result = await rollKickAttack(actor, opts);
+              resolve(result);
+              return;
+            }
+
+            opts.chargeHexes = num(fd.get("chargeHexes"), chargeAllowance.moved);
+            const result = await rollChargeAttack(actor, opts);
             resolve(result);
           }
         },
@@ -5406,6 +7859,12 @@ function _critHitTypeFromLabel(label) {
 
 const _CRIT_HIT_LIMITS = { engine: 3, gyro: 2, sensor: 2, lifeSupport: 1 };
 
+function _isFerroFibrousCritSlot(slot) {
+  const label = (typeof slot === "string") ? slot : (slot?.label ?? slot?.name ?? "");
+  const compact = String(label ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  return compact.includes("ferrofibrous");
+}
+
 async function _rollCritSlotIndex(targetActor, structLoc) {
   const rawSlots = targetActor.system?.crit?.[structLoc]?.slots;
   const maxSlots = Array.isArray(rawSlots) ? rawSlots.length : Number(targetActor.system?.crit?.[structLoc]?.maxSlots ?? 0) || 0;
@@ -5439,6 +7898,7 @@ async function _rollCritSlotIndex(targetActor, structLoc) {
   for (let i = 0; i < slotCount; i++) {
     const slot = slots?.[i];
     if (!_isOccupiedCritSlot(slot)) continue;
+    if (_isFerroFibrousCritSlot(slot)) continue;
     if (Boolean(slot?.destroyed)) continue;
     hasIntactOccupiedSlot = true;
     break;
@@ -5455,7 +7915,7 @@ async function _rollCritSlotIndex(targetActor, structLoc) {
       const r = await (new Roll("1d6")).evaluate();
       const idx = (r.total ?? 1) - 1;
       const slot = slots?.[idx];
-      if (_isOccupiedCritSlot(slot) && !Boolean(slot?.destroyed)) {
+      if (_isOccupiedCritSlot(slot) && !_isFerroFibrousCritSlot(slot) && !Boolean(slot?.destroyed)) {
         return { ok: true, idx, rolls: { slot: r.total }, label: slot?.label ?? slot };
       }
       continue;
@@ -5470,7 +7930,7 @@ async function _rollCritSlotIndex(targetActor, structLoc) {
     const idx = offset + ((slotRoll.total ?? 1) - 1);
 
     const slot = slots?.[idx];
-    if (_isOccupiedCritSlot(slot) && !Boolean(slot?.destroyed)) {
+    if (_isOccupiedCritSlot(slot) && !_isFerroFibrousCritSlot(slot) && !Boolean(slot?.destroyed)) {
       return {
         ok: true,
         idx,
@@ -5853,6 +8313,14 @@ for (const [k, delta] of Object.entries(critHitDelta)) {
     return { ok: false, reason: String(e?.message ?? e), startLoc, hitLoc: startLoc, remaining };
   }
 
+  let pilotHit = null;
+  if (startLoc === "head" && totalApplied > 0 && isMechActor(targetActor)) {
+    pilotHit = await applyMechPilotHit(targetActor, { reason: "Head hit" }).catch(err => {
+      console.warn("AToW Battletech | Pilot hit from head damage failed", err);
+      return null;
+    });
+  }
+
   // ---- Extra Crit Chat Message ----
   // Create a separate chat message whenever a critical hit (or blow-off) occurs.
   // Includes whether the optional Floating Criticals rule is enabled and whether it was triggered (TAC opportunity).
@@ -5938,6 +8406,7 @@ for (const [k, delta] of Object.entries(critHitDelta)) {
     transferBlocked,
     newlyDestroyedCritSlots,
     newlyDestroyedLocations: Array.from(newlyDestroyedLocations),
+    pilotHit,
     // Useful for testing/verification in chat cards and logs
     critEvents: (critEvents ?? []).map(ev => ({
       loc: ev.loc,

@@ -1,0 +1,198 @@
+<form class="{{cssClass}} dropship-sheet" autocomplete="off">
+  <header class="sheet-header">
+    <div class="ds-title-block">
+      <input class="name ds-name-input" name="name" type="text" value="{{actor.name}}" placeholder="DropShip Name" />
+      <div class="ds-header-meta">
+        <span>{{system.dropship.type}}</span>
+        <span>{{system.dropship.tonnage}} Tons</span>
+        <span>{{system.dropship.techBase}}</span>
+        <span>{{system.dropship.rulesLevel}}</span>
+      </div>
+    </div>
+    <div class="ds-header-badge" data-dropship-drag-handle draggable="true" title="Drag this DropShip to the Company sheet">Spheroid DropShip</div>
+  </header>
+
+  <section class="ds-body">
+    <div class="ds-left">
+      <section class="ds-panel">
+        <h3>DropShip Data</h3>
+        <div class="ds-grid ds-grid-2">
+          <label>Type <input name="system.dropship.type" type="text" value="{{system.dropship.type}}" /></label>
+          <label>Tonnage <input name="system.dropship.tonnage" type="number" value="{{system.dropship.tonnage}}" /></label>
+          <label>Tech Base <input name="system.dropship.techBase" type="text" value="{{system.dropship.techBase}}" /></label>
+          <label>Rules Level <input name="system.dropship.rulesLevel" type="text" value="{{system.dropship.rulesLevel}}" /></label>
+          <label>Safe Thrust <input name="system.dropship.thrust.safe" type="number" value="{{system.dropship.thrust.safe}}" /></label>
+          <label>Max Thrust <input name="system.dropship.thrust.max" type="number" value="{{system.dropship.thrust.max}}" /></label>
+          <label>Role <input name="system.dropship.role" type="text" value="{{system.dropship.role}}" /></label>
+          <label>BV <input name="system.dropship.bv" type="number" value="{{system.dropship.bv}}" /></label>
+          <label>Fuel Points <input name="system.dropship.fuel" type="number" value="{{system.dropship.fuel}}" /></label>
+          <label>Scale <input name="system.dropship.scale" type="text" value="{{system.dropship.scale}}" /></label>
+        </div>
+      </section>
+
+      <section class="ds-panel ds-inventory" data-drop-zone="dropship-weapons">
+        <h3>Weapons & Equipment Inventory</h3>
+        <div class="ds-weapon-table">
+          <div class="ds-weapon-row ds-weapon-header">
+            <span>Type</span><span>Loc</span><span>Heat</span><span>Dmg</span><span>Range</span><span></span>
+          </div>
+          {{#each weapons as |w|}}
+            <div class="ds-weapon-row" data-item-id="{{w._id}}" data-item-uuid="{{w.itemUuid}}" draggable="true">
+              <span>{{w.name}}</span>
+              <span>{{w.system.loc}}</span>
+              <span>{{w.system.heat}}</span>
+              <span>{{w.system.damage}}</span>
+              <span>{{w.system.range.short}}/{{w.system.range.medium}}/{{w.system.range.long}}</span>
+              <a class="item-delete" title="Delete">X</a>
+            </div>
+          {{/each}}
+          {{#unless weapons.length}}
+            <div class="ds-empty-row">Drop mech weapon items here.</div>
+          {{/unless}}
+        </div>
+      </section>
+
+      <section class="ds-panel">
+        <h3>Cargo</h3>
+        <textarea name="system.dropship.cargo" placeholder="Cargo bays, doors, carried units...">{{system.dropship.cargo}}</textarea>
+      </section>
+    </div>
+
+    <div class="ds-center">
+      <section class="ds-panel ds-armor-panel">
+        <h3>Armor Diagram</h3>
+        <div class="ds-armor-summary">
+          {{#each armorLocs as |loc|}}
+            <label>{{loc.label}} Armor <input name="system.armor.{{loc.key}}.max" type="number" value="{{loc.max}}" /></label>
+            <label>Threshold <input name="system.armor.{{loc.key}}.threshold" type="number" value="{{loc.threshold}}" /></label>
+          {{/each}}
+        </div>
+
+        <div class="ds-spheroid ds-armor-diagram">
+          <div class="ds-armor-label ds-armor-label-nose">
+            <strong>Nose</strong>
+            <span>DT {{armor.nose.threshold}} / Armor {{armor.nose.max}}</span>
+          </div>
+          <div class="ds-armor-label ds-armor-label-left">
+            <strong>Left Side</strong>
+            <span>DT {{armor.left.threshold}} / Armor {{armor.left.max}}</span>
+          </div>
+          <div class="ds-armor-label ds-armor-label-right">
+            <strong>Right Side</strong>
+            <span>DT {{armor.right.threshold}} / Armor {{armor.right.max}}</span>
+          </div>
+          <div class="ds-armor-label ds-armor-label-aft">
+            <strong>Aft</strong>
+            <span>DT {{armor.aft.threshold}} / Armor {{armor.aft.max}}</span>
+          </div>
+
+          <div class="ds-armor-loc ds-armor-loc-nose" data-armor-loc="nose">
+              {{#each armor.nose.pips as |p|}}
+                <span class="armor-pip ds-armor-pip {{#if p.filled}}filled{{/if}}" data-loc="nose" data-pip="{{p.n}}"></span>
+              {{/each}}
+          </div>
+          <div class="ds-armor-loc ds-armor-loc-left" data-armor-loc="left">
+              {{#each armor.left.pips as |p|}}
+                <span class="armor-pip ds-armor-pip {{#if p.filled}}filled{{/if}}" data-loc="left" data-pip="{{p.n}}"></span>
+              {{/each}}
+          </div>
+          <div class="ds-structure-loc ds-core">
+            <strong>Structural Integrity: {{si.max}}</strong>
+            <div class="ds-si-pips">
+              {{#each si.pips as |p|}}
+                <span class="structure-pip ds-si-pip {{#if p.filled}}filled{{/if}}" data-loc="si" data-pip="{{p.n}}"></span>
+              {{/each}}
+            </div>
+            <label>SI <input name="system.structure.si.max" type="number" value="{{si.max}}" /></label>
+          </div>
+          <div class="ds-armor-loc ds-armor-loc-right" data-armor-loc="right">
+              {{#each armor.right.pips as |p|}}
+                <span class="armor-pip ds-armor-pip {{#if p.filled}}filled{{/if}}" data-loc="right" data-pip="{{p.n}}"></span>
+              {{/each}}
+          </div>
+          <div class="ds-armor-loc ds-armor-loc-aft" data-armor-loc="aft">
+              {{#each armor.aft.pips as |p|}}
+                <span class="armor-pip ds-armor-pip {{#if p.filled}}filled{{/if}}" data-loc="aft" data-pip="{{p.n}}"></span>
+              {{/each}}
+          </div>
+        </div>
+        <div class="ds-armor-hint">
+          Click pips to mark damage. Filled pips are damage taken.
+        </div>
+      </section>
+    </div>
+
+    <div class="ds-right">
+      <section class="ds-panel">
+        <h3>Pilot Data</h3>
+        <div class="ds-grid ds-grid-2">
+          <label>Pilot / Crew <input name="system.pilot.name" type="text" value="{{system.pilot.name}}" /></label>
+          <label>Gunnery <input name="system.pilot.gunnery" type="number" value="{{system.pilot.gunnery}}" /></label>
+          <label>Piloting <input name="system.pilot.piloting" type="number" value="{{system.pilot.piloting}}" /></label>
+          <label>Hits Taken <input name="system.pilot.hitsTaken" type="number" value="{{system.pilot.hitsTaken}}" /></label>
+          <label>Crew <input name="system.crew.crew" type="number" value="{{system.crew.crew}}" /></label>
+          <label>Passengers <input name="system.crew.passengers" type="number" value="{{system.crew.passengers}}" /></label>
+          <label>Marines <input name="system.crew.marines" type="number" value="{{system.crew.marines}}" /></label>
+          <label>BattleArmor <input name="system.crew.battleArmor" type="number" value="{{system.crew.battleArmor}}" /></label>
+          <label>Other <input name="system.crew.other" type="text" value="{{system.crew.other}}" /></label>
+          <label>Life Boats <input name="system.crew.lifeBoats" type="number" value="{{system.crew.lifeBoats}}" /></label>
+          <label>Escape Pods <input name="system.crew.escapePods" type="number" value="{{system.crew.escapePods}}" /></label>
+        </div>
+      </section>
+
+      <section class="ds-panel">
+        <h3>Critical Damage</h3>
+        <div class="ds-crit-list">
+          {{#each critTracks as |track|}}
+            <div class="ds-crit-row">
+              <span>{{track.label}}</span>
+              <div class="ds-crit-boxes">
+                {{#each track.boxes as |box|}}
+                  <button type="button" class="ds-crit-box {{#if box.filled}}filled{{/if}}" data-track="{{track.key}}" data-value="{{box.n}}">{{box.label}}</button>
+                {{/each}}
+              </div>
+            </div>
+          {{/each}}
+          {{#each booleanCrits as |crit|}}
+            <label class="ds-check">
+              <input type="checkbox" name="system.crit.{{crit.key}}" {{checked crit.checked}} />
+              <span>{{crit.label}} Destroyed</span>
+            </label>
+          {{/each}}
+        </div>
+      </section>
+
+      <section class="ds-panel">
+        <h3>Heat Data</h3>
+        <div class="ds-grid ds-grid-2">
+          <label>Heat Sinks <input name="system.heat.sinks" type="number" value="{{system.heat.sinks}}" /></label>
+          <label>Double Capacity <input name="system.heat.doubleSinks" type="number" value="{{system.heat.doubleSinks}}" /></label>
+          <label>Nose <input name="system.heat.generation.nose" type="number" value="{{system.heat.generation.nose}}" /></label>
+          <label>Left Fore <input name="system.heat.generation.foreLeft" type="number" value="{{system.heat.generation.foreLeft}}" /></label>
+          <label>Right Fore <input name="system.heat.generation.foreRight" type="number" value="{{system.heat.generation.foreRight}}" /></label>
+          <label>Left Aft <input name="system.heat.generation.aftLeft" type="number" value="{{system.heat.generation.aftLeft}}" /></label>
+          <label>Right Aft <input name="system.heat.generation.aftRight" type="number" value="{{system.heat.generation.aftRight}}" /></label>
+          <label>Aft <input name="system.heat.generation.aft" type="number" value="{{system.heat.generation.aft}}" /></label>
+        </div>
+      </section>
+    </div>
+
+    <section class="ds-panel ds-velocity">
+      <h3>Velocity Record</h3>
+      <div class="ds-velocity-table">
+        <div class="ds-vel-row header"><span>Turn #</span>{{#each velocityTop as |t|}}<b>{{t.n}}</b>{{/each}}</div>
+        <div class="ds-vel-row"><span>Thrust</span>{{#each velocityTop as |t|}}<input name="system.velocity.turns.{{t.n}}.thrust" value="{{t.thrust}}" />{{/each}}</div>
+        <div class="ds-vel-row"><span>Velocity</span>{{#each velocityTop as |t|}}<input name="system.velocity.turns.{{t.n}}.velocity" value="{{t.velocity}}" />{{/each}}</div>
+        <div class="ds-vel-row"><span>Effective Velocity</span>{{#each velocityTop as |t|}}<input name="system.velocity.turns.{{t.n}}.effectiveVelocity" value="{{t.effectiveVelocity}}" />{{/each}}</div>
+        <div class="ds-vel-row"><span>Altitude</span>{{#each velocityTop as |t|}}<input name="system.velocity.turns.{{t.n}}.altitude" value="{{t.altitude}}" />{{/each}}</div>
+      </div>
+      <div class="ds-velocity-table">
+        <div class="ds-vel-row header"><span>Turn #</span>{{#each velocityBottom as |t|}}<b>{{t.n}}</b>{{/each}}</div>
+        <div class="ds-vel-row"><span>Thrust</span>{{#each velocityBottom as |t|}}<input name="system.velocity.turns.{{t.n}}.thrust" value="{{t.thrust}}" />{{/each}}</div>
+        <div class="ds-vel-row"><span>Velocity</span>{{#each velocityBottom as |t|}}<input name="system.velocity.turns.{{t.n}}.velocity" value="{{t.velocity}}" />{{/each}}</div>
+        <div class="ds-vel-row"><span>Effective Velocity</span>{{#each velocityBottom as |t|}}<input name="system.velocity.turns.{{t.n}}.effectiveVelocity" value="{{t.effectiveVelocity}}" />{{/each}}</div>
+        <div class="ds-vel-row"><span>Altitude</span>{{#each velocityBottom as |t|}}<input name="system.velocity.turns.{{t.n}}.altitude" value="{{t.altitude}}" />{{/each}}</div>
+      </div>
+    </section>
+  </section>
+</form>

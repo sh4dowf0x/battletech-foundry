@@ -1,0 +1,535 @@
+/* styles/dropship-sheet.css */
+
+.atow.sheet.actor.dropship {
+  --ds-text: #eef4f7;
+  --ds-muted: rgba(238, 244, 247, 0.68);
+  --ds-accent: #e2b233;
+  --ds-blue: #64aee8;
+  --ds-border: rgba(210, 224, 235, 0.18);
+  --ds-border-strong: rgba(226, 178, 51, 0.46);
+  --ds-panel: linear-gradient(180deg, rgba(43, 50, 58, 0.44), rgba(13, 17, 21, 0.94));
+  color: var(--ds-text);
+}
+
+.atow.sheet.actor.dropship .window-content {
+  background:
+    radial-gradient(circle at top right, rgba(226, 178, 51, 0.13), transparent 34%),
+    linear-gradient(180deg, #151b21 0%, #0b0f13 100%);
+  overflow: auto;
+}
+
+.dropship-sheet {
+  min-height: 100%;
+  color: var(--ds-text);
+}
+
+.dropship-sheet *,
+.dropship-sheet *::before,
+.dropship-sheet *::after {
+  box-sizing: border-box;
+}
+
+.dropship-sheet input,
+.dropship-sheet textarea,
+.dropship-sheet select {
+  width: 100%;
+  border: 1px solid var(--ds-border);
+  border-radius: 8px;
+  background: rgba(3, 6, 9, 0.55);
+  color: var(--ds-text);
+  min-height: 23px;
+  padding: 3px 6px;
+  font-size: 0.82rem;
+}
+
+.dropship-sheet input[type="number"] {
+  text-align: center;
+}
+
+.dropship-sheet textarea {
+  min-height: 118px;
+  resize: vertical;
+}
+
+.dropship-sheet .sheet-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: center;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--ds-border-strong);
+  background:
+    radial-gradient(circle at top right, rgba(100, 174, 232, 0.13), transparent 36%),
+    var(--ds-panel);
+}
+
+.dropship-sheet .ds-name-input {
+  height: auto;
+  border: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 0;
+  background: transparent;
+  padding: 2px 0 5px;
+  font-size: 1.9rem;
+  font-weight: 900;
+}
+
+.dropship-sheet .ds-header-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 6px;
+}
+
+.dropship-sheet .ds-header-meta span,
+.dropship-sheet .ds-header-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 0 9px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.055);
+  color: var(--ds-muted);
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.dropship-sheet .ds-header-badge {
+  color: #ffe4a5;
+  border-color: rgba(226, 178, 51, 0.36);
+  background: rgba(226, 178, 51, 0.12);
+}
+
+.dropship-sheet .ds-body {
+  display: grid;
+  grid-template-columns: minmax(290px, 0.92fr) minmax(430px, 1.28fr) minmax(290px, 0.9fr);
+  gap: 12px;
+  padding: 14px;
+}
+
+.dropship-sheet .ds-left,
+.dropship-sheet .ds-center,
+.dropship-sheet .ds-right {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.dropship-sheet .ds-panel {
+  border: 1px solid var(--ds-border);
+  border-radius: 8px;
+  background: var(--ds-panel);
+  box-shadow: 0 16px 30px rgba(0, 0, 0, 0.22);
+  padding: 10px;
+}
+
+.dropship-sheet .ds-panel h3 {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  margin: -2px 0 10px;
+  padding: 0 10px;
+  border-radius: 4px;
+  background: #050708;
+  color: #fff;
+  font-size: 0.85rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.dropship-sheet .ds-grid {
+  display: grid;
+  gap: 8px;
+}
+
+.dropship-sheet .ds-grid-2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.dropship-sheet label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  color: var(--ds-muted);
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.dropship-sheet .ds-weapon-table {
+  display: grid;
+  gap: 3px;
+  min-height: 120px;
+}
+
+.dropship-sheet .ds-weapon-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) 58px 42px 48px 86px 22px;
+  gap: 6px;
+  align-items: center;
+  min-height: 24px;
+  padding: 3px 5px;
+  border: 1px solid rgba(255, 255, 255, 0.065);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.035);
+  font-size: 0.78rem;
+}
+
+.dropship-sheet .ds-weapon-row:not(.ds-weapon-header) {
+  cursor: pointer;
+}
+
+.dropship-sheet .ds-weapon-row:not(.ds-weapon-header):hover {
+  border-color: rgba(226, 178, 51, 0.32);
+  background: rgba(226, 178, 51, 0.08);
+}
+
+.dropship-sheet .ds-weapon-header {
+  color: #ffe4a5;
+  font-weight: 900;
+  text-transform: uppercase;
+  cursor: default;
+}
+
+.dropship-sheet .item-delete {
+  color: #ff9b9b;
+  text-align: center;
+  font-weight: 900;
+}
+
+.dropship-sheet .ds-empty-row {
+  padding: 12px;
+  border: 1px dashed rgba(255, 255, 255, 0.18);
+  border-radius: 8px;
+  color: var(--ds-muted);
+  text-align: center;
+}
+
+.dropship-sheet .ds-armor-panel {
+  min-height: 690px;
+}
+
+.dropship-sheet .ds-armor-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 7px;
+  margin-bottom: 10px;
+}
+
+.dropship-sheet .ds-spheroid {
+  --pipSize: 8px;
+  --pipGap: 2px;
+  --pipBorder: 1px;
+  --spipSize: 8px;
+  --spipGap: 2px;
+  --spipBorder: 1px;
+  position: relative;
+  width: 100%;
+  min-height: 650px;
+  border: 1px solid rgba(0, 0, 0, 0.25);
+  border-radius: 5px;
+  background:
+    radial-gradient(ellipse at 50% 18%, rgba(255,255,255,0.10), transparent 18%),
+    radial-gradient(ellipse at 50% 55%, rgba(255,255,255,0.06), transparent 44%),
+    rgba(4, 7, 10, 0.36);
+  overflow: hidden;
+}
+
+.dropship-sheet .ds-spheroid::before {
+  content: "";
+  position: absolute;
+  inset: 42px 74px 34px;
+  border: 4px solid rgba(236, 241, 245, 0.82);
+  border-radius: 47% 47% 43% 43%;
+  background:
+    linear-gradient(90deg, transparent 31%, rgba(255,255,255,0.14) 31%, rgba(255,255,255,0.14) 32%, transparent 32%, transparent 68%, rgba(255,255,255,0.14) 68%, rgba(255,255,255,0.14) 69%, transparent 69%),
+    linear-gradient(180deg, transparent 23%, rgba(255,255,255,0.12) 23%, rgba(255,255,255,0.12) 24%, transparent 24%, transparent 72%, rgba(255,255,255,0.12) 72%, rgba(255,255,255,0.12) 73%, transparent 73%),
+    rgba(255, 255, 255, 0.025);
+  pointer-events: none;
+}
+
+.dropship-sheet .ds-spheroid::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 58px;
+  bottom: 48px;
+  width: 2px;
+  transform: translateX(-50%);
+  background: rgba(236, 241, 245, 0.22);
+  pointer-events: none;
+}
+
+.dropship-sheet .ds-armor-label {
+  position: absolute;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  color: var(--ds-text);
+  font-size: 0.68rem;
+  font-weight: 800;
+  line-height: 1.1;
+  text-align: center;
+  text-transform: uppercase;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.85);
+  pointer-events: none;
+}
+
+.dropship-sheet .ds-armor-label span {
+  color: var(--ds-muted);
+  font-size: 0.62rem;
+}
+
+.dropship-sheet .ds-armor-label-nose {
+  top: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.dropship-sheet .ds-armor-label-left {
+  top: 176px;
+  left: 8px;
+  width: 92px;
+}
+
+.dropship-sheet .ds-armor-label-right {
+  top: 176px;
+  right: 8px;
+  width: 92px;
+}
+
+.dropship-sheet .ds-armor-label-aft {
+  left: 50%;
+  bottom: 10px;
+  transform: translateX(-50%);
+}
+
+.dropship-sheet .ds-armor-loc {
+  position: relative;
+  z-index: 1;
+  position: absolute;
+  display: grid;
+  grid-template-columns: repeat(var(--cols, 6), var(--pipSize));
+  grid-auto-rows: var(--pipSize);
+  grid-auto-flow: row;
+  gap: var(--pipGap);
+  justify-content: center;
+  align-content: start;
+  padding: 2px;
+}
+
+.dropship-sheet .ds-armor-loc-nose {
+  top: 86px;
+  left: 50%;
+  width: 210px;
+  transform: translateX(-50%);
+  --cols: 14;
+}
+
+.dropship-sheet .ds-armor-loc-left {
+  top: 210px;
+  left: 18%;
+  width: 150px;
+  --cols: 9;
+}
+
+.dropship-sheet .ds-armor-loc-right {
+  top: 210px;
+  right: 18%;
+  width: 150px;
+  --cols: 9;
+}
+
+.dropship-sheet .ds-armor-loc-aft {
+  left: 50%;
+  bottom: 78px;
+  width: 230px;
+  transform: translateX(-50%);
+  --cols: 15;
+}
+
+.dropship-sheet .ds-structure-loc {
+  position: absolute;
+  z-index: 2;
+  left: 50%;
+  top: 46%;
+  width: 190px;
+  min-height: 108px;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  justify-content: center;
+  padding: 10px;
+  border: 2px solid rgba(236, 241, 245, 0.62);
+  border-radius: 16px;
+  border-color: rgba(100, 174, 232, 0.38);
+  background: rgba(100, 174, 232, 0.12);
+}
+
+.dropship-sheet .ds-structure-loc strong {
+  color: #fff;
+  font-size: 0.72rem;
+  line-height: 1.1;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.dropship-sheet .ds-structure-loc label {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  align-items: center;
+}
+
+.dropship-sheet .ds-si-pips {
+  display: grid;
+  grid-template-columns: repeat(var(--cols, 7), var(--spipSize));
+  grid-auto-rows: var(--spipSize);
+  gap: var(--spipGap);
+  justify-content: center;
+  align-content: start;
+}
+
+.dropship-sheet .ds-armor-pip,
+.dropship-sheet .ds-si-pip {
+  width: var(--pipSize);
+  height: var(--pipSize);
+  border: var(--pipBorder) solid rgba(236, 241, 245, 0.72);
+  border-radius: 50%;
+  background: transparent;
+  box-sizing: border-box;
+  cursor: pointer;
+}
+
+.dropship-sheet .ds-armor-pip.filled {
+  background: rgba(223, 123, 62, 0.92);
+  border-color: rgba(223, 123, 62, 0.98);
+}
+
+.dropship-sheet .ds-si-pip {
+  width: var(--spipSize);
+  height: var(--spipSize);
+  border: var(--spipBorder) solid rgba(236, 241, 245, 0.88);
+}
+
+.dropship-sheet .ds-si-pip.filled {
+  background: rgba(236, 241, 245, 0.88);
+  border-color: rgba(236, 241, 245, 0.98);
+}
+
+.dropship-sheet .ds-armor-hint {
+  margin-top: 8px;
+  color: var(--ds-muted);
+  font-size: 0.68rem;
+}
+
+.dropship-sheet .ds-crit-list {
+  display: grid;
+  gap: 8px;
+}
+
+.dropship-sheet .ds-crit-row {
+  display: grid;
+  grid-template-columns: 108px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+}
+
+.dropship-sheet .ds-crit-row > span {
+  color: var(--ds-muted);
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.dropship-sheet .ds-crit-boxes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.dropship-sheet .ds-crit-box {
+  width: 30px;
+  height: 26px;
+  border: 1px solid var(--ds-border);
+  border-radius: 6px;
+  background: rgba(255,255,255,0.045);
+  color: var(--ds-text);
+  font-weight: 900;
+}
+
+.dropship-sheet .ds-crit-box.filled {
+  border-color: rgba(226, 178, 51, 0.7);
+  background: rgba(226, 178, 51, 0.2);
+  color: #ffe4a5;
+}
+
+.dropship-sheet .ds-check {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.dropship-sheet .ds-check input {
+  width: auto;
+}
+
+.dropship-sheet .ds-velocity {
+  grid-column: 1 / -1;
+}
+
+.dropship-sheet .ds-velocity-table {
+  display: grid;
+  gap: 2px;
+  margin-top: 8px;
+}
+
+.dropship-sheet .ds-vel-row {
+  display: grid;
+  grid-template-columns: 150px repeat(10, minmax(48px, 1fr));
+  gap: 2px;
+  align-items: center;
+}
+
+.dropship-sheet .ds-vel-row span,
+.dropship-sheet .ds-vel-row b {
+  min-height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 4px;
+  background: rgba(255,255,255,0.045);
+  font-size: 0.76rem;
+}
+
+.dropship-sheet .ds-vel-row span:first-child {
+  justify-content: flex-start;
+  padding-left: 8px;
+  color: var(--ds-muted);
+  font-weight: 800;
+}
+
+.dropship-sheet .ds-vel-row input {
+  min-height: 24px;
+  text-align: center;
+  border-radius: 4px;
+}
+
+@media (max-width: 1120px) {
+  .dropship-sheet .ds-body {
+    grid-template-columns: 1fr;
+  }
+
+  .dropship-sheet .ds-velocity {
+    grid-column: auto;
+  }
+}
