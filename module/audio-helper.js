@@ -13,6 +13,7 @@ export const ATOW_AUDIO_CUES = {
   damageCritical: `systems/${SYSTEM_ID}/assets/sounds/status-damage-critical.ogg`,
   ejecting: `systems/${SYSTEM_ID}/assets/sounds/status-ejecting.ogg`,
   jumpjetFailure: `systems/${SYSTEM_ID}/assets/sounds/status-jumpjet-failure.ogg`,
+  legDamaged: `systems/${SYSTEM_ID}/assets/sounds/status-leg-damaged.ogg`,
   powerRestored: `systems/${SYSTEM_ID}/assets/sounds/status-power-restored.ogg`,
   shuttingDown: `systems/${SYSTEM_ID}/assets/sounds/status-shutting-down.ogg`,
   systemsNominal: `systems/${SYSTEM_ID}/assets/sounds/status-systems-nominal.ogg`,
@@ -44,8 +45,12 @@ const HEAT_RESOLUTION_MAX_ATTEMPTS = 20;
 
 const audioState = globalThis.__ATOW_BT_AUDIO_STATE__ ?? (globalThis.__ATOW_BT_AUDIO_STATE__ = {
   queue: Promise.resolve(),
-  lastTurnAnnouncementByActor: new Map()
+  lastTurnAnnouncementByActor: new Map(),
+  lastLegDamagedByStatus: new Map(),
+  lastHeatStartupByActor: new Map()
 });
+if (!(audioState.lastLegDamagedByStatus instanceof Map)) audioState.lastLegDamagedByStatus = new Map();
+if (!(audioState.lastHeatStartupByActor instanceof Map)) audioState.lastHeatStartupByActor = new Map();
 
 const effectState = globalThis.__ATOW_BT_EFFECT_AUDIO_STATE__ ?? (globalThis.__ATOW_BT_EFFECT_AUDIO_STATE__ = {
   queue: Promise.resolve()
@@ -377,6 +382,12 @@ export async function playActorPowerRestoredAnnouncement(actor, { volume = 0.9 }
   return enqueueAudioCues(["powerRestored"], { volume }).then(() => playClipLocal(ATOW_AUDIO_EFFECTS.powerUp, { volume }));
 }
 
+export async function playActorLegDamagedAnnouncement(actor, { volume = 0.9 } = {}) {
+  if (!actor) return;
+  if (!shouldCurrentUserHearActorAnnouncements(actor)) return;
+  return enqueueAudioCues(["legDamaged"], { volume });
+}
+
 function getMechWeightClass(actor) {
   const tonnage = Number(actor?.system?.mech?.tonnage ?? actor?.system?.tonnage ?? 0) || 0;
   if (tonnage <= 35) return "light";
@@ -509,6 +520,77 @@ export function registerAtowAudioHooks() {
   if (globalThis.__ATOW_BT_AUDIO_HOOKS_REGISTERED__) return;
   globalThis.__ATOW_BT_AUDIO_HOOKS_REGISTERED__ = true;
 
+  const legDestroyedStatusIds = new Set(["left-leg-destroyed", "right-leg-destroyed"]);
+
+  const getEffectStatusIds = (effect) => {
+    const ids = new Set();
+    const coreStatusId = effect?.getFlag?.("core", "statusId") ?? effect?.flags?.core?.statusId ?? null;
+    if (coreStatusId) ids.add(String(coreStatusId));
+
+    const statuses = effect?.statuses;
+    if (statuses?.forEach) statuses.forEach(id => ids.add(String(id)));
+    else if (Array.isArray(statuses)) statuses.forEach(id => ids.add(String(id)));
+
+    return ids;
+  };
+
+  const maybePlayLegDestroyedStatus = (effect) => {
+    try {
+      if (!effect || effect.disabled) return;
+      const actor = effect.parent;
+      if (!actor || String(actor.type ?? "").toLowerCase() !== "mech") return;
+
+      const statusIds = getEffectStatusIds(effect);
+      const statusId = Array.from(statusIds).find(id => legDestroyedStatusIds.has(id));
+      if (!statusId) return;
+
+      const key = `${actor.uuid ?? actor.id ?? "actor"}:${statusId}`;
+      const now = Date.now();
+      const last = Number(audioState.lastLegDamagedByStatus.get(key) ?? 0) || 0;
+      if ((now - last) < 2000) return;
+      audioState.lastLegDamagedByStatus.set(key, now);
+
+      playActorLegDamagedAnnouncement(actor, { volume: 0.9 }).catch(err => {
+        console.warn("AToW Battletech | Leg damaged announcement failed", err);
+      });
+    } catch (err) {
+      console.warn("AToW Battletech | Leg destroyed status audio hook failed", err);
+    }
+  };
+
+  const maybePlayHeatStartup = (actor, changed) => {
+    try {
+      if (!actor || String(actor.type ?? "").toLowerCase() !== "mech") return;
+      const combat = game.combat;
+      if (!combat?.started) return;
+
+      const activeActor = combat?.combatant?.actor ?? null;
+      if (activeActor?.id && actor?.id && activeActor.id !== actor.id) return;
+
+      const flat = foundry.utils.flattenObject(changed ?? {});
+      const heatTouched = Object.keys(flat).some(k => k.startsWith("system.heat."));
+      if (!heatTouched) return;
+
+      const shutdownInfo = actor.system?.heat?.effects?.shutdown ?? {};
+      const isHeatStartup = Boolean(shutdownInfo?.restarted) ||
+        String(shutdownInfo?.type ?? "").toLowerCase() === "startup";
+      if (!isHeatStartup) return;
+      if (actor.system?.heat?.shutdown || shutdownInfo?.active) return;
+
+      const stamp = `${combat.id ?? "no-combat"}:${combat.round ?? 0}:${combat.turn ?? 0}`;
+      const actorKey = String(actor.uuid ?? actor.id ?? "");
+      if (!actorKey) return;
+      if (audioState.lastHeatStartupByActor.get(actorKey) === stamp) return;
+      audioState.lastHeatStartupByActor.set(actorKey, stamp);
+
+      playActorPowerRestoredAnnouncement(actor, { volume: 0.9 }).catch(err => {
+        console.warn("AToW Battletech | Heat startup announcement failed", err);
+      });
+    } catch (err) {
+      console.warn("AToW Battletech | Heat startup audio hook failed", err);
+    }
+  };
+
   Hooks.on("updateCombat", (combat, changed) => {
     logAudioDebug("hook:updateCombat", {
       changed,
@@ -525,5 +607,20 @@ export function registerAtowAudioHooks() {
     queueTurnStartAnnouncement(actor, combat).catch(err => {
       console.warn("AToW Battletech | Turn-start announcement failed", err);
     });
+  });
+
+  Hooks.on("createActiveEffect", (effect) => {
+    maybePlayLegDestroyedStatus(effect);
+  });
+
+  Hooks.on("updateActiveEffect", (effect, changed) => {
+    const flat = foundry.utils.flattenObject(changed ?? {});
+    const activated = flat.disabled === false || Object.keys(flat).some(k => k === "statuses" || k.startsWith("statuses") || k.includes("statusId"));
+    if (!activated) return;
+    maybePlayLegDestroyedStatus(effect);
+  });
+
+  Hooks.on("updateActor", (actor, changed) => {
+    maybePlayHeatStartup(actor, changed);
   });
 }

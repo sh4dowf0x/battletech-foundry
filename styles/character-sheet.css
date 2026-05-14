@@ -1,1066 +1,926 @@
-/* styles/character-sheet.tactical.css */
-/* AToW Character Sheet — Tactical UI Theme
-   - Dark, high-contrast panels
-   - Cyan/Orange accents
-   - Soft-glow borders + subtle grid background
-   Namespaced to the character sheet so it won't affect other sheets.
-*/
-
-/* ============================
-   Theme Tokens (scoped)
-   ============================ */
+/* systems/atow-battletech/styles/character-sheet.css */
 
 .atow.sheet.actor.character,
 .atow-character-classic {
-  --bg0: #050812;
-  --bg1: #0b1220;
-  --bg2: #0f172a;
-
-  --text: rgba(255, 255, 255, 0.92);
-  --muted: rgba(255, 255, 255, 0.68);
-  --faint: rgba(255, 255, 255, 0.45);
-
-  --panel: rgba(15, 23, 42, 0.70);
-  --panel2: rgba(2, 6, 23, 0.55);
-
-  --border: 1px solid rgba(34, 211, 238, 0.22);
-  --border-strong: 1px solid rgba(34, 211, 238, 0.40);
-
-  --accent: #22d3ee;   /* cyan */
-  --accent2: #f97316;  /* orange */
-  --good: #34d399;     /* green */
-  --warn: #fbbf24;     /* amber */
-  --bad: #ef4444;      /* red */
-
-  --radius: 12px;
-  --radius-sm: 8px;
-  --pad: 10px;
-  --gap: 10px;
-
-  --shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
-  --shadow-soft: 0 8px 18px rgba(0, 0, 0, 0.22);
+  --char-text: #ecf1f5;
+  --char-muted: rgba(231, 239, 245, 0.68);
+  --char-faint: rgba(231, 239, 245, 0.46);
+  --char-accent: #df7b3e;
+  --char-accent-soft: rgba(223, 123, 62, 0.16);
+  --char-good: #7fcf9d;
+  --char-bad: #d45a4e;
+  --char-border: rgba(201, 220, 231, 0.16);
+  --char-border-strong: rgba(223, 123, 62, 0.42);
+  --char-panel: linear-gradient(180deg, rgba(45, 54, 62, 0.36) 0%, rgba(19, 24, 29, 0.88) 100%);
+  --char-panel-strong: linear-gradient(180deg, rgba(78, 94, 102, 0.28) 0%, rgba(21, 28, 34, 0.94) 100%);
+  --char-shadow: 0 18px 34px rgba(0, 0, 0, 0.28);
+  color: var(--char-text);
 }
-
-/* ============================
-   Window + Background
-   ============================ */
 
 .atow.sheet.actor.character .window-content,
 .atow-character-classic .window-content {
-  background: radial-gradient(1200px 800px at 10% 0%, rgba(34,211,238,0.12), transparent 55%),
-              radial-gradient(900px 700px at 90% 10%, rgba(249,115,22,0.10), transparent 55%),
-              linear-gradient(180deg, var(--bg1), var(--bg0));
-  color: var(--text);
-  overflow: auto !important;
+  background:
+    radial-gradient(circle at top right, rgba(223, 123, 62, 0.12), transparent 34%),
+    linear-gradient(180deg, rgba(20, 25, 31, 0.98) 0%, rgba(13, 17, 21, 1) 100%);
+  color: var(--char-text);
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
-/* subtle grid overlay */
-.atow.sheet.actor.character .window-content::before,
-.atow-character-classic .window-content::before {
-  content: "";
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
-  background-image:
-    linear-gradient(rgba(255,255,255,0.035) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255,255,255,0.030) 1px, transparent 1px);
-  background-size: 40px 40px;
-  mix-blend-mode: overlay;
-  opacity: 0.22;
-}
-
-/* Root wrapper */
 .atow-character-sheet {
-  padding: var(--pad);
-  min-width: 780px;
-  color: var(--text);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 0;
+  min-height: 100%;
+  color: var(--char-text);
 }
 
-/* ============================
-   Typography + Links
-   ============================ */
-
-.atow-character-sheet label {
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.07em;
-  color: var(--muted);
+.atow-character-sheet *,
+.atow-character-sheet *::before,
+.atow-character-sheet *::after {
+  box-sizing: border-box;
 }
-
-.atow-character-sheet a,
-.atow-character-sheet a.rollable {
-  color: var(--text);
-  text-decoration: none;
-  border-bottom: 1px dotted rgba(34,211,238,0.55);
-  font-weight: 700;
-}
-
-.atow-character-sheet a:hover,
-.atow-character-sheet a.rollable:hover {
-  border-bottom-style: solid;
-  border-bottom-color: var(--accent);
-  color: var(--text);
-}
-
-/* ============================
-   Inputs / Controls
-   ============================ */
 
 .atow-character-sheet input,
 .atow-character-sheet select,
 .atow-character-sheet textarea {
-  background: rgba(2, 6, 23, 0.55);
-  color: var(--text);
-  border: 1px solid rgba(34, 211, 238, 0.20);
-  border-radius: var(--radius-sm);
-  padding: 5px 8px;
-  height: 28px;
-  box-shadow: inset 0 0 0 1px rgba(0,0,0,0.15);
+  width: 100%;
+  border: 1px solid var(--char-border);
+  border-radius: 10px;
+  background: rgba(7, 10, 14, 0.58);
+  color: var(--char-text);
+  padding: 3px 6px;
+  font-size: 0.84rem;
+  line-height: 1.2;
+  transition: border-color 120ms ease, box-shadow 120ms ease, background 120ms ease;
 }
 
-.atow-character-sheet textarea {
-  height: auto;
-  min-height: 90px;
-  resize: vertical;
-  line-height: 1.35;
-}
-
-.atow-character-sheet input:focus,
-.atow-character-sheet select:focus,
-.atow-character-sheet textarea:focus {
-  outline: none;
-  border-color: rgba(34, 211, 238, 0.55);
-  box-shadow:
-    0 0 0 2px rgba(34, 211, 238, 0.12),
-    inset 0 0 0 1px rgba(0,0,0,0.15);
+.atow-character-sheet input[type="text"],
+.atow-character-sheet input[type="number"],
+.atow-character-sheet select {
+  height: 22px;
 }
 
 .atow-character-sheet input[type="number"] {
   text-align: center;
 }
 
+.atow-character-sheet textarea {
+  min-height: 92px;
+  resize: vertical;
+}
+
+.atow-character-sheet input:focus,
+.atow-character-sheet select:focus,
+.atow-character-sheet textarea:focus {
+  outline: none;
+  border-color: var(--char-border-strong);
+  box-shadow: 0 0 0 1px rgba(223, 123, 62, 0.22);
+}
+
+.atow-character-sheet input:disabled,
+.atow-character-sheet input[readonly],
+.atow-character-sheet textarea:disabled {
+  opacity: 0.78;
+}
+
 .atow-character-sheet input::placeholder,
 .atow-character-sheet textarea::placeholder {
-  color: rgba(255,255,255,0.38);
+  color: rgba(231, 239, 245, 0.36);
 }
 
-/* checkboxes */
-.atow-character-sheet input[type="checkbox"] {
-  width: 16px;
-  height: 16px;
-  accent-color: var(--accent);
+.atow-character-sheet a {
+  color: var(--char-text);
+  text-decoration: none;
 }
 
-/* ============================
-   Topbar / Branding
-   ============================ */
+.atow-character-sheet a:hover {
+  color: #fff4ea;
+}
+
+.atow-character-sheet label,
+.atow-character-sheet .track-label,
+.atow-character-sheet .move-name,
+.atow-character-sheet .pip-label,
+.atow-character-sheet .bio-label {
+  font-size: 0.69rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--char-muted);
+}
 
 .atow-topbar {
-  display: flex;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
   align-items: center;
-  gap: var(--gap);
-  padding: 10px 10px 12px 10px;
-  margin-bottom: var(--gap);
-  border-radius: var(--radius);
-  background: linear-gradient(180deg, rgba(34,211,238,0.12), rgba(2,6,23,0.62));
-  border: 1px solid rgba(34,211,238,0.22);
-  box-shadow: var(--shadow-soft);
-  position: relative;
-  overflow: hidden;
+  padding: 10px 16px 8px;
+  border-bottom: 1px solid var(--char-border-strong);
+  background:
+    radial-gradient(circle at top right, rgba(223, 123, 62, 0.18), transparent 38%),
+    var(--char-panel-strong);
 }
 
-.atow-topbar::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background: radial-gradient(600px 140px at 0% 0%, rgba(34,211,238,0.25), transparent 55%);
-  opacity: 0.85;
+.atow-topbar .brand {
+  min-width: 0;
 }
 
-.brand-left { position: relative; z-index: 1; }
 .brand-title {
-  font-weight: 900;
-  font-size: 20px;
-  letter-spacing: 0.04em;
-  line-height: 1.1;
-  text-shadow: 0 1px 0 rgba(0,0,0,0.35);
-}
-.brand-sub {
+  color: var(--char-text);
+  font-size: 1.65rem;
   font-weight: 800;
-  font-size: 11px;
-  letter-spacing: 0.12em;
-  margin-top: 2px;
-  color: rgba(255,255,255,0.70);
+  line-height: 1.05;
+  letter-spacing: 0.01em;
 }
 
-/* Icon buttons in the topbar */
-.atow-icon-btn {
-  width: 34px;
-  height: 34px;
-  border-radius: 10px;
-  border: 1px solid rgba(34,211,238,0.28);
-  background: rgba(2,6,23,0.55);
-  color: var(--text);
-  cursor: pointer;
+.brand-sub {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 2px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--char-muted);
+}
+
+.top-right {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+}
+
+.atow-icon-btn,
+.atow-mini-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  box-shadow: inset 0 0 0 1px rgba(0,0,0,0.20);
-  position: relative;
-  z-index: 1;
+  min-width: 24px;
+  height: 22px;
+  padding: 0 9px;
+  border: 1px solid rgba(223, 123, 62, 0.28);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--char-text);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
 }
 
-.atow-icon-btn:hover {
-  border-color: rgba(34,211,238,0.55);
-  box-shadow:
-    0 0 0 2px rgba(34,211,238,0.12),
-    inset 0 0 0 1px rgba(0,0,0,0.20);
+.atow-icon-btn {
+  width: 28px;
+  padding: 0;
 }
 
-.atow-icon-btn i { font-size: 14px; }
+.atow-icon-btn:hover,
+.atow-mini-btn:hover {
+  border-color: rgba(223, 123, 62, 0.52);
+  background: rgba(223, 123, 62, 0.12);
+}
 
-/* ============================
-   Panels
-   ============================ */
+.atow-grid {
+  display: grid;
+  gap: 12px;
+  padding: 0 14px;
+}
+
+.atow-grid-2 {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.atow-core-grid {
+  align-items: start;
+}
+
+.atow-left-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
 
 .atow-panel,
 .atow-panel-wide {
-  background: linear-gradient(180deg, rgba(15,23,42,0.74), rgba(2,6,23,0.62));
-  border: 1px solid rgba(34,211,238,0.18);
-  border-radius: var(--radius);
-  padding: var(--pad);
-  box-shadow: var(--shadow);
-  margin-bottom: var(--gap);
-  backdrop-filter: blur(6px);
+  min-width: 0;
+  margin: 0;
+  padding: 14px;
+  border: 1px solid var(--char-border);
+  border-radius: 18px;
+  background: var(--char-panel);
+  box-shadow: var(--char-shadow);
 }
 
-.atow-panel-wide { margin-top: var(--gap); }
+.atow-panel-wide {
+  margin: 0 14px;
+}
+
+.atow-personal-wide {
+  margin-top: 14px;
+}
 
 .panel-title {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  margin: 0 0 10px 0;
-  padding: 0 0 10px 0;
-  border-bottom: 1px solid rgba(34,211,238,0.18);
-  position: relative;
-
-  font-size: 12px;
-  font-weight: 900;
-  letter-spacing: 0.10em;
+  margin: 0 0 8px;
+  color: #fff4ea;
+  font-size: 0.74rem;
+  font-weight: 800;
+  letter-spacing: 0.14em;
   text-transform: uppercase;
 }
 
-.panel-title::before {
+.panel-title::after {
   content: "";
-  width: 10px;
-  height: 10px;
-  border-radius: 999px;
-  background: var(--accent);
-  box-shadow: 0 0 14px rgba(34,211,238,0.45);
-  display: inline-block;
-  margin-right: 10px;
+  flex: 1 1 auto;
+  order: 2;
+  height: 1px;
+  margin-left: 2px;
+  background: rgba(190, 74, 60, 0.95);
 }
 
-.panel-title > *:first-child {
-  display: inline-flex;
+.panel-title > span {
+  order: 1;
+}
+
+.panel-title .atow-mini-btn {
+  flex: 0 0 auto;
+  order: 3;
+  margin-left: auto;
+}
+
+.compendium-add-control {
+  order: 3;
+  display: grid;
+  grid-template-columns: minmax(150px, 220px) auto;
+  gap: 6px;
   align-items: center;
+  margin-left: auto;
 }
 
-/* mini buttons */
-.atow-mini-btn {
-  border-radius: 10px;
-  border: 1px solid rgba(34,211,238,0.22);
-  background: rgba(2,6,23,0.55);
-  color: var(--text);
-  cursor: pointer;
-  padding: 6px 10px;
-  font-size: 12px;
-  font-weight: 800;
-  letter-spacing: 0.02em;
+.compendium-add-control select {
+  height: 22px;
+  min-width: 0;
+  font-size: 0.72rem;
 }
 
-.atow-mini-btn:hover {
-  border-color: rgba(34,211,238,0.55);
-  box-shadow: 0 0 0 2px rgba(34,211,238,0.12);
+.compendium-add-control .atow-mini-btn {
+  margin-left: 0;
+}
+
+.atow-mini-btn:disabled,
+.compendium-add-control select:disabled {
+  cursor: default;
+  opacity: 0.5;
 }
 
 .mini-note,
 .sheet-note {
-  font-size: 11px;
-  color: var(--muted);
-  margin-top: 8px;
+  margin-top: 6px;
+  color: var(--char-muted);
+  font-size: 0.72rem;
 }
 
-/* ============================
-   Layout Helpers
-   ============================ */
-
-.atow-grid {
+.personal-portrait-grid {
   display: grid;
-  gap: var(--gap);
-  margin-top: var(--gap);
-}
-.atow-grid-2 { grid-template-columns: 1fr 1fr; }
-@media (max-width: 980px) { .atow-grid-2 { grid-template-columns: 1fr; } }
-
-.atow-core-grid { align-items: stretch; }
-
-.atow-left-stack {
-  display: flex;
-  flex-direction: column;
-  gap: var(--gap);
-}
-
-.atow-combat-tall { height: 100%; }
-
-/* ============================
-   Personal Data
-   ============================ */
-
-.personal-grid {
-  display: grid;
-  grid-template-columns: 2fr 1fr;
-  gap: 10px 14px;
-}
-
-.personal-name { grid-column: 1 / -1; }
-
-.personal-field,
-.personal-extra {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.personal-extra { grid-column: 1 / -1; }
-
-.atow-character-sheet .personal-grid-compact {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 14px 20px;
-  align-items: start;
-}
-
-.atow-character-sheet .personal-grid-compact .personal-left,
-.atow-character-sheet .personal-grid-compact .personal-right {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.atow-character-sheet .personal-grid-compact .personal-two {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 14px;
-}
-
-.atow-character-sheet .personal-grid-compact .personal-field {
-  display: grid;
-  grid-template-columns: 96px 1fr;
-  gap: 10px;
-  align-items: center;
-  min-height: 28px;
-}
-
-.atow-character-sheet .personal-grid-compact label {
-  width: auto;
-  margin: 0;
-  font-size: 11px;
-  font-weight: 900;
-  color: rgba(255,255,255,0.70);
-  letter-spacing: 0.10em;
-  text-transform: uppercase;
-  white-space: nowrap;
-}
-
-.atow-character-sheet .personal-grid-compact .personal-name label {
-  width: auto;
-}
-
-.atow-character-sheet .personal-grid-compact input[type="text"],
-.atow-character-sheet .personal-grid-compact input[type="number"] {
-  width: 100%;
-  min-width: 0;
-  height: 28px;
-}
-
-.atow-character-sheet .personal-grid-compact .unit {
-  font-size: 11px;
-  color: var(--muted);
-  margin-left: 4px;
-  white-space: nowrap;
-}
-
-@media (max-width: 980px) {
-  .atow-character-sheet .personal-grid-compact { grid-template-columns: 1fr; }
-}
-
-/* ============================
-   Combat (pips + tracks)
-   ============================ */
-
-.combat-label {
-  font-weight: 900;
-  font-size: 12px;
-  letter-spacing: 0.10em;
-  text-transform: uppercase;
-  color: rgba(255,255,255,0.86);
-  margin-bottom: 10px;
-}
-
-.combat-section {
-  padding: 10px 0;
-  border-bottom: 1px solid rgba(34,211,238,0.16);
-}
-.combat-section:last-child { border-bottom: none; }
-
-.combat-label-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: var(--gap);
-}
-
-/* Pips */
-.pip-line {
-  display: grid;
-  grid-template-columns: 140px 1fr;
+  grid-template-columns: 150px minmax(0, 1fr);
   gap: 12px;
   align-items: start;
-  margin: 10px 0;
 }
 
-.pip-label {
-  font-size: 12px;
-  font-weight: 800;
-  color: rgba(255,255,255,0.82);
-  white-space: nowrap;
+.portrait-col {
+  min-width: 0;
 }
 
-.pip {
-  display: inline-block;
-  width: 12px;
-  height: 12px;
-  border-radius: 999px;
-  border: 2px solid rgba(34,211,238,0.55);
-  background: rgba(2,6,23,0.15);
+img.char-portrait {
+  width: 150px;
+  height: 178px;
+  display: block;
+  object-fit: cover;
+  border: 1px solid var(--char-border);
+  border-radius: 14px;
+  background: rgba(0, 0, 0, 0.18);
   cursor: pointer;
-  box-shadow: 0 0 0 2px rgba(0,0,0,0.10);
 }
 
-.pip:hover {
-  border-color: rgba(34,211,238,0.95);
-  box-shadow:
-    0 0 0 2px rgba(34,211,238,0.12),
-    0 0 18px rgba(34,211,238,0.18);
+img.char-portrait:hover {
+  border-color: var(--char-border-strong);
 }
 
-.pip.filled {
-  background: var(--accent);
-  border-color: rgba(34,211,238,0.95);
-  box-shadow: 0 0 18px rgba(34,211,238,0.30);
-}
-
-/* toggles */
-.combat-toggles {
-  display: flex;
-  justify-content: space-between;
-  gap: 14px;
-  margin-top: 10px;
-}
-.combat-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  font-size: 12px;
-  font-weight: 800;
-  color: rgba(255,255,255,0.82);
-}
-
-/* tracks */
-.track {
+.personal-grid-compact {
   display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 10px;
-  align-items: center;
-  margin: 10px 0;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px 12px;
 }
 
-.track-label {
-  font-size: 12px;
-  font-weight: 800;
-  color: rgba(255,255,255,0.82);
+.personal-left,
+.personal-right {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
 }
 
-.track-input {
-  display: inline-flex;
-  align-items: center;
+.personal-two {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 8px;
 }
 
-.track-input input {
-  width: 70px;
-  text-align: center;
+.personal-field {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
 }
 
-.track-input .slash { color: var(--faint); }
-
-/* Movement */
-.move-2col {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 18px;
+.personal-name {
+  grid-template-columns: 76px minmax(0, 1fr);
 }
-@media (max-width: 1100px) { .move-2col { grid-template-columns: 1fr; } }
 
-.move-line {
+.personal-track-input {
   display: grid;
-  grid-template-columns: 1fr 84px;
-  gap: 12px;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  gap: 5px;
   align-items: center;
 }
-.move-line input {
-  width: 84px;
-  text-align: center;
+
+.personal-track-input input {
+  min-width: 0;
 }
 
-/* ============================
-   Tables (Skills, Gear, etc.)
-   ============================ */
+.xp-track-input input:first-child {
+  color: var(--char-muted);
+}
 
 .atow-table {
   width: 100%;
-  border-collapse: collapse;
-  overflow: hidden;
-  border-radius: var(--radius);
+  border-collapse: separate;
+  border-spacing: 0 3px;
+}
+
+.atow-table th,
+.atow-table td {
+  min-width: 0;
 }
 
 .atow-table thead th {
-  font-size: 11px;
-  font-weight: 900;
-  text-transform: uppercase;
-  letter-spacing: 0.10em;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--char-muted);
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
   text-align: left;
-  padding: 10px 10px;
-  color: rgba(255,255,255,0.82);
-  background: linear-gradient(180deg, rgba(34,211,238,0.10), rgba(2,6,23,0.55));
-  border-bottom: 1px solid rgba(34,211,238,0.18);
-  position: sticky;
-  top: 0;
-  z-index: 1;
-  backdrop-filter: blur(6px);
-}
-
-.atow-table tbody td {
-  padding: 10px 10px;
-  border-bottom: 1px solid rgba(255,255,255,0.06);
-  color: rgba(255,255,255,0.86);
+  text-transform: uppercase;
 }
 
 .atow-table tbody tr {
-  background: rgba(2,6,23,0.18);
-}
-.atow-table tbody tr:nth-child(2n) {
-  background: rgba(15,23,42,0.18);
+  background: rgba(255, 255, 255, 0.03);
 }
 
 .atow-table tbody tr:hover {
-  background: rgba(34,211,238,0.08);
+  background: rgba(223, 123, 62, 0.08);
+}
+
+.atow-table tbody td {
+  padding: 3px 5px;
+  border-top: 1px solid transparent;
+  border-bottom: 1px solid transparent;
+  color: rgba(236, 241, 245, 0.9);
+  font-size: 0.76rem;
+}
+
+.atow-table tbody td:first-child {
+  border-top-left-radius: 9px;
+  border-bottom-left-radius: 9px;
+}
+
+.atow-table tbody td:last-child {
+  border-top-right-radius: 9px;
+  border-bottom-right-radius: 9px;
 }
 
 .atow-table input {
-  width: 100%;
-  text-align: center;
-  height: 28px;
+  height: 21px;
+  padding: 2px 5px;
+  font-size: 0.76rem;
 }
 
-/* column helpers */
-.atow-table .col-small { width: 68px; }
-.atow-table .col-controls { width: 78px; }
+.atow-table .col-small {
+  width: 58px;
+}
+
+.atow-table .col-controls {
+  width: 58px;
+}
 
 .atow-table .controls {
   text-align: right;
   white-space: nowrap;
 }
+
 .atow-table .controls a {
-  opacity: 0.78;
-  margin-left: 10px;
-  border-bottom: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  opacity: 0.72;
 }
+
 .atow-table .controls a:hover {
   opacity: 1;
-  color: var(--accent);
+  color: #fff4ea;
 }
 
-/* Skills two column */
-.skills-two-col {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: var(--gap);
-}
-@media (max-width: 1100px) { .skills-two-col { grid-template-columns: 1fr; } }
-
-/* ============================
-   Simple Lists
-   ============================ */
-
-.simple-list {
-  list-style: none;
-  padding: 0;
-  margin: 0;
-  border-radius: var(--radius);
-  overflow: hidden;
-  border: 1px solid rgba(34,211,238,0.14);
-}
-
-.simple-list li {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 10px;
-  background: rgba(2,6,23,0.18);
-  border-bottom: 1px solid rgba(255,255,255,0.06);
-}
-
-.simple-list li:nth-child(2n) { background: rgba(15,23,42,0.18); }
-
-.simple-list li:hover { background: rgba(34,211,238,0.08); }
-
-.simple-list .controls a {
-  opacity: 0.78;
-  margin-left: 10px;
-  border-bottom: none;
-}
-.simple-list .controls a:hover { opacity: 1; color: var(--accent); }
-
-/* dot indicators */
-.dot {
-  display: inline-block;
-  width: 10px;
-  height: 10px;
-  border-radius: 999px;
-  border: 2px solid rgba(34,211,238,0.55);
-  margin-right: 8px;
-  vertical-align: middle;
-  background: rgba(2,6,23,0.25);
-  box-shadow: 0 0 14px rgba(34,211,238,0.08);
-}
-.dot.on { background: var(--good); border-color: rgba(52,211,153,0.85); }
-.dot.off { background: rgba(2,6,23,0.25); }
-
-/* ============================
-   Notes / Bio (Life Modules)
-   ============================ */
-
-.textareas {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: var(--gap);
-}
-.textareas .ta {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-/* Biography section: keep the lined-paper idea, but make it "tactical log" */
-.atow-biography .bio-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 18px;
-  align-items: start;
-}
-
-.atow-biography .bio-col-title {
-  font-weight: 900;
-  font-size: 12px;
-  letter-spacing: 0.10em;
-  text-transform: uppercase;
-  margin-bottom: 10px;
-  color: rgba(255,255,255,0.86);
-}
-
-.atow-biography .bio-lines {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.atow-biography .bio-line {
-  display: grid;
-  grid-template-columns: 170px 1fr;
-  gap: 12px;
-  align-items: center;
-}
-
-.atow-biography .bio-label {
-  font-weight: 800;
-  font-size: 12px;
-  white-space: nowrap;
-  color: rgba(255,255,255,0.80);
-}
-
-.atow-biography input[type="text"] {
-  background: rgba(2,6,23,0.35);
-  border: 1px solid rgba(34,211,238,0.22);
-  border-radius: var(--radius-sm);
-  height: 28px;
-  padding: 5px 8px;
-}
-
-.atow-biography .bio-notes {
-  width: 100%;
-  min-height: 260px;
-  background:
-    repeating-linear-gradient(
-      to bottom,
-      rgba(2,6,23,0.05) 0px,
-      rgba(2,6,23,0.05) 25px,
-      rgba(34,211,238,0.14) 26px,
-      rgba(34,211,238,0.14) 27px
-    ),
-    rgba(2,6,23,0.38);
-  border: 1px solid rgba(34,211,238,0.18);
-  border-radius: var(--radius);
-  padding: 10px;
-  color: rgba(255,255,255,0.88);
-  line-height: 27px;
-  font-size: 12px;
-}
-
-@media (max-width: 980px) {
-  .atow-biography .bio-grid { grid-template-columns: 1fr; }
-  .atow-biography .bio-line { grid-template-columns: 170px 1fr; }
-}
-
-/* ============================
-   Nice-to-have: scrollbars
-   ============================ */
-
-.atow.sheet.actor.character .window-content::-webkit-scrollbar,
-.atow-character-classic .window-content::-webkit-scrollbar {
-  width: 10px;
-}
-.atow.sheet.actor.character .window-content::-webkit-scrollbar-thumb,
-.atow-character-classic .window-content::-webkit-scrollbar-thumb {
-  background: rgba(34,211,238,0.22);
-  border-radius: 999px;
-  border: 2px solid rgba(2,6,23,0.55);
-}
-.atow.sheet.actor.character .window-content::-webkit-scrollbar-thumb:hover,
-.atow-character-classic .window-content::-webkit-scrollbar-thumb:hover {
-  background: rgba(34,211,238,0.35);
-}
-
-
-/* ============================
-   Portrait + Compact Top Section
-   ============================ */
-
-/* Two-column layout inside Personal Data: portrait | fields */
-.atow-character-sheet .personal-portrait-grid {
-  display: grid;
-  grid-template-columns: 170px 1fr;
-  gap: 14px;
-  align-items: start;
-}
-
-/* Portrait block */
-.atow-character-sheet .portrait-col {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  align-items: stretch;
-}
-
-.atow-character-sheet img.char-portrait {
-  width: 170px;
-  height: 200px;
-  object-fit: cover;
-  border-radius: var(--radius);
-  border: 1px solid rgba(34, 211, 238, 0.28);
-  background: rgba(2, 6, 23, 0.55);
-  box-shadow:
-    0 10px 24px rgba(0,0,0,0.35),
-    0 0 0 2px rgba(34,211,238,0.08);
-  cursor: pointer;
-}
-
-.atow-character-sheet img.char-portrait:hover {
-  border-color: rgba(34, 211, 238, 0.60);
-  box-shadow:
-    0 0 0 2px rgba(34, 211, 238, 0.14),
-    0 14px 30px rgba(0,0,0,0.40);
-}
-
-/* Make the Personal Data area more compact (smaller textboxes) */
-.atow-character-sheet .atow-personal-wide {
-  padding: 10px;
-}
-
-.atow-character-sheet .atow-personal-wide .panel-title {
-  margin-bottom: 8px;
-  padding-bottom: 8px;
-}
-
-/* Slightly smaller controls just for personal panel */
-.atow-character-sheet .atow-personal-wide input,
-.atow-character-sheet .atow-personal-wide select {
-  height: 24px;
-  padding: 4px 8px;
-  font-size: 12px;
-}
-
-/* Reduce label column + gaps */
-.atow-character-sheet .atow-personal-wide .personal-grid-compact {
-  gap: 10px 14px;
-}
-
-.atow-character-sheet .atow-personal-wide .personal-grid-compact .personal-field {
-  grid-template-columns: 82px 1fr;
-  gap: 10px;
-  min-height: 24px;
-}
-
-.atow-character-sheet .atow-personal-wide .personal-grid-compact label {
-  font-size: 10px;
-  letter-spacing: 0.12em;
-}
-
-/* Keep short number fields from becoming huge */
-.atow-character-sheet .atow-personal-wide input[type="number"] {
-  max-width: 140px;
-  justify-self: start;
-}
-
-/* Responsive: stack portrait on top */
-@media (max-width: 980px) {
-  .atow-character-sheet .personal-portrait-grid {
-    grid-template-columns: 1fr;
-  }
-  .atow-character-sheet img.char-portrait {
-    width: 100%;
-    height: 220px;
-  }
-}
-
-/* ------------------------------------------------------------ */
-/* Character Sheet – Combat list layout patch (Armor/Weapons)    */
-/* Add this to the END of systems/atow-battletech/styles/character-sheet.css */
-/* ------------------------------------------------------------ */
-
-/* Put Edge / XP to the right of the condition monitor */
-.atow-character-sheet .combat-cond-grid{
-  display: grid;
-  grid-template-columns: 1fr 280px;
-  gap: 14px;
-  align-items: start;
-}
-.atow-character-sheet .combat-cond-grid .cond-right .track{
-  margin-bottom: 12px;
-}
-@media (max-width: 980px){
-  .atow-character-sheet .combat-cond-grid{
-    grid-template-columns: 1fr;
-  }
-}
-
-/* Armor/Weapons: text-first list rows (no bubble-table cramped inputs) */
-.atow-character-sheet .combat-list{
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin-top: 8px;
-}
-
-.atow-character-sheet .combat-list-header{
-  display: flex;
-  gap: 10px;
-  padding: 0 2px;
-  font-size: 11px;
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
-  opacity: 0.75;
-}
-
-.atow-character-sheet .combat-row{
-  display: flex;
-  gap: 10px;
-  align-items: center;
-}
-
-.atow-character-sheet .combat-input{
-  background: transparent;
-  border: none;
-  border-bottom: 1px solid rgba(255,255,255,0.18);
-  border-radius: 0;
-  padding: 6px 6px 4px;
-  min-height: 28px;
-}
-
-.atow-character-sheet .combat-input:focus{
-  outline: none;
-  border-bottom-color: rgba(0, 220, 255, 0.55);
-}
-
-.atow-character-sheet .combat-input.grow{
-  flex: 1 1 240px;
-  min-width: 180px;
-}
-
-.atow-character-sheet .combat-input.loc{
-  width: 64px;
-  text-align: center;
-}
-
-.atow-character-sheet .combat-input.type{
-  flex: 0 1 200px;
-  min-width: 150px;
-}
-
-.atow-character-sheet .armor-mbex{
-  display: flex;
-  gap: 6px;
-}
-
-.atow-character-sheet .combat-input.mbex{
-  width: 44px;
-  text-align: center;
-  padding-left: 0;
-  padding-right: 0;
-}
-
-/* Weapons column sizing */
-.atow-character-sheet .combat-input.w-skill{ width: 90px; }
-.atow-character-sheet .combat-input.w-apbd{ width: 70px; text-align:center; }
-.atow-character-sheet .combat-input.w-range{ width: 110px; }
-.atow-character-sheet .combat-input.w-ammo{ width: 60px; text-align:center; }
-
-/* Header sizing to roughly match row sizing */
-.atow-character-sheet .combat-list-header .h-loc{ width: 64px; text-align:center; }
-.atow-character-sheet .combat-list-header .h-mbex{ width: 206px; text-align:center; }
-
-/* Header sizing (tuned to reduce required sheet width) */
-.atow-character-sheet .combat-list-header.armor .h-name{ flex: 1 1 180px; min-width: 130px; }
-.atow-character-sheet .combat-list-header.armor .h-type{ flex: 0 1 130px; min-width: 110px; }
-.atow-character-sheet .combat-list-header.weapons .h-name{ flex: 1 1 220px; min-width: 150px; }
-.atow-character-sheet .combat-list-header.weapons .h-notes{ flex: 1 1 200px; min-width: 140px; }
-
-
-.atow-character-sheet .combat-list-header .h-skill{ width: 90px; }
-.atow-character-sheet .combat-list-header .h-apbd{ width: 70px; text-align:center; }
-.atow-character-sheet .combat-list-header .h-range{ width: 110px; }
-.atow-character-sheet .combat-list-header .h-ammo{ width: 60px; text-align:center; }
-/* Delete icon alignment */
-.atow-character-sheet a.row-del{
-  flex: 0 0 auto;
-  opacity: 0.85;
-  padding: 6px 8px;
-}
-.atow-character-sheet a.row-del:hover{
-  opacity: 1;
-}
-
-/* AToW Character Sheet (v2) — Gear row sizing guard
-   Fixes oversized item images in the Gear table when global styles set img { max-width:100% }.
-   Append this to the end of systems/atow-battletech/styles/character-sheet.css
-*/
-
-/* Utility helpers used by v2 templates */
-.atow-character-sheet .mono {
+.mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-  font-size: 12px;
+  font-size: 0.74rem;
+  font-variant-numeric: tabular-nums;
 }
 
-.atow-character-sheet .truncate {
+.truncate {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-/* Keep Gear icons from blowing up to 100% width/height due to global sheet img rules */
-.atow-character-sheet .gear-table td { vertical-align: middle; }
+.dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 6px;
+  border: 1px solid rgba(223, 123, 62, 0.42);
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.04);
+}
 
-.atow-character-sheet .gear-table .gear-item-cell {
+.dot.on {
+  border-color: rgba(127, 207, 157, 0.72);
+  background: var(--char-good);
+}
+
+.combat-section {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--char-border);
+}
+
+.combat-section:first-of-type {
+  padding-top: 0;
+}
+
+.combat-section:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.combat-label {
+  margin-bottom: 7px;
+  color: #fff4ea;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.combat-label-row {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 8px;
+}
+
+.movement-status-pill {
+  display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 5px;
+  max-width: 58%;
+  color: var(--char-muted);
+  font-size: 0.66rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.movement-status-pill span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  padding: 2px 8px;
+  border: 1px solid rgba(223, 123, 62, 0.28);
+  border-radius: 999px;
+  background: rgba(223, 123, 62, 0.1);
+  white-space: nowrap;
+}
+
+.combat-cond-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+}
+
+.pip-line {
+  display: grid;
+  grid-template-columns: 118px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  min-height: 28px;
+  padding: 5px 6px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.pip-rows {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  align-items: center;
   min-width: 0;
 }
 
-.atow-character-sheet .gear-table img.item-icon {
-  width: 20px !important;
-  height: 20px !important;
-  max-width: 20px !important;
-  max-height: 20px !important;
-  flex: 0 0 20px;
+.pip-row {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 3px;
+}
+
+.pip {
+  width: 10px;
+  height: 10px;
+  border: 1px solid rgba(236, 241, 245, 0.72);
+  border-radius: 50%;
+  background: transparent;
+  cursor: pointer;
+}
+
+.pip:hover {
+  border-color: rgba(223, 123, 62, 0.92);
+}
+
+.pip.filled {
+  border-color: rgba(223, 123, 62, 0.98);
+  background: rgba(223, 123, 62, 0.92);
+}
+
+.combat-toggles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.combat-toggle {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 18px;
+  color: var(--char-muted);
+  cursor: pointer;
+}
+
+.combat-toggle input[type="checkbox"] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.combat-toggle span {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  min-height: 16px;
+  padding-left: 22px;
+}
+
+.combat-toggle span::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 14px;
+  height: 14px;
+  transform: translateY(-50%);
+  border: 1px solid rgba(223, 123, 62, 0.42);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.04);
+  box-sizing: border-box;
+}
+
+.combat-toggle input[type="checkbox"]:checked + span::before {
+  border-color: rgba(223, 123, 62, 0.72);
+  background: rgba(223, 123, 62, 0.22);
+}
+
+.combat-toggle input[type="checkbox"]:checked + span::after {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 50%;
+  width: 6px;
+  height: 6px;
+  transform: translateY(-50%);
+  border-radius: 2px;
+  background: #fff4ea;
+}
+
+.track {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.track-input {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.track-input input {
+  width: 56px;
+}
+
+.slash {
+  color: var(--char-faint);
+}
+
+.move-2col {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px;
+}
+
+.move-col {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.move-line {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 56px;
+  gap: 8px;
+  align-items: center;
+}
+
+.move-line input {
+  width: 56px;
+}
+
+.combat-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.combat-list-header,
+.combat-row {
+  display: grid;
+  gap: 4px;
+  align-items: center;
+}
+
+.combat-list-header {
+  padding: 4px 5px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--char-muted);
+  font-size: 0.66rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.combat-row {
+  min-height: 27px;
+  padding: 3px 5px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.combat-row:hover {
+  border-color: rgba(223, 123, 62, 0.2);
+  background: rgba(223, 123, 62, 0.08);
+}
+
+.combat-list-header.armor,
+.combat-row.armor-row {
+  grid-template-columns: minmax(0, 1.5fr) 44px minmax(0, 0.9fr) 150px;
+}
+
+.combat-list-header.weapons,
+.combat-row.weapon-row {
+  grid-template-columns: minmax(0, 1.7fr) 74px 58px 86px 50px minmax(0, 1fr);
+}
+
+.combat-input {
+  height: 21px;
+  padding: 2px 4px;
+  border-color: transparent;
+  border-radius: 7px;
+  background: transparent;
+  font-size: 0.74rem;
+}
+
+.combat-input:focus {
+  border-color: var(--char-border-strong);
+}
+
+.armor-mbex {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.skills-two-col {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px;
+}
+
+.rollable {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-weight: 700;
+}
+
+.rollable i {
+  color: var(--char-accent);
+}
+
+.gear-table.gear-drop-zone {
+  border: 1px dashed rgba(223, 123, 62, 0.28);
+  border-radius: 12px;
+  padding: 5px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.gear-table td {
+  vertical-align: middle;
+}
+
+.gear-item-cell {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.gear-item-cell .item-name {
+  min-width: 0;
+}
+
+.gear-table img.item-icon {
+  width: 18px !important;
+  height: 18px !important;
+  max-width: 18px !important;
+  max-height: 18px !important;
+  flex: 0 0 18px;
+  display: block;
   object-fit: contain;
   border-radius: 4px;
-  display: block;
 }
 
-.atow-character-sheet .gear-table tbody tr { height: 32px; }
-
-/* ------------------------------------------------------------ */
-/* Width reductions (v13 character sheet readability tweaks)      */
-/* These are appended last to ensure they override earlier rules. */
-/* ------------------------------------------------------------ */
-
-/* Weapon name (grow) can be narrower */
-.atow-character-sheet .combat-input.grow{
-  flex: 1 1 220px;
-  min-width: 150px;
+.gear-equip-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  color: #fff4ea;
 }
 
-/* Armor name: slightly narrower than weapon name */
-.atow-character-sheet .combat-input.armor-name{
-  flex: 1 1 180px;
-  min-width: 130px;
+.textareas {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
 }
 
-/* Armor type: narrower so the combat panel fits smaller widths */
-.atow-character-sheet .combat-input.type{
-  flex: 0 1 130px;
-  min-width: 110px;
+.ta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
-/* Weapon notes: don't force super-wide sheet */
-.atow-character-sheet .combat-input.w-notes{
-  flex: 1 1 200px;
-  min-width: 140px;
+.atow-biography {
+  margin-bottom: 14px;
 }
 
-/* ------------------------------------------------------------ */
-/* Width reductions (v13 character sheet readability tweaks)      */
-/* Appended last so they win the cascade.                         */
-/* ------------------------------------------------------------ */
-
-/* Weapon name (grow) can be narrower */
-.atow-character-sheet .combat-input.grow{
-  flex: 1 1 220px;
-  min-width: 150px;
+.bio-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
 }
 
-/* Armor name (new class in template) */
-.atow-character-sheet .combat-input.armor-name{
-  flex: 1 1 180px;
-  min-width: 130px;
+.bio-col-title {
+  margin-bottom: 7px;
+  color: #fff4ea;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
 }
 
-/* Armor type: narrower */
-.atow-character-sheet .combat-input.type{
-  flex: 0 1 130px;
-  min-width: 110px;
+.bio-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
 }
 
-/* Weapon notes (new class in template) */
-.atow-character-sheet .combat-input.w-notes{
-  flex: 1 1 200px;
-  min-width: 140px;
+.bio-line {
+  display: grid;
+  grid-template-columns: 138px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+}
+
+.bio-notes {
+  min-height: 236px;
+}
+
+@media (max-width: 1180px) {
+  .atow-grid-2,
+  .skills-two-col,
+  .bio-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .combat-list-header.weapons,
+  .combat-row.weapon-row {
+    grid-template-columns: minmax(0, 1.5fr) 70px 54px 78px 48px minmax(0, 0.9fr);
+  }
+}
+
+@media (max-width: 760px) {
+  .atow-topbar,
+  .personal-portrait-grid,
+  .personal-grid-compact,
+  .personal-two,
+  .combat-cond-grid,
+  .move-2col,
+  .bio-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .atow-grid,
+  .atow-panel-wide {
+    margin-left: 0;
+    margin-right: 0;
+    padding-left: 10px;
+    padding-right: 10px;
+  }
+
+  .atow-panel,
+  .atow-panel-wide {
+    border-radius: 12px;
+  }
+
+  img.char-portrait {
+    width: 100%;
+    height: 220px;
+  }
+
+  .personal-field,
+  .personal-name,
+  .bio-line {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+
+  .combat-list-header.armor,
+  .combat-row.armor-row,
+  .combat-list-header.weapons,
+  .combat-row.weapon-row {
+    grid-template-columns: 1fr;
+  }
+
+  .combat-label-row {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .movement-status-pill {
+    justify-content: flex-start;
+    max-width: 100%;
+  }
 }

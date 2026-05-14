@@ -1,5 +1,5 @@
 // atow-battletech.js (ROOT)
-// version 0.0.4
+// version 0.0.7
 
 import { ATOWCharacterSheet } from "./module/character-sheet.js";
 import { ATOWAbominationSheet } from "./module/abomination-sheet.js";
@@ -11,6 +11,7 @@ import { AToWMechWeaponSheet} from "./module/mech-weapon.js";
 import { ATOWCombatVehicleSheet } from "./module/combat-vehicle.js";
 import { ATOWDropshipSheet } from "./module/dropship-sheet.js";
 import { ATOWCompanySheet } from "./module/company-sheet.js";
+import { registerCharacterCombatApi } from "./module/character-combat.js";
 
 import { AToWMechEquipmentSheet } from "./module/mech-equipment.js";
 import { registerATOWCharacterWeaponSheet } from "./module/character-weapon.js";
@@ -75,6 +76,7 @@ Hooks.once("init", async () => {
 
   registerAtowAudioHooks();
   registerAtowTerrainTools(ATOW);
+  registerCharacterCombatApi(ATOW);
   if (globalThis.socketlib?.registerSystem) tryRegisterSystemSocket();
   Hooks.once("socketlib.ready", tryRegisterSystemSocket);
 
@@ -295,6 +297,56 @@ registerSystemSettings();
   }
 
   registerAToWStatusEffects();
+
+  const PERSONAL_SCALE_ACTOR_TYPES = new Set(["character", "npc"]);
+  const MECH_SCALE_ACTOR_TYPES = new Set(["mech", "vehicle", "wheeledvehicle"]);
+
+  // Personal-scale HUD palette:
+  // These are the statuses we want to expose for normal characters right now.
+  // We keep the mech/vehicle-only movement and destruction statuses hidden from this palette.
+  const PERSONAL_STATUS_EFFECT_IDS = new Set([
+    "defeated",
+    "dead",
+    "prone",
+    "hobbled",
+    "mobbed",
+    "light-woods",
+    "heavy-woods",
+    "in-water",
+    "partial-cover"
+  ]);
+
+  const filterStatusChoicesForActor = (choices, actorType) => {
+    const type = String(actorType ?? "").trim().toLowerCase();
+    if (MECH_SCALE_ACTOR_TYPES.has(type) || !PERSONAL_SCALE_ACTOR_TYPES.has(type)) {
+      return choices;
+    }
+
+    const out = {};
+    for (const [id, choice] of Object.entries(choices ?? {})) {
+      const sid = String(choice?.id ?? id ?? "").trim().toLowerCase();
+      if (!sid) continue;
+      if (!PERSONAL_STATUS_EFFECT_IDS.has(sid)) continue;
+      out[id] = choice;
+    }
+    return out;
+  };
+
+  const BaseTokenHUD = foundry?.applications?.hud?.TokenHUD ?? null;
+  if (BaseTokenHUD) {
+    class ATOWTokenHUD extends BaseTokenHUD {
+      _getStatusEffectChoices() {
+        const choices = super._getStatusEffectChoices();
+        const actorType = String(this.actor?.type ?? this.document?.actor?.type ?? "").toLowerCase();
+        return filterStatusChoicesForActor(choices, actorType);
+      }
+    }
+
+    CONFIG.Token = CONFIG.Token ?? {};
+    CONFIG.Token.hudClass = ATOWTokenHUD;
+  } else {
+    console.warn(`${SYSTEM_ID} | Foundry TokenHUD class was not available; character status filtering was skipped.`);
+  }
 
   const sanitizeConfiguredStatusEffects = () => {
     try {
@@ -3792,7 +3844,7 @@ if (!weapon) {
   ui.notifications?.warn?.("That weapon could not be resolved.");
   return false;
 }
-const mod = await import("/systems/${SYSTEM_ID}/module/mech-attack.js");
+const mod = await import("/systems/atow-battletech/module/mech-attack.js");
 return await mod.promptAndRollWeaponAttack(actorDoc, weapon, {
   defaultSide: base.defaultSide || "front",
   attackerToken: tokenDoc ?? null,
@@ -5362,6 +5414,23 @@ async function preloadHandlebarsTemplates() {
 /* -------------------------------------------- */
 
 function registerHandlebarsHelpers() {
+  const handlebarsInstances = [
+    globalThis.Handlebars,
+    globalThis.foundry?.applications?.handlebars?.Handlebars
+  ].filter(Boolean);
+
+  for (const hbs of handlebarsInstances) {
+    hbs.registerHelper?.("ifEq", function (a, b, options) {
+      return (a === b) ? options.fn(this) : options.inverse(this);
+    });
+
+    hbs.registerHelper?.("signed", function (n) {
+      const num = Number(n ?? 0);
+      if (Number.isNaN(num)) return "0";
+      return num > 0 ? `+${num}` : `${num}`;
+    });
+  }
+
   // Simple equality helper: (ifEq a b) ... (else) ...
   Handlebars.registerHelper("ifEq", function (a, b, options) {
     return (a === b) ? options.fn(this) : options.inverse(this);

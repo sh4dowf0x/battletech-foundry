@@ -1,5 +1,5 @@
 <div class="atow-character-sheet">
-  {{!-- version: 0.1.3 --}}
+  {{!-- version: 0.2.0 --}}
   {{!-- templates/character-sheet.hbs --}}
   {{!-- IMPORTANT: Do NOT wrap this template in <form>...</form>. SheetV2 provides the form wrapper. --}}
 
@@ -73,6 +73,27 @@
             <input name="system.affiliation" type="text" value="{{system.affiliation}}" />
           </div>
 
+          <div class="personal-two personal-track-row">
+            <div class="personal-field">
+              <label>Edge</label>
+              <div class="personal-track-input">
+                <input name="system.edge.value" type="number" value="{{system.edge.value}}" />
+                <span class="slash">/</span>
+                <input name="system.edge.max" type="number" value="{{system.edge.max}}" disabled title="Max Edge is derived from EDG" />
+                <input type="hidden" name="system.edge.max" value="{{system.edge.max}}" />
+              </div>
+            </div>
+
+            <div class="personal-field">
+              <label>XP</label>
+              <div class="personal-track-input xp-track-input">
+                <input type="number" value="{{xpSummary.spentTotal}}" disabled title="Spent XP" />
+                <span class="slash">/</span>
+                <input name="system.xp.total" type="number" value="{{xpSummary.earnedTotal}}" title="Earned XP" />
+              </div>
+            </div>
+          </div>
+
           <div class="personal-field personal-extra">
             <label>Extra</label>
             <input name="system.personal.extra" type="text" value="{{system.personal.extra}}" />
@@ -114,9 +135,17 @@
 <section class="atow-panel">
       <div class="panel-title">
         <span>Traits (Personal)</span>
-        <button type="button" class="atow-mini-btn item-create" data-type="characterTrait" title="Add Trait">
-          <i class="fas fa-plus"></i> Add
-        </button>
+        <div class="compendium-add-control">
+          <select class="compendium-item-select" data-type="characterTrait" aria-label="Add trait from compendium" {{#unless hasTraitChoices}}disabled{{/unless}}>
+            <option value="">{{#if hasTraitChoices}}Choose trait...{{else}}No traits available{{/if}}</option>
+            {{#each traitChoices as |choice|}}
+              <option value="{{choice.uuid}}">{{choice.name}}</option>
+            {{/each}}
+          </select>
+          <button type="button" class="atow-mini-btn compendium-add" data-type="characterTrait" title="Add selected trait" {{#unless hasTraitChoices}}disabled{{/unless}}>
+            <i class="fas fa-plus"></i> Add
+          </button>
+        </div>
       </div>
 
       <table class="atow-table">
@@ -150,83 +179,64 @@
         </tbody>
       </table>
 
-      <div class="mini-note">Trait is Active when XP reaches TP × 100 (XP can be negative).</div>
+      <div class="mini-note">Trait is active when XP reaches TP x 100 (XP can be negative).</div>
     </section>
     </div>
 
     <section class="atow-panel atow-combat-tall">
       <div class="panel-title">Combat Data</div>
 
-      {{!-- CONDITION MONITOR --}}
+      {{!-- DAMAGE TRACKS --}}
       <div class="combat-section">
-        <div class="combat-label">Condition Monitor</div>
-
         <div class="combat-cond-grid">
-          <div class="cond-left">
-            <div class="pip-line">
-              <span class="pip-label">Standard Damage:</span>
-              <div class="pip-rows" aria-label="Standard Damage">
-                {{#each healthPipRows as |row|}}
-                  <div class="pip-row">
-                    {{#each row as |p|}}
-                      <span class="pip {{#if p.filled}}filled{{/if}}" data-track="health" data-value="{{p.value}}"></span>
-                    {{/each}}
-                  </div>
-                {{/each}}
-              </div>
-            </div>
-
-            <div class="pip-line">
-              <span class="pip-label">Fatigue Damage:</span>
-              <div class="pip-rows" aria-label="Fatigue Damage">
-                {{#each fatiguePipRows as |row|}}
-                  <div class="pip-row">
-                    {{#each row as |p|}}
-                      <span class="pip {{#if p.filled}}filled{{/if}}" data-track="fatigue" data-value="{{p.value}}"></span>
-                    {{/each}}
-                  </div>
-                {{/each}}
-              </div>
-            </div>
-
-            <div class="combat-toggles">
-              <label class="combat-toggle">
-                <span>Stun:</span>
-                <input type="checkbox" name="system.combat.stun" {{checked combatFlags.stun}} />
-              </label>
-              <label class="combat-toggle">
-                <span>Unconscious:</span>
-                <input type="checkbox" name="system.combat.unconscious" {{checked combatFlags.unconscious}} />
-              </label>
+          <div class="pip-line">
+            <span class="pip-label">Standard Damage</span>
+            <div class="pip-rows" aria-label="Standard Damage">
+              {{#each healthPipRows as |row|}}
+                <div class="pip-row">
+                  {{#each row as |p|}}
+                    <span class="pip {{#if p.filled}}filled{{/if}}" data-track="health" data-value="{{p.value}}"></span>
+                  {{/each}}
+                </div>
+              {{/each}}
             </div>
           </div>
 
-          <div class="cond-right">
-            <div class="track">
-              <div class="track-label">Edge</div>
-              <div class="track-input">
-                <input name="system.edge.value" type="number" value="{{system.edge.value}}" />
-                <span class="slash">/</span>
-                <input name="system.edge.max" type="number" value="{{system.edge.max}}" disabled title="Max Edge is derived from EDG" />
-                <input type="hidden" name="system.edge.max" value="{{system.edge.max}}" />
-              </div>
+          <div class="pip-line">
+            <span class="pip-label">Fatigue Damage</span>
+            <div class="pip-rows" aria-label="Fatigue Damage">
+              {{#each fatiguePipRows as |row|}}
+                <div class="pip-row">
+                  {{#each row as |p|}}
+                    <span class="pip {{#if p.filled}}filled{{/if}}" data-track="fatigue" data-value="{{p.value}}"></span>
+                  {{/each}}
+                </div>
+              {{/each}}
             </div>
+          </div>
 
-            <div class="track">
-              <div class="track-label">XP (Spent / Earned)</div>
-              <div class="track-input">
-                <input type="number" value="{{xpSummary.spentTotal}}" disabled />
-                <span class="slash">/</span>
-                <input name="system.xp.total" type="number" value="{{xpSummary.earnedTotal}}" />
-              </div>
-            </div>
+          <div class="combat-toggles">
+            <label class="combat-toggle">
+              <input type="checkbox" name="system.combat.stun" {{checked combatFlags.stun}} />
+              <span>Stun</span>
+            </label>
+            <label class="combat-toggle">
+              <input type="checkbox" name="system.combat.unconscious" {{checked combatFlags.unconscious}} />
+              <span>Unconscious</span>
+            </label>
           </div>
         </div>
       </div>
 
 {{!-- MOVEMENT --}}
       <div class="combat-section">
-        <div class="combat-label">Movement (Meters per Turn)</div>
+        <div class="combat-label combat-label-row">
+          <span>Movement (Meters per Turn)</span>
+          <div class="movement-status-pill" title="{{#if movementStatus.hasToken}}Current token movement status{{else}}No linked token found for this actor{{/if}}">
+            <span>Mode: {{movementStatus.modeLabel}}</span>
+            <span>MP: {{movementStatus.mpText}}</span>
+          </div>
+        </div>
 
         <div class="move-2col">
           <div class="move-col">
@@ -278,7 +288,7 @@
 
           {{#each combatArmor as |a idx|}}
             <div class="combat-row armor-row">
-              <input class="combat-input armor-name" type="text" value="{{a.name}}" placeholder="—" readonly />
+              <input class="combat-input armor-name" type="text" value="{{a.name}}" placeholder="--" readonly />
               <input class="combat-input loc" type="text" value="{{a.loc}}" placeholder="Loc" readonly />
               <input class="combat-input type" type="text" value="{{a.type}}" placeholder="Armor Type" readonly />
 
@@ -312,7 +322,7 @@
 
           {{#each combatWeapons as |w idx|}}
             <div class="combat-row weapon-row">
-              <input class="combat-input grow weapon-roll" type="text" value="{{w.name}}" placeholder="—" readonly data-action="roll-weapon" data-item-id="{{w._sourceItemId}}" title="Roll Attack" />
+              <input class="combat-input grow weapon-roll" type="text" value="{{w.name}}" placeholder="--" readonly data-action="roll-weapon" data-item-id="{{w._sourceItemId}}" title="Roll Attack" />
               <input class="combat-input w-skill" type="text" value="{{w.skill}}" placeholder="Skill" readonly />
               <input class="combat-input w-apbd" type="text" value="{{w.apbd}}" placeholder="AP/BD" readonly />
               <input class="combat-input w-range" type="text" value="{{w.range}}" placeholder="Range" readonly />
@@ -337,9 +347,17 @@
   <section class="atow-panel atow-panel-wide">
     <div class="panel-title">
       <span>Skills</span>
-      <button type="button" class="atow-mini-btn item-create" data-type="characterSkill" title="Add Skill">
-        <i class="fas fa-plus"></i> Add
-      </button>
+      <div class="compendium-add-control">
+        <select class="compendium-item-select" data-type="characterSkill" aria-label="Add skill from compendium" {{#unless hasSkillChoices}}disabled{{/unless}}>
+          <option value="">{{#if hasSkillChoices}}Choose skill...{{else}}No skills available{{/if}}</option>
+          {{#each skillChoices as |choice|}}
+            <option value="{{choice.uuid}}">{{choice.name}}</option>
+          {{/each}}
+        </select>
+        <button type="button" class="atow-mini-btn compendium-add" data-type="characterSkill" title="Add selected skill" {{#unless hasSkillChoices}}disabled{{/unless}}>
+          <i class="fas fa-plus"></i> Add
+        </button>
+      </div>
     </div>
 
     <div class="skills-two-col">
@@ -446,7 +464,7 @@
               </td>
 
               <td class="mono">{{g.typeLabel}}</td>
-              <td class="mono">{{#if g.mass}}{{g.mass}}{{else}}—{{/if}}</td>
+              <td class="mono">{{#if g.mass}}{{g.mass}}{{else}}--{{/if}}</td>
               <td class="truncate">{{g.notes}}</td>
 
               <td class="controls">
@@ -459,34 +477,8 @@
       </table>
 
       {{!--
-        Gear row sizing guard:
-        Some global sheet CSS rules can cause <img> to expand to 100% width/height.
-        Keep Gear item icons constrained so a single dropped item doesn't balloon the section.
+        Gear row sizing is handled in styles/character-sheet.css.
       --}}
-      <style>
-        .atow-character-sheet .gear-table td { vertical-align: middle; }
-        .atow-character-sheet .gear-table .gear-item-cell {
-          display: flex;
-          align-items: center;
-          gap: 8px;
-          min-width: 0;
-        }
-        .atow-character-sheet .gear-table .gear-item-cell .item-name {
-          min-width: 0;
-          overflow: hidden;
-          text-overflow: ellipsis;
-          white-space: nowrap;
-        }
-        .atow-character-sheet .gear-table .item-icon {
-          width: 20px !important;
-          height: 20px !important;
-          flex: 0 0 20px;
-          object-fit: contain;
-          border-radius: 4px;
-        }
-        .atow-character-sheet .gear-table tbody tr { height: 32px; }
-      </style>
-
     </section>
 
     <section class="atow-panel">

@@ -343,6 +343,23 @@
   filter: brightness(1.05);
 }
 
+.atow-chat-card .atow-dice-faces {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  vertical-align: -1px;
+}
+
+.atow-chat-card .atow-die-face {
+  font-size: 1.15em;
+  line-height: 1;
+}
+
+.atow-chat-card .atow-dice-plus {
+  font-size: 0.85em;
+  opacity: 0.8;
+}
+
 /* Lists (Skills/Gear) */
 .atow .list-header {
   display: flex;

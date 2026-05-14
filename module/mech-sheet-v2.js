@@ -782,8 +782,8 @@ function _ammoKeyFromType(typeText) {
   m = t.match(/\blbx\b[^\d]*(\d+)\b/i); // "lbx 10", "lbx ac/10", etc.
   if (m?.[1]) return _slugifyKey(`lbx-${m[1]}${isCluster ? "-cluster" : ""}`);
 
-  // Advanced Tactical Missile ammo: "ATM 6", "ATM 6 ER", "ATM 9 HE"
-  m = t.match(/\batm\s*[-/]?\s*(3|6|9|12)\b/i);
+  // Advanced Tactical Missile ammo: "ATM 6", "ATM 6 ER", "ATM 9 HE", "Advanced Tactical Missile 9 HE"
+  m = t.match(/\batm\b[^\d]*(3|6|9|12)\b/i) ?? t.match(/\badvanced\s+tactical\s+missiles?\b[^\d]*(3|6|9|12)\b/i);
   if (m?.[1]) {
     const variant = /\ber\b/i.test(t) ? "-er" : (/\bhe\b/i.test(t) ? "-he" : "");
     return _slugifyKey(`atm-${m[1]}${variant}`);
@@ -883,7 +883,7 @@ function _looksLikeWeaponLabel(label) {
 
   if (/^\s*arrow\s*iv\s*system(?:\s*\(c\))?\s*$/i.test(s)) return true;
   if (/^\s*ams\s*$/i.test(s) || /\banti\s*-?\s*missile\s+system\b/i.test(s)) return true;
-  if (/\batm\s*[-/]?\s*(3|6|9|12)\b/i.test(s)) return true;
+  if (/\batm\b[^\d]*(3|6|9|12)\b/i.test(s) || /\badvanced\s+tactical\s+missiles?\b[^\d]*(3|6|9|12)\b/i.test(s)) return true;
 
   // LB-X Autocannons often appear as "LB 10-X AC" (or similar) and do not match the generic AC/10 pattern.
   // Accept a few common label styles:
@@ -893,7 +893,7 @@ function _looksLikeWeaponLabel(label) {
   if (/\blb\s*\d+\s*-\s*x\s*ac\b/i.test(s)) return true;
   if (/\blbx\b[^\d]*(\d+)\b/i.test(s)) return true;
 
-  return /(laser|ppc|\bac\s*\/?\s*\d+\b|\blrm\s*\d+\b|\bsrm\s*\d+\b|\batm\s*[-/]?\s*\d+\b|gauss|\bmg\b|machine gun|flamer|autocannon|rifle|plasma|pulse|artillery)/i.test(s);
+  return /(laser|ppc|\bac\s*\/?\s*\d+\b|\blrm\s*\d+\b|\bsrm\s*\d+\b|\batm\b[^\d]*\d+\b|advanced\s+tactical\s+missile|gauss|\bmg\b|machine gun|flamer|autocannon|rifle|plasma|pulse|artillery)/i.test(s);
 }
 
 function _critLocAbbr(locKey) {
@@ -2702,8 +2702,18 @@ function findHighestPriorityAmmoInCritSlots(actor) {
 const _atowAmmoExplState = globalThis.__ATOW_BT_AMMO_EXP_STATE__ ?? (globalThis.__ATOW_BT_AMMO_EXP_STATE__ = {
   processing: new Set(),               // actorId
   queue: new Map(),                    // actorId -> [{...}]
-  recentlyQueued: new Map()            // key -> timestamp (ms)
+  recentlyQueued: new Map(),           // key -> timestamp (ms)
+  heatChecks: new Set()                // combatId:round:turn:actorUuid
 });
+if (!(_atowAmmoExplState.heatChecks instanceof Set)) _atowAmmoExplState.heatChecks = new Set();
+
+function isPrimaryGM() {
+  if (!game.user?.isGM) return false;
+  const activeGMs = Array.from(game.users ?? [])
+    .filter(user => user?.active && user?.isGM)
+    .sort((a, b) => String(a.id).localeCompare(String(b.id)));
+  return !activeGMs.length || activeGMs[0]?.id === game.user.id;
+}
 
 function _ammoQueueKey(actorId, locKey, index, reason) {
   return `${actorId}:${locKey}:${index}:${reason}`;
@@ -2923,14 +2933,19 @@ function queueAmmoExplosion(actor, ammoSlotInfo, { reason = "critical hit", dela
 
 async function maybeResolveAmmoExplosionForActor(actor, combat) {
   if (!actor) return;
-  if (!game.user?.isGM) return; // resolve once
+  if (!isPrimaryGM()) return; // resolve once, even with multiple active GMs
 
   const round = combat?.round ?? 0;
   const turn = combat?.turn ?? 0;
   const stamp = `${round}:${turn}`;
+  const checkStamp = `${combat?.id ?? "no-combat"}:${stamp}:${actor.uuid ?? actor.id}`;
 
   const existing = actor.system?.heat?.effects?.ammoExplosion;
   if (existing?.stamp === stamp) return; // already resolved this turn
+  if (_atowAmmoExplState.heatChecks.has(checkStamp)) return;
+
+  const flagStamp = String(actor.getFlag?.(SYSTEM_ID, "heatAmmoExplosionCheckStamp") ?? "");
+  if (flagStamp === checkStamp) return;
 
   const unvented = getUnventedHeat(actor);
   const tn = computeAmmoExplosionTN(unvented);
@@ -2940,6 +2955,9 @@ async function maybeResolveAmmoExplosionForActor(actor, combat) {
     if (existing) await actor.update({ "system.heat.effects.ammoExplosion": null }).catch(() => {});
     return;
   }
+
+  _atowAmmoExplState.heatChecks.add(checkStamp);
+  await actor.setFlag?.(SYSTEM_ID, "heatAmmoExplosionCheckStamp", checkStamp).catch(() => {});
 
   const roll = await (new Roll("2d6")).evaluate({ async: true });
   const total = roll.total ?? 0;

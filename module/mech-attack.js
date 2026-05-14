@@ -15,6 +15,24 @@ const ARROW_IV_IMPACT_VFX = "jb2a.explosion.08.orange";
 const ARROW_IV_LAUNCH_SFX = `systems/${SYSTEM_ID}/assets/sounds/weapon-missile-medium.ogg`;
 const ARROW_IV_IMPACT_SFX = `systems/${SYSTEM_ID}/assets/sounds/effect-explosion1.ogg`;
 
+function ensureAttackDialogHandlebarsHelpers() {
+  const handlebarsInstances = [
+    globalThis.Handlebars,
+    globalThis.foundry?.applications?.handlebars?.Handlebars
+  ].filter(Boolean);
+
+  for (const hbs of handlebarsInstances) {
+    hbs.registerHelper?.("ifEq", function (a, b, options) {
+      return (a === b) ? options.fn(this) : options.inverse(this);
+    });
+    hbs.registerHelper?.("signed", function (n) {
+      const value = Number(n ?? 0);
+      if (!Number.isFinite(value)) return "0";
+      return value > 0 ? `+${value}` : `${value}`;
+    });
+  }
+}
+
 function getATOWSocket() {
   return game?.[SYSTEM_ID]?.socket ?? null;
 }
@@ -1355,13 +1373,18 @@ function getRapidFireRating(weaponItem) {
  * Returns null if it can't be determined (Foundry internals can vary).
  */
 function getBase2d6Total(roll) {
-  const t = roll?.dice?.[0]?.total;
-  if (Number.isFinite(t)) return t;
-  // Fallback: attempt to find the first dice term with a total
-  const terms = roll?.terms ?? [];
-  const diceTerm = terms.find(x => x && typeof x === "object" && Number.isFinite(x.total) && (x.faces || x.dice || x.number));
-  const tt = diceTerm?.total;
-  if (Number.isFinite(tt)) return tt;
+  const diceTerm = roll?.dice?.[0]
+    ?? (roll?.terms ?? []).find(x => x && typeof x === "object" && (x.faces || x.dice || x.number || Array.isArray(x.results)));
+  const results = diceTerm?.results;
+  if (Array.isArray(results) && results.length) {
+    const activeResults = results.filter(result => result?.active !== false && result?.discarded !== true);
+    const sum = activeResults.reduce((total, result) => total + num(result?.result ?? result?.value, 0), 0);
+    if (sum >= 2) return sum;
+  }
+
+  const t = diceTerm?.total;
+  if (Number.isFinite(t) && t >= 2) return t;
+
   return null;
 }
 
@@ -2380,11 +2403,11 @@ function ammoKeyFromTypeLabel(typeText) {
     return slugifyAmmoKey(`lbx-${m[1]}${/\bcluster\b/i.test(t) ? "-cluster" : ""}`);
   }
 
-  // Advanced Tactical Missile ammo: "ATM 6", "ATM 6 ER", "ATM 9 HE"
-  m = t.match(/\batm\s*[-/]?\s*(3|6|9|12)\b/i);
-  if (m?.[1]) {
+  // Advanced Tactical Missile ammo: "ATM 6", "ATM 6 ER", "ATM 9 HE", "Advanced Tactical Missile 9 HE"
+  const atmRack = parseMissileRackLabel(t);
+  if (atmRack?.type === "ATM") {
     const variant = /\ber\b/i.test(t) ? "-er" : (/\bhe\b/i.test(t) ? "-he" : "");
-    return slugifyAmmoKey(`atm-${m[1]}${variant}`);
+    return slugifyAmmoKey(`atm-${atmRack.size}${variant}`);
   }
 
   // Autocannons: "AC/20", "AC 20"
@@ -2425,9 +2448,25 @@ function getLBXAmmoKeysForWeapon(weaponItem) {
 }
 
 function getATMWeaponSize(weaponItem) {
-  const name = String(weaponItem?.name ?? "").trim().toLowerCase();
-  const m = name.match(/\batm\s*[-/]?\s*(3|6|9|12)\b/i);
-  if (m?.[1]) return Number(m[1]);
+  const sys = weaponItem?.system ?? {};
+  const candidates = [
+    weaponItem?.name,
+    sys.ammoKey,
+    sys.ammoType,
+    sys.ammoName,
+    sys.ammoLabel,
+    sys.ammoBin,
+    typeof sys.ammo === "string" ? sys.ammo : null,
+    sys.ammo?.key,
+    sys.ammo?.type,
+    sys.ammo?.name
+  ];
+
+  for (const candidate of candidates) {
+    const rack = parseMissileRackLabel(candidate);
+    if (rack?.type === "ATM") return rack.size;
+  }
+
   return null;
 }
 
@@ -3606,15 +3645,16 @@ function applyPartialCoverToPacket(packet, targetPartialCover) {
   };
 }
 
-function getMissileRack(itemOrName) {
-  const rawName = (typeof itemOrName === "string" ? itemOrName : itemOrName?.name) ?? "";
-  const name = String(rawName).toUpperCase();
+function parseMissileRackLabel(label) {
+  const name = String(label ?? "").trim();
+  if (!name) return null;
 
-  // Streak SRMs don't use the normal cluster table in tabletop; treat as non-cluster here.
-  if (/\BSTREAK\s*SRM\b/i.test(name)) return null;
-
-  // Accept common formats: "LRM 15", "LRM-15", "MRM 30", "ATM 9", etc.
-  const m = name.match(/\b(LRM|SRM|MRM|ATM)\s*[-/]?\s*(\d+)\b/i);
+  let m = name.match(/\b(LRM|SRM|MRM|ATM)\s*[-/]?\s*(\d+)\b/i);
+  if (!m) m = name.match(/\b(LRM|SRM|MRM|ATM)\b[^\d]*(\d+)\b/i);
+  if (!m) {
+    m = name.match(/\badvanced\s+tactical\s+missiles?\b[^\d]*(3|6|9|12)\b/i);
+    if (m?.[1]) return { type: "ATM", size: Number(m[1]) };
+  }
   if (!m) return null;
 
   const type = String(m[1]).toUpperCase();
@@ -3624,11 +3664,57 @@ function getMissileRack(itemOrName) {
   return { type, size };
 }
 
+function getMissileRack(itemOrName) {
+  const sys = (itemOrName && typeof itemOrName === "object") ? (itemOrName.system ?? {}) : {};
+  const candidates = (typeof itemOrName === "string")
+    ? [itemOrName]
+    : [
+        itemOrName?.name,
+        sys.ammoKey,
+        sys.ammoType,
+        sys.ammoName,
+        sys.ammoLabel,
+        sys.ammoBin,
+        typeof sys.ammo === "string" ? sys.ammo : null,
+        sys.ammo?.key,
+        sys.ammo?.type,
+        sys.ammo?.name,
+        getAmmoKeyForWeapon(itemOrName)
+      ];
+
+  for (const candidate of candidates) {
+    const rack = parseMissileRackLabel(candidate);
+    if (rack) return rack;
+  }
+
+  return null;
+}
+
+function randomUnit() {
+  return Math.random();
+}
+
+function rollManualD6() {
+  return clamp(Math.floor(randomUnit() * 6) + 1, 1, 6);
+}
+
+function rollManual2d6() {
+  const dice = [rollManualD6(), rollManualD6()];
+  const total = dice[0] + dice[1];
+  return {
+    total,
+    formula: "2d6",
+    dice: [{ faces: 6, number: 2, total, results: dice.map(result => ({ result, active: true })) }],
+    manualDice: dice
+  };
+}
+
 async function rollClusterHits(rackSize, bonus = 0, { forcedTotal = null } = {}) {
-  const roll = Number.isFinite(Number(forcedTotal))
-    ? { total: Number(forcedTotal) }
-    : await (new Roll("2d6")).evaluate();
-  const baseTotal = num(roll?.total, 0);
+  const hasForcedTotal = forcedTotal !== null && forcedTotal !== undefined && forcedTotal !== "";
+  const roll = hasForcedTotal && Number.isFinite(Number(forcedTotal))
+    ? { total: clamp(Math.floor(Number(forcedTotal)), 2, 12), formula: "2d6", forced: true }
+    : rollManual2d6();
+  const baseTotal = clamp(Math.floor(Number(roll.total)), 2, 12);
 
   // Artemis IV FCS: +2 to the Cluster Hits Table roll, maximum modified roll of 12.
   const mod = num(bonus, 0);
@@ -3783,6 +3869,36 @@ function splitIntoNs(totalHits, n) {
   for (let i = 0; i < full; i++) groups.push(size);
   if (rem) groups.push(rem);
   return groups;
+}
+
+function buildClusterDamagePackets(rackType, missilesHit, perHitDamage, groupSize) {
+  const type = String(rackType ?? "").toUpperCase();
+  const missileCount = Math.max(0, Math.floor(num(missilesHit, 0)));
+  const damagePerMissile = Math.max(0, num(perHitDamage, 0));
+  const clusterSize = Math.max(1, Math.floor(num(groupSize, 1)));
+
+  if (type === "ATM") {
+    return splitIntoNs(missileCount * damagePerMissile, clusterSize)
+      .map(damage => ({
+        hits: null,
+        damage,
+        damageCluster: true
+      }));
+  }
+
+  return splitIntoNs(missileCount, clusterSize)
+    .map(hits => ({
+      hits,
+      damage: hits * damagePerMissile,
+      damageCluster: false
+    }));
+}
+
+const D6_DICE_FACES = ["", "⚀", "⚁", "⚂", "⚃", "⚄", "⚅"];
+
+function formatD6Face(value) {
+  const n = Math.floor(num(value, 0));
+  return D6_DICE_FACES[n] ?? String(value ?? "?");
 }
 
 
@@ -4749,14 +4865,15 @@ const hit = (toHit.total ?? 0) >= tn;
         missilesHit
       });
 
-      for (const packetHits of splitIntoNs(missilesHit, groupSize)) {
+      for (const packet of buildClusterDamagePackets(rack.type, missilesHit, perHitDamage, groupSize)) {
         if (isAbomTarget) {
           packets.push({
-            hits: packetHits,
+            hits: packet.hits,
             loc: "abom",
             roll: { total: null },
             tacFrom2: false,
-            damage: packetHits * perHitDamage,
+            damage: packet.damage,
+            damageCluster: packet.damageCluster,
             floating: null
           });
           continue;
@@ -4764,12 +4881,13 @@ const hit = (toHit.total ?? 0) >= tn;
         if (isVehicleTarget) {
           const locRes = await rollVehicleHitLocation(side, { hasTurret: hasVehicleTurret });
           packets.push({
-            hits: packetHits,
+            hits: packet.hits,
             loc: locRes.loc,
             roll: locRes.roll,
             tacFrom2: false,
             vehicleCrit: locRes.critTrigger ? { trigger: true, tableLoc: locRes.critTableLoc } : null,
-            damage: packetHits * perHitDamage,
+            damage: packet.damage,
+            damageCluster: packet.damageCluster,
             floating: null
           });
           continue;
@@ -4777,11 +4895,12 @@ const hit = (toHit.total ?? 0) >= tn;
         if (isDropshipTarget) {
           const locRes = await rollDropshipHitLocation(side);
           packets.push({
-            hits: packetHits,
+            hits: packet.hits,
             loc: locRes.loc,
             roll: locRes.roll,
             tacFrom2: false,
-            damage: packetHits * perHitDamage,
+            damage: packet.damage,
+            damageCluster: packet.damageCluster,
             floating: null
           });
           continue;
@@ -4796,11 +4915,12 @@ const hit = (toHit.total ?? 0) >= tn;
         }
 
         packets.push(applyPartialCoverToPacket({
-          hits: packetHits,
+          hits: packet.hits,
           loc: locRes.loc,
           roll: locRes.roll,
           tacFrom2,
-          damage: packetHits * perHitDamage,
+          damage: packet.damage,
+          damageCluster: packet.damageCluster,
           floating: locRes.floating
         }, targetPartialCover));
       }
@@ -4847,14 +4967,15 @@ const hit = (toHit.total ?? 0) >= tn;
     const groupSize = rackGroupSize;
 
     const packets = [];
-      for (const packetHits of splitIntoNs(missilesHit, groupSize)) {
+      for (const packet of buildClusterDamagePackets(rack.type, missilesHit, perHitDamage, groupSize)) {
         if (isAbomTarget) {
           packets.push({
-            hits: packetHits,
+            hits: packet.hits,
             loc: "abom",
             roll: { total: null },
             tacFrom2: false,
-            damage: packetHits * perHitDamage,
+            damage: packet.damage,
+            damageCluster: packet.damageCluster,
             floating: null
           });
           continue;
@@ -4862,12 +4983,13 @@ const hit = (toHit.total ?? 0) >= tn;
         if (isVehicleTarget) {
           const locRes = await rollVehicleHitLocation(side, { hasTurret: hasVehicleTurret });
           packets.push({
-            hits: packetHits,
+            hits: packet.hits,
             loc: locRes.loc,
             roll: locRes.roll,
             tacFrom2: false,
             vehicleCrit: locRes.critTrigger ? { trigger: true, tableLoc: locRes.critTableLoc } : null,
-            damage: packetHits * perHitDamage,
+            damage: packet.damage,
+            damageCluster: packet.damageCluster,
             floating: null
           });
           continue;
@@ -4875,11 +4997,12 @@ const hit = (toHit.total ?? 0) >= tn;
         if (isDropshipTarget) {
           const locRes = await rollDropshipHitLocation(side);
           packets.push({
-            hits: packetHits,
+            hits: packet.hits,
             loc: locRes.loc,
             roll: locRes.roll,
             tacFrom2: false,
-            damage: packetHits * perHitDamage,
+            damage: packet.damage,
+            damageCluster: packet.damageCluster,
             floating: null
           });
           continue;
@@ -4896,11 +5019,12 @@ const hit = (toHit.total ?? 0) >= tn;
         }
 
         packets.push({
-          hits: packetHits,
+          hits: packet.hits,
           loc: locRes.loc,
           roll: locRes.roll,
           tacFrom2,
-          damage: packetHits * perHitDamage,
+          damage: packet.damage,
+          damageCluster: packet.damageCluster,
           floating: locRes.floating
         });
       }
@@ -5246,7 +5370,7 @@ const clusterNote = cluster
           : (cluster.type === "LBX"
               ? "LB-X cluster ammo deals 1 damage per pellet; each pellet rolls its own location."
               : (cluster.type === "ATM"
-                  ? `ATM ${rackATMProfile?.label ?? "Standard"} ammo deals ${cluster.perHitDamage} damage per missile; packets are grouped in 5s.`
+                  ? `ATM ${rackATMProfile?.label ?? "Standard"} ammo deals ${cluster.perHitDamage} damage per missile; total damage is grouped into 5-point clusters.`
                   : "LRM damage is 1 per missile; packets are grouped in 5s.")))
       : (cluster.mode === "volley"
           ? `${cluster.label ?? "Volley"}: roll to see how many attackers hit, then resolve missile clusters per hit.`
@@ -5324,6 +5448,13 @@ const jamInfoLine = (jam && !isAbomChat && !rack && rapidShots > 1)
       if (!Number.isFinite(n) || n === 0) return "";
       return ` ${n >= 0 ? "+" : ""}${n} = ${modifiedTotal}`;
     };
+    const formatClusterRoll = (roll) => {
+      const dice = Array.isArray(roll?.manualDice) ? roll.manualDice : null;
+      const diceTag = dice?.length
+        ? `: <span class="atow-dice-faces">${dice.map(d => `<span class="atow-die-face" title="d6: ${d}">${formatD6Face(d)}</span>`).join("<span class=\"atow-dice-plus\">+</span>")}</span>`
+        : "";
+      return `${roll?.total ?? "?"} (2d6${diceTag})`;
+    };
     const streakTag = (isMissile && cluster.streakUsed)
       ? (cluster.ams?.active ? ` (Streak: AMS forces 7)` : ` (Streak: auto 12)`)
       : "";
@@ -5334,13 +5465,13 @@ const jamInfoLine = (jam && !isAbomChat && !rack && rapidShots > 1)
       : "";
 
     const volleySummary = isVolley
-      ? `<div>${cluster.label ?? "Volley"} Roll: ${cluster.volleyRoll.total} (2d6) — Hits ${cluster.volleyHits}/${cluster.volleySize}</div>`
+      ? `<div>${cluster.label ?? "Volley"} Roll: ${formatClusterRoll(cluster.volleyRoll)} — Hits ${cluster.volleyHits}/${cluster.volleySize}</div>`
       : "";
 
     const volleySubLines = isVolley
       ? (cluster.subclusters ?? []).map((sc, idx) => {
           const modTag = formatClusterModTag(sc.clusterRollMod, sc.clusterRollModifiedTotal);
-          return `<div>Attack ${idx + 1}: Cluster Roll ${sc.clusterRoll.total} (2d6)${modTag} — Missiles Hit ${sc.missilesHit}</div>`;
+          return `<div>Attack ${idx + 1}: Cluster Roll ${formatClusterRoll(sc.clusterRoll)}${modTag} — Missiles Hit ${sc.missilesHit}</div>`;
         }).join("")
       : "";
 
@@ -5353,7 +5484,7 @@ const jamInfoLine = (jam && !isAbomChat && !rack && rapidShots > 1)
       const floatTag = p?.floating ? ` — Floating: 2 → ${String(p.floating.reroll.loc).toUpperCase()} (rolled ${p.floating.reroll.rollTotal})` : "";
       const vehicleCritTag = (isVehicleTarget && p?.vehicleCrit?.trigger) ? " — <b>Vehicle Critical</b>" : "";
       const coverTag = p?.partialCoverBlocked ? " — <b>Partial cover: leg hit ignored</b>" : "";
-      const qty = isMissile ? `${p.hits} ${projWord}` : `${p.hits} shot(s)`;
+      const qty = p?.damageCluster ? `${p.damage} damage cluster` : (isMissile ? `${p.hits} ${projWord}` : `${p.hits} shot(s)`);
       const locLabel = Number.isFinite(p?.abomIndex) ? `ABOM ${p.abomIndex}` : String(p.loc).toUpperCase();
       const rollText = Number.isFinite(p?.abomIndex)
         ? ` (${qty})`
@@ -5364,7 +5495,7 @@ const jamInfoLine = (jam && !isAbomChat && !rack && rapidShots > 1)
     }).join("");
 
     return `<div><b>Cluster Packets</b></div>` +
-      (isMissile ? `<div>Cluster Roll: ${cluster.clusterRoll.total} (2d6)${artemisTag}${streakTag}</div>` : "") +
+      (isMissile ? `<div>Cluster Roll: ${formatClusterRoll(cluster.clusterRoll)}${artemisTag}${streakTag}</div>` : "") +
       volleySummary +
       volleySubLines +
       extraLine +
@@ -6487,6 +6618,7 @@ export async function promptAndRollWeaponAttack(actor, weaponItem, { defaultSide
   const ammoSelectionOptions = enrichAmmoSelectionOptionsForDialog(ammoSelection.options, weaponItem, distance, dialogBaseWithoutRange);
   const selectedAmmoRange = targetToken ? calcRangeBandAndMod(weaponItem, distance, { ammoKey: selectedAmmoKey }) : { band: "Indirect", mod: 0 };
 
+  ensureAttackDialogHandlebarsHelpers();
   const dialogHtml = await renderTemplate(VEHICLE_ATTACK_TEMPLATE, {
     weaponName: weaponItem.name,
     attackerName: attackerTok.name ?? actor.name,
@@ -7865,6 +7997,12 @@ function _isFerroFibrousCritSlot(slot) {
   return compact.includes("ferrofibrous");
 }
 
+function _isCritRerollSlot(slot) {
+  const label = (typeof slot === "string") ? slot : (slot?.label ?? slot?.name ?? "");
+  const compact = String(label ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  return compact.includes("ferrofibrous") || compact.includes("endosteel");
+}
+
 async function _rollCritSlotIndex(targetActor, structLoc) {
   const rawSlots = targetActor.system?.crit?.[structLoc]?.slots;
   const maxSlots = Array.isArray(rawSlots) ? rawSlots.length : Number(targetActor.system?.crit?.[structLoc]?.maxSlots ?? 0) || 0;
@@ -7898,7 +8036,7 @@ async function _rollCritSlotIndex(targetActor, structLoc) {
   for (let i = 0; i < slotCount; i++) {
     const slot = slots?.[i];
     if (!_isOccupiedCritSlot(slot)) continue;
-    if (_isFerroFibrousCritSlot(slot)) continue;
+    if (_isCritRerollSlot(slot)) continue;
     if (Boolean(slot?.destroyed)) continue;
     hasIntactOccupiedSlot = true;
     break;
@@ -7915,7 +8053,7 @@ async function _rollCritSlotIndex(targetActor, structLoc) {
       const r = await (new Roll("1d6")).evaluate();
       const idx = (r.total ?? 1) - 1;
       const slot = slots?.[idx];
-      if (_isOccupiedCritSlot(slot) && !_isFerroFibrousCritSlot(slot) && !Boolean(slot?.destroyed)) {
+      if (_isOccupiedCritSlot(slot) && !_isCritRerollSlot(slot) && !Boolean(slot?.destroyed)) {
         return { ok: true, idx, rolls: { slot: r.total }, label: slot?.label ?? slot };
       }
       continue;
@@ -7930,7 +8068,7 @@ async function _rollCritSlotIndex(targetActor, structLoc) {
     const idx = offset + ((slotRoll.total ?? 1) - 1);
 
     const slot = slots?.[idx];
-    if (_isOccupiedCritSlot(slot) && !_isFerroFibrousCritSlot(slot) && !Boolean(slot?.destroyed)) {
+    if (_isOccupiedCritSlot(slot) && !_isCritRerollSlot(slot) && !Boolean(slot?.destroyed)) {
       return {
         ok: true,
         idx,

@@ -7,6 +7,7 @@ const SYSTEM_ID = "atow-battletech";
 const TEMPLATE = `systems/${SYSTEM_ID}/templates/character-sheet.hbs`;
 const SHEET_CSS = `systems/${SYSTEM_ID}/styles/character-sheet.css`;
 const SHEET_CSS_ID = "atow-character-sheet-css";
+const CHARACTER_CREATION_PACK = `${SYSTEM_ID}.character-creation`;
 
 // Combat tables are intentionally capped (canon sheet has 4 slots each).
 const MAX_COMBAT_WEAPONS = 4;
@@ -31,6 +32,73 @@ function titleCase(str) {
     .split(/\s+/g)
     .map(w => w ? (w[0].toUpperCase() + w.slice(1)) : "")
     .join(" ");
+}
+
+function normalizeChoiceName(value) {
+  return String(value ?? "").trim().toLowerCase();
+}
+
+function labelFromMovementMode(mode) {
+  const key = String(mode ?? "").trim();
+  if (!key) return "--";
+
+  const configured = game?.[SYSTEM_ID]?.config?.characterCombat?.movementModes?.[key]?.label;
+  if (configured) return configured;
+
+  return titleCase(key);
+}
+
+function getSheetTokenDocForActor(actor) {
+  if (!actor) return null;
+  const actorId = String(actor.id ?? "");
+
+  const controlled = canvas?.tokens?.controlled?.find(t => String(t?.actor?.id ?? "") === actorId) ?? null;
+  if (controlled?.document) return controlled.document;
+
+  const combatant = game.combat?.combatants?.find?.(c => {
+    const combatantActorId = String(c?.actorId ?? c?.actor?.id ?? c?.token?.actor?.id ?? "");
+    return combatantActorId && combatantActorId === actorId;
+  }) ?? null;
+  if (combatant?.token) return combatant.token;
+
+  const placed = canvas?.tokens?.placeables?.find?.(t => String(t?.actor?.id ?? "") === actorId) ?? null;
+  return placed?.document ?? null;
+}
+
+function buildMovementStatusForActor(actor, derivedMove = {}) {
+  const tokenDoc = getSheetTokenDocForActor(actor);
+  if (!tokenDoc) {
+    return {
+      hasToken: false,
+      mode: "",
+      modeLabel: "--",
+      mpUsed: "--",
+      mpMax: "--",
+      mpText: "--"
+    };
+  }
+
+  const mode = String(tokenDoc.getFlag?.(SYSTEM_ID, "moveMode") ?? "stationary").trim().toLowerCase() || "stationary";
+  const mpUsed = Number(
+    tokenDoc.getFlag?.(SYSTEM_ID, "mpSpentThisTurn") ??
+    tokenDoc.getFlag?.(SYSTEM_ID, "movedThisTurn") ??
+    tokenDoc.getFlag?.(SYSTEM_ID, "movedHexesThisTurn") ??
+    0
+  ) || 0;
+
+  const movementApi = game?.[SYSTEM_ID]?.api?.characterCombat;
+  const mpMax = typeof movementApi?.getMovementModeBudget === "function"
+    ? movementApi.getMovementModeBudget(derivedMove, mode)
+    : Number(derivedMove?.[mode] ?? 0) || 0;
+
+  return {
+    hasToken: true,
+    mode,
+    modeLabel: labelFromMovementMode(mode),
+    mpUsed,
+    mpMax,
+    mpText: `${mpUsed} / ${mpMax}`
+  };
 }
 
 function armorTypeToLabel(raw) {
@@ -424,7 +492,7 @@ export class ATOWCharacterSheet extends HandlebarsApplicationMixin(ActorSheetV2)
     super.DEFAULT_OPTIONS,
     {
       classes: ["atow", "sheet", "actor", "character", "atow-character-classic"],
-      position: { width: 980, height: 900 },
+      position: { width: 1180, height: 860 },
       window: { resizable: true },
 
       form: {
@@ -599,6 +667,20 @@ export class ATOWCharacterSheet extends HandlebarsApplicationMixin(ActorSheetV2)
     context.traits = traitRows;
     context.gear = gear;
     context.gearItems = gearItems;
+    context.skillChoices = [];
+    context.traitChoices = [];
+    context.hasSkillChoices = false;
+    context.hasTraitChoices = false;
+
+    try {
+      const choices = await this._prepareCompendiumItemChoices(skills, traits);
+      context.skillChoices = choices.skills;
+      context.traitChoices = choices.traits;
+      context.hasSkillChoices = choices.skills.length > 0;
+      context.hasTraitChoices = choices.traits.length > 0;
+    } catch (err) {
+      console.warn(`${SYSTEM_ID} | Failed to prepare character creation compendium choices`, err);
+    }
 
     context.xpSummary = {
       spentTotal: xpSpentTotal,
@@ -607,6 +689,7 @@ export class ATOWCharacterSheet extends HandlebarsApplicationMixin(ActorSheetV2)
 
     // Derived movement display values (computed; not editable)
     context.derivedMove = computeDerivedMove(this.actor);
+    context.movementStatus = buildMovementStatusForActor(this.actor, context.derivedMove);
 
     // Derived vitals display values (computed; max values are not editable)
     context.derivedVitals = computeDerivedVitals(this.actor);
@@ -677,6 +760,46 @@ export class ATOWCharacterSheet extends HandlebarsApplicationMixin(ActorSheetV2)
     context.combatWeapons = weaponsOut;
 
     return context;
+  }
+
+  async _prepareCompendiumItemChoices(actorSkills = [], actorTraits = []) {
+    const pack = game.packs.get(CHARACTER_CREATION_PACK);
+    if (!pack) return { skills: [], traits: [] };
+
+    let index;
+    try {
+      index = await pack.getIndex({ fields: ["type", "img"] });
+    } catch (_err) {
+      index = await pack.getIndex();
+    }
+
+    const existingSkillNames = new Set(actorSkills.map(i => normalizeChoiceName(i.name)).filter(Boolean));
+    const existingTraitNames = new Set(actorTraits.map(i => normalizeChoiceName(i.name)).filter(Boolean));
+
+    const rows = Array.from(index ?? []);
+    const byName = (a, b) => String(a.name ?? "").localeCompare(String(b.name ?? ""), undefined, { sensitivity: "base" });
+    const toChoice = entry => ({
+      id: entry._id,
+      uuid: entry.uuid ?? `Compendium.${CHARACTER_CREATION_PACK}.Item.${entry._id}`,
+      name: entry.name,
+      img: entry.img,
+      type: entry.type
+    });
+
+    const isSkillType = type => type === "characterSkill" || type === "skill";
+    const isTraitType = type => type === "characterTrait" || type === "trait";
+
+    const skills = rows
+      .filter(entry => isSkillType(entry.type) && !existingSkillNames.has(normalizeChoiceName(entry.name)))
+      .sort(byName)
+      .map(toChoice);
+
+    const traits = rows
+      .filter(entry => isTraitType(entry.type) && !existingTraitNames.has(normalizeChoiceName(entry.name)))
+      .sort(byName)
+      .map(toChoice);
+
+    return { skills, traits };
   }
 
   _onRender(context, options) {
@@ -1175,6 +1298,15 @@ export class ATOWCharacterSheet extends HandlebarsApplicationMixin(ActorSheetV2)
       await this._syncEquippedToCombatTables(opts);
       return;
     }
+
+    const compendiumAddBtn = target.closest(".compendium-add");
+    if (compendiumAddBtn) {
+      event.preventDefault();
+      const control = compendiumAddBtn.closest(".compendium-add-control");
+      const select = control?.querySelector(".compendium-item-select");
+      return this._addItemFromCompendium(select?.value);
+    }
+
     const createBtn = target.closest(".item-create");
     if (createBtn) {
       event.preventDefault();
@@ -1283,6 +1415,10 @@ export class ATOWCharacterSheet extends HandlebarsApplicationMixin(ActorSheetV2)
 
   async _createItem(type = "characterEquipment") {
     if (!type) return;
+    if (["characterSkill", "skill", "characterTrait", "trait"].includes(type)) {
+      ui.notifications?.warn?.("Skills and traits must be added from the Character Creation compendium.");
+      return;
+    }
 
     const prettyName = {
       characterEquipment: "New Equipment",
@@ -1303,6 +1439,32 @@ export class ATOWCharacterSheet extends HandlebarsApplicationMixin(ActorSheetV2)
     await this._updateDerivedMove();
     await this._updateDerivedVitals();
     await this._updateDerivedEdge();
+  }
+
+  async _addItemFromCompendium(uuid) {
+    const sourceUuid = String(uuid ?? "").trim();
+    if (!sourceUuid) {
+      ui.notifications?.warn?.("Choose a compendium item to add first.");
+      return;
+    }
+
+    const source = await fromUuid(sourceUuid);
+    if (!source || source.documentName !== "Item") {
+      ui.notifications?.warn?.("The selected compendium entry could not be loaded.");
+      return;
+    }
+
+    const data = source.toObject();
+    delete data._id;
+    delete data.folder;
+
+    await this.actor.createEmbeddedDocuments("Item", [data]);
+    await this._updateActorXpSpent();
+    await this._updateDerivedMove();
+    await this._updateDerivedVitals();
+    await this._updateDerivedEdge();
+
+    ui.notifications?.info?.(`Added ${source.name} to ${this.actor.name}.`);
   }
 
   /* -------------------------------------------- */
