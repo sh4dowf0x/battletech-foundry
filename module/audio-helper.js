@@ -124,13 +124,15 @@ function getDerivedAmmoBins(actor) {
 
   const ammoKeyFromType = (typeText) => {
     const t = String(typeText ?? "").trim().toLowerCase();
-    if (/^(ac|lrm|srm)-\d+$/.test(t)) return t;
+    if (/^(ac|lrm|mrm|srm)-\d+$/.test(t)) return t;
 
     let m = t.match(/\bac\s*\/?\s*(\d+)\b/i);
     if (m?.[1]) return `ac-${m[1]}`;
 
-    m = t.match(/\b(lrm|srm)\s*-?\s*(\d+)\b/i);
+    m = t.match(/\b(lrm|mrm|srm)\s*-?\s*(\d+)\b/i) ?? t.match(/\b(lrm|mrm|srm)\b[^\d]*(\d+)\b/i);
     if (m?.[1] && m?.[2]) return `${String(m[1]).toLowerCase()}-${m[2]}`;
+    m = t.match(/\bmedium\s+range\s+missiles?\b[^\d]*(10|20|30|40)\b/i);
+    if (m?.[1]) return `mrm-${m[1]}`;
 
     if (t.includes("machine gun") || t === "mg") return "mg";
 

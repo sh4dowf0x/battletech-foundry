@@ -796,9 +796,11 @@ function _ammoKeyFromType(typeText) {
   m = t.match(/\bac\s*\/?\s*(\d+)\b/i);
   if (m?.[1]) return _slugifyKey(`ac-${m[1]}`);
 
-  // LRM 20, SRM 6
-  m = t.match(/\b(lrm|srm)\s*(\d+)\b/i);
+  // LRM 20, MRM 20, SRM 6
+  m = t.match(/\b(lrm|mrm|srm)\b[^\d]*(\d+)\b/i);
   if (m?.[1] && m?.[2]) return _slugifyKey(`${m[1]}-${m[2]}`);
+  m = t.match(/\bmedium\s+range\s+missiles?\b[^\d]*(10|20|30|40)\b/i);
+  if (m?.[1]) return _slugifyKey(`mrm-${m[1]}`);
 
   // Machine Gun
   if (t.includes("machine gun") || t === "mg") return "mg";
@@ -893,7 +895,7 @@ function _looksLikeWeaponLabel(label) {
   if (/\blb\s*\d+\s*-\s*x\s*ac\b/i.test(s)) return true;
   if (/\blbx\b[^\d]*(\d+)\b/i.test(s)) return true;
 
-  return /(laser|ppc|\bac\s*\/?\s*\d+\b|\blrm\s*\d+\b|\bsrm\s*\d+\b|\batm\b[^\d]*\d+\b|advanced\s+tactical\s+missile|gauss|\bmg\b|machine gun|flamer|autocannon|rifle|plasma|pulse|artillery)/i.test(s);
+  return /(laser|ppc|\bac\s*\/?\s*\d+\b|\blrm\s*\d+\b|\bmrm\s*\d+\b|\bsrm\s*\d+\b|\batm\b[^\d]*\d+\b|advanced\s+tactical\s+missile|gauss|\bmg\b|machine gun|flamer|autocannon|rifle|plasma|pulse|artillery)/i.test(s);
 }
 
 function _critLocAbbr(locKey) {
@@ -2610,6 +2612,10 @@ function _ammoExplosionDamageForType(typeText) {
 
   // LRM
   m = t.match(/\blrm\s*-?\s*(\d+)\b/i);
+  if (m?.[1]) return 120;
+
+  // MRM
+  m = t.match(/\bmrm\s*-?\s*(\d+)\b/i);
   if (m?.[1]) return 120;
 
   // SRM
@@ -4346,7 +4352,7 @@ function _classifyCritLabel(label) {
   // Weapon-ish keywords (best-effort; we don't want to async resolve fromUuid for every slot)
   if (
     // Include LB-X autocannon label styles (e.g., "LB 10-X AC") so they don't fall into "system/other".
-    /(laser|ppc|ac\s*\/?\s*\d+|lrm\s*\d+|srm\s*\d+|\batm\s*[-/]?\s*\d+\b|\blb\s*\d+\s*-\s*x\s*ac\b|\blbx\b|gauss|mg\b|machine gun|flamer|autocannon|rifle|plasma|pulse|anti-missile|\bams\b)/i.test(label)
+    /(laser|ppc|ac\s*\/?\s*\d+|lrm\s*\d+|mrm\s*\d+|srm\s*\d+|\batm\s*[-/]?\s*\d+\b|\blb\s*\d+\s*-\s*x\s*ac\b|\blbx\b|gauss|mg\b|machine gun|flamer|autocannon|rifle|plasma|pulse|anti-missile|\bams\b)/i.test(label)
   ) {
     return { category: "weapon", iconClass: "fas fa-crosshairs" };
   }
@@ -4706,7 +4712,7 @@ engineSinksRemoved: Math.max(0, (Number(engineMountedSinksAuto) || 0) - (Number(
       if (!t) return false;
       if (/\bammo\b/i.test(t)) return false;
       if (/\bstreak\s*srm\b/i.test(t)) return false;
-      return /\b(lrm|srm|mrm)\s*[-]?\s*(\d+)\b/i.test(t);
+      return /\b(lrm|srm)\s*[-]?\s*(\d+)\b/i.test(t);
     };
 
     const artemisByLoc = {};
@@ -4737,9 +4743,9 @@ engineSinksRemoved: Math.max(0, (Number(engineMountedSinksAuto) || 0) - (Number(
 
     if (artemisInstalled) {
       if (launcherTotal <= 0) {
-        addStatus("warning", "🎯", "Artemis IV FCS: Installed (no eligible launchers)", "Applies only to LRM/SRM/MRM launchers");
+        addStatus("warning", "🎯", "Artemis IV FCS: Installed (no eligible launchers)", "Applies only to LRM/SRM launchers");
       } else if (artemisFullyLinked) {
-        addStatus("info", "🎯", "Artemis IV FCS: LINKED", "+2 to cluster rolls (LRM/SRM/MRM) • Max roll 12");
+        addStatus("info", "🎯", "Artemis IV FCS: LINKED", "+2 to cluster rolls (LRM/SRM) • Max roll 12");
       } else {
         addStatus("warning", "🎯", "Artemis IV FCS: NOT FULLY LINKED", `Artemis ${artemisTotal} • Launchers ${launcherTotal} (must match)`);
       }
@@ -5296,11 +5302,11 @@ if (zone === "crit") {
     return n;
   };
 
-  const launcherCount = _countStartSlotsInLoc((lbl) => /\b(lrm|srm|mrm)\s*[-]?\s*\d+\b/i.test(lbl) && !/\bstreak\s*srm\b/i.test(lbl) && !/\bammo\b/i.test(lbl));
+  const launcherCount = _countStartSlotsInLoc((lbl) => /\b(lrm|srm)\s*[-]?\s*\d+\b/i.test(lbl) && !/\bstreak\s*srm\b/i.test(lbl) && !/\bammo\b/i.test(lbl));
   const artemisCount = _countStartSlotsInLoc((lbl) => /^artemis\s*iv\s*fcs$/i.test(lbl));
 
   if (isArtemis && launcherCount <= 0) {
-    ui?.notifications?.warn?.("Artemis IV FCS must be installed in the same location as an LRM/SRM/MRM launcher.");
+    ui?.notifications?.warn?.("Artemis IV FCS must be installed in the same location as an LRM/SRM launcher.");
     return;
   }
 

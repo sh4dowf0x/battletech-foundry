@@ -966,6 +966,10 @@ const AMMO_EXPLOSION_DAMAGE = {
   "lrm-15": 120,
   "lrm-10": 120,
   "lrm-5": 120,
+  "mrm-40": 120,
+  "mrm-30": 120,
+  "mrm-20": 120,
+  "mrm-10": 120,
   "srm-6": 180,
   "srm-4": 200,
   "srm-2": 200,
@@ -1011,6 +1015,10 @@ function _ammoKeyFromType(typeText) {
   // LRM 20, LRM-20
   m = t.match(/\blrm\s*[- ]?\s*(\d+)\b/i);
   if (m?.[1]) return `lrm-${Number(m[1])}`;
+
+  // MRM 20, MRM-20
+  m = t.match(/\bmrm\b[^\d]*(\d+)\b/i) ?? t.match(/\bmedium\s+range\s+missiles?\b[^\d]*(10|20|30|40)\b/i);
+  if (m?.[1]) return `mrm-${Number(m[1])}`;
 
   // SRM 6, SRM-6
   m = t.match(/\bsrm\s*[- ]?\s*(\d+)\b/i);
@@ -2273,7 +2281,7 @@ function isMissileWeapon(weaponItem) {
   const kind = String(sys.type ?? sys.category ?? sys.weaponType ?? "").toLowerCase();
   return (
     kind.includes("missile") ||
-    name.includes("lrm") || name.includes("srm") ||
+    name.includes("lrm") || name.includes("mrm") || name.includes("srm") ||
     name.includes("missile") || name.includes("rocket") || name.includes("atm")
   );
 }
@@ -2299,6 +2307,25 @@ function isLaserWeapon(weaponItem) {
   const sys = weaponItem?.system ?? {};
   const kind = String(sys.type ?? sys.category ?? sys.weaponType ?? sys.damageType ?? "").toLowerCase();
   return name.includes("laser") || kind.includes("laser");
+}
+
+function getXPulseLaserRangeProfile(item) {
+  const name = String(item?.name ?? "").trim().toLowerCase();
+  const sys = item?.system ?? {};
+  const text = [
+    name,
+    sys.type,
+    sys.category,
+    sys.weaponType,
+    sys.subtype,
+    sys.tags
+  ].flat().filter(Boolean).map(String).join(" ").toLowerCase();
+
+  if (!/\bx\s*[- ]?\s*pulse\b/i.test(text) || !text.includes("laser")) return null;
+  if (/\bsmall\b/i.test(text)) return { min: 0, short: 3, medium: 5, long: 7 };
+  if (/\bmedium\b/i.test(text)) return { min: 0, short: 5, medium: 9, long: 14 };
+  if (/\blarge\b/i.test(text)) return { min: 0, short: 7, medium: 14, long: 20 };
+  return null;
 }
 
 function isActorDazzleModeActive(actor) {
@@ -2384,7 +2411,7 @@ function ammoKeyFromTypeLabel(typeText) {
   }
 
   // If already looks like our key, keep it stable
-  if (/^(ac|lrm|srm|atm)-\d+(?:-(?:er|he))?$/.test(t)) return t;
+  if (/^(ac|lrm|mrm|srm|atm)-\d+(?:-(?:er|he))?$/.test(t)) return t;
   if (/^lbx-\d+(?:-cluster)?$/.test(t)) return t;
 
   // LB-X autocannon ammo: accept labels like
@@ -2414,9 +2441,11 @@ function ammoKeyFromTypeLabel(typeText) {
   m = t.match(/\bac\s*\/?\s*(\d+)\b/i);
   if (m?.[1]) return slugifyAmmoKey(`ac-${m[1]}`);
 
-  // LRMs / SRMs
-  m = t.match(/\b(lrm|srm)\s*-?\s*(\d+)\b/i);
+  // LRMs / MRMs / SRMs
+  m = t.match(/\b(lrm|mrm|srm)\s*-?\s*(\d+)\b/i) ?? t.match(/\b(lrm|mrm|srm)\b[^\d]*(\d+)\b/i);
   if (m?.[1] && m?.[2]) return slugifyAmmoKey(`${m[1]}-${m[2]}`);
+  m = t.match(/\bmedium\s+range\s+missiles?\b[^\d]*(10|20|30|40)\b/i);
+  if (m?.[1]) return slugifyAmmoKey(`mrm-${m[1]}`);
 
   // Machine guns / other common ammo users (optional)
   if (t.includes("machine gun") || t === "mg") return "mg";
@@ -2562,9 +2591,11 @@ function getAmmoKeyForWeapon(weaponItem) {
   let m = name.match(/\bac\s*\/?\s*(\d+)\b/i);
   if (m?.[1]) return slugifyAmmoKey(`ac-${m[1]}`);
 
-  // LRMs / SRMs
-  m = name.match(/\b(lrm|srm)\s*-?\s*(\d+)\b/i);
+  // LRMs / MRMs / SRMs
+  m = name.match(/\b(lrm|mrm|srm)\s*-?\s*(\d+)\b/i) ?? name.match(/\b(lrm|mrm|srm)\b[^\d]*(\d+)\b/i);
   if (m?.[1] && m?.[2]) return slugifyAmmoKey(`${m[1]}-${m[2]}`);
+  m = name.match(/\bmedium\s+range\s+missiles?\b[^\d]*(10|20|30|40)\b/i);
+  if (m?.[1]) return slugifyAmmoKey(`mrm-${m[1]}`);
 
   // Machine guns
   if (name.includes("machine gun") || name.includes("mg")) return "mg";
@@ -2884,6 +2915,31 @@ function getWeaponRanges(item, { ammoKey = null } = {}) {
 
   const sys = item?.system ?? {};
   const r = sys.range ?? {};
+  const xPulseProfile = getXPulseLaserRangeProfile(item);
+  if (xPulseProfile) {
+    const positiveOrDefault = (value, fallback) => {
+      const n = Number(value);
+      return Number.isFinite(n) && n > 0 ? n : fallback;
+    };
+
+    return {
+      min: num(r.min ?? sys.min, xPulseProfile.min),
+      short: positiveOrDefault(r.short ?? sys.sht ?? sys.short, xPulseProfile.short),
+      medium: positiveOrDefault(r.medium ?? sys.med ?? sys.medium, xPulseProfile.medium),
+      long: positiveOrDefault(r.long ?? sys.lng ?? sys.long, xPulseProfile.long)
+    };
+  }
+
+  const rack = getMissileRack(item);
+  const isMRM = String(rack?.type ?? "").toUpperCase() === "MRM";
+
+  if (isMRM) {
+    const short = num(r.short ?? sys.sht ?? sys.short, 3);
+    const medium = num(r.medium ?? sys.med ?? sys.medium, 8);
+    const long = num(r.long ?? sys.lng ?? sys.long, 15);
+    return { min: 0, short, medium, long };
+  }
+
   return {
     min: num(r.min ?? sys.min, 0),
     short: num(r.short ?? sys.sht ?? sys.short, 0),
@@ -3730,6 +3786,7 @@ async function rollClusterHits(rackSize, bonus = 0, { forcedTotal = null } = {})
 // - +2 to Cluster Hits Table roll (max modified roll of 12)
 // - Must be installed in the same location as each eligible launcher
 // - If any launcher is Artemis-linked, all eligible launchers must be linked
+// - MRMs are unguided and are not eligible for Artemis IV.
 // ------------------------------------------------------------
 const ARTEMIS_LABEL = "artemis iv fcs";
 
@@ -3743,7 +3800,7 @@ function _isEligibleLauncherLabel(label) {
   // Use the same detection as getMissileRack (but from a string label)
   if (/\bstreak\s*srm\b/i.test(t)) return false;
   if (/\bammo\b/i.test(t)) return false;
-  return /\b(lrm|srm|mrm)\s*[-]?\s*(\d+)\b/i.test(t);
+  return /\b(lrm|srm)\s*[-]?\s*(\d+)\b/i.test(t);
 }
 
 function _getCritLocMax(locKey) {
@@ -4511,6 +4568,9 @@ export async function rollWeaponAttack(actor, weaponItem, opts = {}) {
   ammoKey = ammoKey ? ammoKeyFromTypeLabel(ammoKey) : getAmmoKeyForWeapon(weaponItem);
   const atmSize = getATMWeaponSize(weaponItem);
   if (Number.isFinite(atmSize) && !ammoKey) ammoKey = slugifyAmmoKey(`atm-${atmSize}`);
+  const weaponRack = getMissileRack(weaponItem);
+  const weaponRackType = String(weaponRack?.type ?? "").toUpperCase();
+  const mrmTNMod = weaponRackType === "MRM" ? 1 : 0;
 
   const { band, mod: rangeMod, minPenalty } = calcRangeBandAndMod(weaponItem, distance, { ammoKey });
 
@@ -4714,15 +4774,15 @@ export async function rollWeaponAttack(actor, weaponItem, opts = {}) {
 
   const totalTN = isArrowIVHomingAttack
     ? 4
-    : num(baseTN, 8) + rangeMod + attackerMoveMod + targetMoveMod + heatFireMod + statusTNMods.total + envTNMods.mod + losWoodsMods.mod + terrainPartialCoverMod + terrainMod + otherMod + tcMod + aimedNetMod;
+    : num(baseTN, 8) + rangeMod + attackerMoveMod + targetMoveMod + heatFireMod + statusTNMods.total + envTNMods.mod + losWoodsMods.mod + terrainPartialCoverMod + terrainMod + otherMod + mrmTNMod + tcMod + aimedNetMod;
 
   const tn = isArrowIVHomingAttack
     ? 4
-    : num(baseTN, 8) + rangeMod + attackerMoveMod + targetMoveMod + heatFireMod + statusTNMods.total + envTNMods.mod + losWoodsMods.mod + terrainPartialCoverMod + terrainMod + otherMod + tcMod + aimedNetMod;
+    : num(baseTN, 8) + rangeMod + attackerMoveMod + targetMoveMod + heatFireMod + statusTNMods.total + envTNMods.mod + losWoodsMods.mod + terrainPartialCoverMod + terrainMod + otherMod + mrmTNMod + tcMod + aimedNetMod;
 
   const toHit = await (new Roll(isArrowIVHomingAttack ? "2d6" : `2d6 + ${gunnery}`)).evaluate();
   // Missile rack size (LRM/SRM/MRM etc). Used to distinguish missile cluster weapons vs rapid-fire cluster.
-  const rack = (isTagAttack || isArrowIVHomingAttack) ? null : (isLBXClusterFire ? { type: "LBX", size: lbxSize } : getMissileRack(weaponItem));
+  const rack = (isTagAttack || isArrowIVHomingAttack) ? null : (isLBXClusterFire ? { type: "LBX", size: lbxSize } : weaponRack);
   const rackType = String(rack?.type ?? "").toUpperCase();
   const rackATMProfile = (rackType === "ATM") ? (atmProfile ?? getATMProfile(weaponItem, ammoKey)) : null;
   const rackPerHitDamage = rackATMProfile?.damagePerMissile ?? ((rackType === "SRM") ? 2 : (rackType === "LBX" ? 1 : 1));
@@ -4820,7 +4880,7 @@ const hit = (toHit.total ?? 0) >= tn;
   const artemisInstalled = Boolean(rack) ? (num(artemisCounts.totalArtemis, 0) > 0) : false;
   const artemisFullyLinked = Boolean(rack) ? _isArtemisFullyLinked(actor) : false;
   const artemisLinked = Boolean(rack) ? _weaponHasArtemisLink(actor, weaponItem, { fullyLinked: artemisFullyLinked, byLoc: artemisCounts.byLoc }) : false;
-  const amsEligible = hit && isMechActor(targetActor) && Boolean(rack) && ["LRM", "SRM"].includes(String(rack.type ?? "").toUpperCase());
+  const amsEligible = hit && isMechActor(targetActor) && Boolean(rack) && ["LRM", "MRM", "SRM"].includes(String(rack.type ?? "").toUpperCase());
   const amsDefense = amsEligible
     ? await resolveAMSDefense(targetActor, {
         attackerName: attackerToken?.name ?? actor.name,
@@ -5371,7 +5431,9 @@ const clusterNote = cluster
               ? "LB-X cluster ammo deals 1 damage per pellet; each pellet rolls its own location."
               : (cluster.type === "ATM"
                   ? `ATM ${rackATMProfile?.label ?? "Standard"} ammo deals ${cluster.perHitDamage} damage per missile; total damage is grouped into 5-point clusters.`
-                  : "LRM damage is 1 per missile; packets are grouped in 5s.")))
+                  : (cluster.type === "MRM"
+                      ? "MRM damage is 1 per missile; packets are grouped in 5s."
+                      : "LRM damage is 1 per missile; packets are grouped in 5s."))))
       : (cluster.mode === "volley"
           ? `${cluster.label ?? "Volley"}: roll to see how many attackers hit, then resolve missile clusters per hit.`
           : `${cluster.label ?? "Rapid Fire"} damage is applied per hit; each hit is resolved as its own packet.`))
@@ -5533,6 +5595,7 @@ const jamInfoLine = (jam && !isAbomChat && !rack && rapidShots > 1)
     `<li>Intervening Woods: +${losWoodsMods.mod}${losWoodsMods.details?.length ? ` (${losWoodsMods.details.join('; ')})` : ''}</li>`,
     `<li>Partial Cover: +${terrainPartialCoverMod}${losCoverMods.details?.length ? ` (${losCoverMods.details.join('; ')})` : ''}</li>`,
     `<li>Terrain: +${terrainMod}</li>`,
+    `<li>Weapon Accuracy: +${mrmTNMod}${mrmTNMod ? " (MRM unguided)" : ""}</li>`,
     `<li>Other: +${otherMod}</li>`,
     `</ul>`,
     `${weaponLine}`,
@@ -6583,6 +6646,8 @@ export async function promptAndRollWeaponAttack(actor, weaponItem, { defaultSide
   const partialCoverAlreadyAddsTN = targetHasStatusPartialCover || (targetHasWaterStatus && dialogLosCoverMods.targetWaterDepth > 0);
   const dialogTerrainCoverMod = (dialogLosCoverMods.partialCover && !partialCoverAlreadyAddsTN) ? 1 : 0;
   const dialogBaseTN = 8;
+  const dialogRack = getMissileRack(weaponItem);
+  const dialogMRMTNMod = String(dialogRack?.type ?? "").toUpperCase() === "MRM" ? 1 : 0;
   const dialogAttackerMoveMod = getAutoAttackerMoveMod(actor, attackerTok).mod;
   const dialogTargetMoveMod = autoTargetMove.mod;
   const dialogHeatFireMod = num(actor.system?.heat?.effects?.fireMod, 0);
@@ -6591,6 +6656,7 @@ export async function promptAndRollWeaponAttack(actor, weaponItem, { defaultSide
     + dialogLosWoodsMods.mod
     + dialogTerrainCoverMod
     + dialogStatusMods.total
+    + dialogMRMTNMod
     + dialogAttackerMoveMod
     + dialogTargetMoveMod
     + dialogHeatFireMod;
@@ -6606,6 +6672,7 @@ export async function promptAndRollWeaponAttack(actor, weaponItem, { defaultSide
     losCoverMods: dialogLosCoverMods,
     terrainCoverMod: dialogTerrainCoverMod
   });
+  if (dialogMRMTNMod) mods.push({ label: "MRM Unguided", value: dialogMRMTNMod });
   if (firingArcInfo.applies && !firingArcInfo.legal) {
     const mountLabel = firingArcInfo.rearMounted ? "Rear-mounted" : `${firingArcInfo.mount?.locLabel ?? "Unknown"} mounted`;
     blockedNotes.push(`${mountLabel} weapon cannot fire into the ${String(firingArcInfo.side ?? "unknown").toUpperCase()} arc. Allowed: ${firingArcInfo.allowedLabel}.`);
@@ -6643,7 +6710,7 @@ export async function promptAndRollWeaponAttack(actor, weaponItem, { defaultSide
     ammoSelectionOptions,
     selectedAmmoKey,
     selectedRangeMod: num(selectedAmmoRange.mod, 0),
-    baseTNWithoutRange: dialogBaseTN + dialogEnvMods.mod + dialogLosWoodsMods.mod + dialogTerrainCoverMod + dialogStatusMods.total + dialogHeatFireMod,
+    baseTNWithoutRange: dialogBaseTN + dialogEnvMods.mod + dialogLosWoodsMods.mod + dialogTerrainCoverMod + dialogStatusMods.total + dialogHeatFireMod + dialogMRMTNMod,
     autoAttackerMoveMod: dialogAttackerMoveMod
   });
 

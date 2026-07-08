@@ -37,7 +37,7 @@ function slugifyAmmoKey(s) {
 function ammoKeyFromTypeLabel(typeText) {
   const t = String(typeText ?? "").trim().toLowerCase();
   if (!t || t === "none" || t === "n/a" || t === "na" || t === "n-a" || t === "no ammo" || t === "ammo none") return null;
-  if (/^(ac|lrm|srm|atm)-\d+(?:-(?:er|he))?$/.test(t)) return t;
+  if (/^(ac|lrm|mrm|srm|atm)-\d+(?:-(?:er|he))?$/.test(t)) return t;
   if (/^lbx-\d+(?:-cluster)?$/.test(t)) return t;
 
   const isCluster = /\bcluster\b/i.test(t);
@@ -55,8 +55,10 @@ function ammoKeyFromTypeLabel(typeText) {
   if (t.includes("gauss")) return "gauss";
   m = t.match(/\bac\s*\/?\s*(\d+)\b/i);
   if (m?.[1]) return slugifyAmmoKey(`ac-${m[1]}`);
-  m = t.match(/\b(lrm|srm)\s*-?\s*(\d+)\b/i);
+  m = t.match(/\b(lrm|mrm|srm)\s*-?\s*(\d+)\b/i) ?? t.match(/\b(lrm|mrm|srm)\b[^\d]*(\d+)\b/i);
   if (m?.[1] && m?.[2]) return slugifyAmmoKey(`${m[1]}-${m[2]}`);
+  m = t.match(/\bmedium\s+range\s+missiles?\b[^\d]*(10|20|30|40)\b/i);
+  if (m?.[1]) return slugifyAmmoKey(`mrm-${m[1]}`);
   if (t.includes("machine gun") || t === "mg") return "mg";
   if (t === "ams" || /\banti\s*-?\s*missile\s+system\b/i.test(t)) return "ams";
   if (/\barrow\s*iv\b/i.test(t) && /\bhoming\b/i.test(t)) return "arrow-iv-homing";
@@ -75,6 +77,10 @@ function defaultAmmoAmountForKey(key) {
     "lrm-10": 12,
     "lrm-15": 8,
     "lrm-20": 6,
+    "mrm-10": 24,
+    "mrm-20": 12,
+    "mrm-30": 8,
+    "mrm-40": 6,
     "srm-2": 50,
     "srm-4": 25,
     "srm-6": 15,
@@ -112,7 +118,7 @@ function parseAmmoDropItem(item) {
   const trailingCountMatch = name.match(/\b(\d+)\s*(?:shots?|rounds?)\b/i) ?? name.match(/\)\s*(\d+)\s*$/i);
   const nameAmmoTypeMatch =
     ammoLabelMatch ??
-    name.match(/\b((?:LB\s*\d+\s*-\s*X\s*AC|LBX\s*(?:AC\s*\/?\s*)?\d+|ATM\s*(?:3|6|9|12)(?:\s*(?:ER|HE))?|AC\s*\/?\s*\d+|LRM\s*-?\s*\d+|SRM\s*-?\s*\d+|Gauss(?:\s+Rifle)?|Machine Gun|MG|AMS|Arrow\s*IV\s*Homing))\b/i);
+    name.match(/\b((?:LB\s*\d+\s*-\s*X\s*AC|LBX\s*(?:AC\s*\/?\s*)?\d+|ATM\s*(?:3|6|9|12)(?:\s*(?:ER|HE))?|AC\s*\/?\s*\d+|LRM\b[^\d]*\d+|MRM\b[^\d]*\d+|Medium\s+Range\s+Missiles?\b[^\d]*(?:10|20|30|40)|SRM\b[^\d]*\d+|Gauss(?:\s+Rifle)?|Machine Gun|MG|AMS|Arrow\s*IV\s*Homing))\b/i);
 
   let ammoType = String(ammoLabelMatch?.[1] ?? candidates[0] ?? nameAmmoTypeMatch?.[1] ?? "").trim();
   const candidateKey = ammoKeyFromTypeLabel(ammoType);
