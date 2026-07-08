@@ -24,6 +24,164 @@ const CREW_HIT_MAX = 2;
 const SENSOR_HIT_MAX = 2;
 const MOTIVE_HIT_MAX = 4;
 const TONNAGE_OPTIONS = Array.from({ length: 17 }, (_, i) => 20 + (i * 5));
+const VEHICLE_EQUIPMENT_TYPES = new Set(["mechEquipment", "equipment", "gear", "ammo"]);
+const PROCESSED_DROP_EVENTS = new WeakSet();
+
+function slugifyAmmoKey(s) {
+  return String(s ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/(^-|-$)/g, "");
+}
+
+function ammoKeyFromTypeLabel(typeText) {
+  const t = String(typeText ?? "").trim().toLowerCase();
+  if (!t || t === "none" || t === "n/a" || t === "na" || t === "n-a" || t === "no ammo" || t === "ammo none") return null;
+  if (/^(ac|lrm|srm|atm)-\d+(?:-(?:er|he))?$/.test(t)) return t;
+  if (/^lbx-\d+(?:-cluster)?$/.test(t)) return t;
+
+  const isCluster = /\bcluster\b/i.test(t);
+  let m = t.match(/\blb\s*(\d+)\s*-\s*x\s*ac\b/i);
+  if (m?.[1]) return slugifyAmmoKey(`lbx-${m[1]}${isCluster ? "-cluster" : ""}`);
+  m = t.match(/\blbx\b[^\d]*(\d+)\b/i);
+  if (m?.[1]) return slugifyAmmoKey(`lbx-${m[1]}${isCluster ? "-cluster" : ""}`);
+
+  m = t.match(/\batm\b[^\d]*(3|6|9|12)\b/i) ?? t.match(/\badvanced\s+tactical\s+missiles?\b[^\d]*(3|6|9|12)\b/i);
+  if (m?.[1]) {
+    const variant = /\ber\b/i.test(t) ? "-er" : (/\bhe\b/i.test(t) ? "-he" : "");
+    return slugifyAmmoKey(`atm-${m[1]}${variant}`);
+  }
+
+  if (t.includes("gauss")) return "gauss";
+  m = t.match(/\bac\s*\/?\s*(\d+)\b/i);
+  if (m?.[1]) return slugifyAmmoKey(`ac-${m[1]}`);
+  m = t.match(/\b(lrm|srm)\s*-?\s*(\d+)\b/i);
+  if (m?.[1] && m?.[2]) return slugifyAmmoKey(`${m[1]}-${m[2]}`);
+  if (t.includes("machine gun") || t === "mg") return "mg";
+  if (t === "ams" || /\banti\s*-?\s*missile\s+system\b/i.test(t)) return "ams";
+  if (/\barrow\s*iv\b/i.test(t) && /\bhoming\b/i.test(t)) return "arrow-iv-homing";
+
+  return slugifyAmmoKey(t);
+}
+
+function defaultAmmoAmountForKey(key) {
+  const defaults = {
+    "ac-2": 45,
+    "ac-5": 20,
+    "ac-10": 10,
+    "ac-20": 5,
+    "gauss": 8,
+    "lrm-5": 24,
+    "lrm-10": 12,
+    "lrm-15": 8,
+    "lrm-20": 6,
+    "srm-2": 50,
+    "srm-4": 25,
+    "srm-6": 15,
+    "mg": 200,
+    "ams": 12,
+    "arrow-iv-homing": 5
+  };
+
+  const k = String(key ?? "").trim().toLowerCase();
+  if (defaults[k]) return defaults[k];
+  if (/^atm-(3|6|9|12)(?:-(?:er|he))?$/.test(k)) return 10;
+  if (/^lbx-2(?:-cluster)?$/.test(k)) return 45;
+  if (/^lbx-5(?:-cluster)?$/.test(k)) return 20;
+  if (/^lbx-10(?:-cluster)?$/.test(k)) return 10;
+  if (/^lbx-20(?:-cluster)?$/.test(k)) return 5;
+  return 0;
+}
+
+function parseAmmoDropItem(item) {
+  if (!item) return null;
+  const sys = item.system ?? {};
+  const name = String(item.name ?? "").trim();
+  const candidates = [
+    sys.ammoType,
+    sys.ammoName,
+    sys.ammoLabel,
+    sys.ammo?.type,
+    sys.ammo?.name,
+    sys.type,
+    sys.subtype,
+    name
+  ].map(v => String(v ?? "").trim()).filter(Boolean);
+
+  const ammoLabelMatch = name.match(/^\s*Ammo\s*\(([^)]+)\)\s*(\d+)?\s*$/i);
+  const trailingCountMatch = name.match(/\b(\d+)\s*(?:shots?|rounds?)\b/i) ?? name.match(/\)\s*(\d+)\s*$/i);
+  const nameAmmoTypeMatch =
+    ammoLabelMatch ??
+    name.match(/\b((?:LB\s*\d+\s*-\s*X\s*AC|LBX\s*(?:AC\s*\/?\s*)?\d+|ATM\s*(?:3|6|9|12)(?:\s*(?:ER|HE))?|AC\s*\/?\s*\d+|LRM\s*-?\s*\d+|SRM\s*-?\s*\d+|Gauss(?:\s+Rifle)?|Machine Gun|MG|AMS|Arrow\s*IV\s*Homing))\b/i);
+
+  let ammoType = String(ammoLabelMatch?.[1] ?? candidates[0] ?? nameAmmoTypeMatch?.[1] ?? "").trim();
+  const candidateKey = ammoKeyFromTypeLabel(ammoType);
+  if ((!candidateKey || !defaultAmmoAmountForKey(candidateKey)) && nameAmmoTypeMatch?.[1]) {
+    ammoType = String(nameAmmoTypeMatch[1]).trim();
+  }
+  let amount = Number(sys.ammoAmount ?? sys.shots ?? sys.rounds ?? sys.ammo?.amount ?? sys.ammo?.shots ?? 0);
+
+  if (!Number.isFinite(amount) || amount <= 0) amount = Number(ammoLabelMatch?.[2] ?? trailingCountMatch?.[1] ?? 0);
+
+  ammoType = ammoType.replace(/^\s*Ammo\s*\(([^)]+)\)\s*(\d+)?\s*$/i, "$1").trim();
+
+  const key = ammoKeyFromTypeLabel(ammoType);
+  if (!Number.isFinite(amount) || amount <= 0) amount = defaultAmmoAmountForKey(key);
+  amount = Math.max(0, Math.floor(Number.isFinite(amount) ? amount : 0));
+
+  const looksLikeAmmo = /\bammo\b/i.test(name) || Boolean(sys.ammoType) || Boolean(sys.ammoAmount) || Boolean(sys.ammo?.type) || Boolean(sys.ammo?.amount);
+  if (!looksLikeAmmo) return null;
+  if (!key || amount <= 0) return null;
+
+  return {
+    key,
+    name: ammoType || key,
+    amount
+  };
+}
+
+function buildAmmoBinsFromEquipmentItems(items, savedBins = {}) {
+  const totals = new Map();
+
+  const add = (ammo) => {
+    if (!ammo?.key || !ammo.amount) return;
+    const prev = totals.get(ammo.key);
+    if (!prev) totals.set(ammo.key, { key: ammo.key, name: ammo.name, total: ammo.amount });
+    else prev.total += ammo.amount;
+  };
+
+  for (const item of items ?? []) add(parseAmmoDropItem(item));
+
+  const bins = [];
+  for (const [key, row] of totals.entries()) {
+    const total = Math.max(0, Math.floor(Number(row.total ?? 0) || 0));
+    const saved = savedBins?.[key] ?? {};
+    const savedCurrent = Number(saved.current);
+    const current = Number.isFinite(savedCurrent) ? clampInt(savedCurrent, 0, total, total) : total;
+    bins.push({
+      key,
+      name: String(saved.name ?? row.name ?? key),
+      total,
+      current
+    });
+  }
+
+  for (const [key, saved] of Object.entries(savedBins ?? {})) {
+    if (totals.has(key)) continue;
+    const total = Math.max(0, Math.floor(Number(saved?.total ?? 0) || 0));
+    if (total <= 0) continue;
+    const savedCurrent = Number(saved.current);
+    bins.push({
+      key,
+      name: String(saved.name ?? key),
+      total,
+      current: Number.isFinite(savedCurrent) ? clampInt(savedCurrent, 0, total, total) : total
+    });
+  }
+
+  bins.sort((a, b) => String(a.name).localeCompare(String(b.name), undefined, { sensitivity: "base" }));
+  return bins;
+}
 
 function clampInt(value, min, max, fallback = 0) {
   const n = Number(value);
@@ -170,8 +328,8 @@ export class ATOWCombatVehicleSheet extends HandlebarsApplicationMixin(ActorShee
       };
     }
 
-    const items = this.actor.items.contents.filter(i => i?.type === "mechWeapon" || i?.type === "weapon");
-    const vehicleWeapons = items
+    const weaponItems = this.actor.items.contents.filter(i => i?.type === "mechWeapon" || i?.type === "weapon");
+    const vehicleWeapons = weaponItems
       .map(i => ({
         _id: i.id,
         name: i.name ?? "",
@@ -180,6 +338,26 @@ export class ATOWCombatVehicleSheet extends HandlebarsApplicationMixin(ActorShee
         itemUuid: i.uuid ?? ""
       }))
       .sort((a, b) => (Number(a.sort ?? 0) - Number(b.sort ?? 0)) || String(a.name ?? "").localeCompare(String(b.name ?? ""), undefined, { sensitivity: "base" }));
+
+    const equipmentItems = this.actor.items.contents.filter(i => VEHICLE_EQUIPMENT_TYPES.has(i?.type));
+    const vehicleEquipment = equipmentItems
+      .map(i => {
+        const ammo = parseAmmoDropItem(i);
+        return {
+          _id: i.id,
+          name: i.name ?? "",
+          sort: Number(i.sort ?? 0) || 0,
+          type: i.type,
+          isAmmo: Boolean(ammo),
+          ammoName: ammo?.name ?? "",
+          ammoAmount: ammo?.amount ?? 0,
+          system: i.system ?? {},
+          itemUuid: i.uuid ?? ""
+        };
+      })
+      .sort((a, b) => (Number(a.sort ?? 0) - Number(b.sort ?? 0)) || String(a.name ?? "").localeCompare(String(b.name ?? ""), undefined, { sensitivity: "base" }));
+
+    const ammoBins = buildAmmoBinsFromEquipmentItems(equipmentItems, system?.ammoBins ?? {});
 
     const crew = system?.crew ?? {};
     const crit = system?.crit ?? {};
@@ -198,6 +376,10 @@ export class ATOWCombatVehicleSheet extends HandlebarsApplicationMixin(ActorShee
     context.armor = armor;
     context.structure = structure;
     context.vehicleWeapons = vehicleWeapons;
+    context.vehicleEquipment = vehicleEquipment;
+    context.hasVehicleEquipment = vehicleEquipment.length > 0;
+    context.ammoBins = ammoBins;
+    context.hasAmmoBins = ammoBins.length > 0;
     context.isDazzleMode = Boolean(this.actor?.getFlag?.(SYSTEM_ID, "dazzleMode"));
     context.crewTracks = {
       commander: buildTrack(CREW_HIT_MAX, crew.commanderHit),
@@ -273,6 +455,12 @@ export class ATOWCombatVehicleSheet extends HandlebarsApplicationMixin(ActorShee
       el.addEventListener("click", (event) => this._onItemDelete(event));
     });
 
+    root.querySelectorAll(".cv-eq-row[data-item-id]").forEach((row) => {
+      if (row.dataset.atowBound === "1") return;
+      row.dataset.atowBound = "1";
+      row.addEventListener("contextmenu", (event) => this._onEquipmentRowContext(event));
+    });
+
     root.querySelectorAll(".header-action-btn[data-header-action]").forEach((button) => {
       if (button.dataset.atowBound === "1") return;
       button.dataset.atowBound = "1";
@@ -319,11 +507,24 @@ export class ATOWCombatVehicleSheet extends HandlebarsApplicationMixin(ActorShee
       el.addEventListener("click", (event) => this._onTrackBox(event));
     });
 
+    root.querySelectorAll(".cv-ammo-table input[name^='system.ammoBins.'][name$='.current']").forEach((input) => {
+      if (input.dataset.atowBound === "1") return;
+      input.dataset.atowBound = "1";
+      input.addEventListener("change", (event) => this._onAmmoBinCurrentChange(event));
+    });
+
     root.querySelectorAll("[data-drop-zone='combat-vehicle-weapons']").forEach((zone) => {
       if (zone.dataset.atowDropBound === "1") return;
       zone.dataset.atowDropBound = "1";
       zone.addEventListener("dragover", (event) => event.preventDefault());
       zone.addEventListener("drop", (event) => this._onWeaponDrop(event));
+    });
+
+    root.querySelectorAll("[data-drop-zone='combat-vehicle-equipment']").forEach((zone) => {
+      if (zone.dataset.atowDropBound === "1") return;
+      zone.dataset.atowDropBound = "1";
+      zone.addEventListener("dragover", (event) => event.preventDefault());
+      zone.addEventListener("drop", (event) => this._onEquipmentDrop(event));
     });
   }
 
@@ -356,10 +557,16 @@ export class ATOWCombatVehicleSheet extends HandlebarsApplicationMixin(ActorShee
 
   async _onItemDelete(event) {
     event.preventDefault();
+    event.stopPropagation?.();
     const row = event.currentTarget.closest("[data-item-id]");
     const itemId = row?.dataset?.itemId;
     if (!itemId) return;
+    const item = this.actor.items.get(itemId);
+    const removeAmmo = Boolean(row?.classList?.contains("cv-eq-row"));
+    const ammo = removeAmmo ? parseAmmoDropItem(item) : null;
     await this.actor.deleteEmbeddedDocuments("Item", [itemId]);
+    if (ammo) await this._removeAmmoBin(ammo);
+    this.render(false);
   }
 
   async _onHeaderActionClick(event) {
@@ -496,6 +703,15 @@ export class ATOWCombatVehicleSheet extends HandlebarsApplicationMixin(ActorShee
     if (item?.sheet) item.sheet.render(true);
   }
 
+  _onEquipmentRowContext(event) {
+    if (event.target?.closest?.(".item-delete")) return;
+    event.preventDefault();
+    const row = event.currentTarget;
+    const itemId = row?.dataset?.itemId;
+    const item = itemId ? this.actor.items.get(itemId) : null;
+    if (item?.sheet) item.sheet.render(true);
+  }
+
   async _onWeaponAttack(event) {
     event.preventDefault();
     const row = event.currentTarget.closest(".cv-we-row");
@@ -584,10 +800,30 @@ export class ATOWCombatVehicleSheet extends HandlebarsApplicationMixin(ActorShee
     this.render(false);
   }
 
+  async _onAmmoBinCurrentChange(event) {
+    event?.preventDefault?.();
+
+    const input = event?.currentTarget;
+    const rawName = String(input?.name ?? "").trim();
+    const match = rawName.match(/^system\.ammoBins\.([^.]+)\.current$/);
+    if (!match?.[1]) return;
+
+    const key = String(match[1]);
+    const total = Number(input?.max ?? this.actor?.system?.ammoBins?.[key]?.total ?? 0) || 0;
+    const rawValue = Number(input?.value ?? 0);
+    const next = Math.max(0, Math.min(total > 0 ? total : rawValue, Number.isFinite(rawValue) ? rawValue : 0));
+
+    if (input) input.value = String(next);
+    await this.actor.update({ [`system.ammoBins.${key}.current`]: next });
+    this.render(false);
+  }
+
   async _onFormValueChange(event) {
     const input = event.target;
     const name = String(input?.name ?? "").trim();
     if (!name) return;
+
+    if (/^system\.ammoBins\.[^.]+\.current$/.test(name)) return;
 
     const value = parseFormInputValue(input);
     await this.actor.update({ [name]: value });
@@ -602,6 +838,10 @@ export class ATOWCombatVehicleSheet extends HandlebarsApplicationMixin(ActorShee
 
   async _onWeaponDrop(event) {
     event.preventDefault();
+    event.stopPropagation?.();
+    event.stopImmediatePropagation?.();
+    if (PROCESSED_DROP_EVENTS.has(event)) return;
+    PROCESSED_DROP_EVENTS.add(event);
     if (!this.isEditable) return;
 
     const data = (() => {
@@ -634,5 +874,89 @@ export class ATOWCombatVehicleSheet extends HandlebarsApplicationMixin(ActorShee
 
     await this.actor.createEmbeddedDocuments("Item", [obj]);
     this.render(false);
+  }
+
+  async _onEquipmentDrop(event) {
+    event.preventDefault();
+    event.stopPropagation?.();
+    event.stopImmediatePropagation?.();
+    if (PROCESSED_DROP_EVENTS.has(event)) return;
+    PROCESSED_DROP_EVENTS.add(event);
+    if (!this.isEditable) return;
+
+    const data = (() => {
+      try {
+        return TextEditor.getDragEventData(event);
+      } catch (_) {
+        return null;
+      }
+    })();
+
+    if (!data || data.type !== "Item") return;
+
+    if (typeof data.uuid === "string" && this.actor?.uuid && data.uuid.startsWith(`${this.actor.uuid}.Item.`)) {
+      return;
+    }
+
+    const dropped = data.uuid ? await fromUuid(data.uuid) : (data.data ? new Item(data.data) : null);
+    if (!dropped) return;
+
+    const ammo = parseAmmoDropItem(dropped);
+    if (!ammo && !VEHICLE_EQUIPMENT_TYPES.has(dropped.type)) {
+      ui.notifications?.warn?.("Drop mech equipment or ammunition here.");
+      return;
+    }
+
+    const typeMap = { equipment: "mechEquipment", gear: "mechEquipment", ammo: "mechEquipment" };
+    const obj = dropped.toObject();
+    delete obj._id;
+    obj.type = typeMap[obj.type] ?? obj.type;
+
+    await this.actor.createEmbeddedDocuments("Item", [obj]);
+    if (ammo) await this._addAmmoBin(ammo);
+    this.render(false);
+  }
+
+  async _addAmmoBin(ammo) {
+    if (!ammo?.key || !ammo.amount) return;
+
+    const existing = this.actor.system?.ammoBins?.[ammo.key] ?? {};
+    const oldTotal = Math.max(0, Math.floor(Number(existing.total ?? 0) || 0));
+    const oldCurrentRaw = Number(existing.current);
+    const oldCurrent = Number.isFinite(oldCurrentRaw) ? clampInt(oldCurrentRaw, 0, oldTotal, oldTotal) : oldTotal;
+    const added = Math.max(0, Math.floor(Number(ammo.amount ?? 0) || 0));
+    const total = oldTotal + added;
+    const current = oldCurrent + added;
+
+    await this.actor.update({
+      [`system.ammoBins.${ammo.key}.name`]: String(ammo.name ?? ammo.key),
+      [`system.ammoBins.${ammo.key}.total`]: total,
+      [`system.ammoBins.${ammo.key}.current`]: current
+    });
+
+    ui.notifications?.info?.(`${this.actor.name}: added ${added} ${String(ammo.name ?? ammo.key)} ammo.`);
+  }
+
+  async _removeAmmoBin(ammo) {
+    if (!ammo?.key || !ammo.amount) return;
+
+    const existing = this.actor.system?.ammoBins?.[ammo.key] ?? {};
+    const oldTotal = Math.max(0, Math.floor(Number(existing.total ?? 0) || 0));
+    const oldCurrentRaw = Number(existing.current);
+    const oldCurrent = Number.isFinite(oldCurrentRaw) ? clampInt(oldCurrentRaw, 0, oldTotal, oldTotal) : oldTotal;
+    const removed = Math.max(0, Math.floor(Number(ammo.amount ?? 0) || 0));
+    const total = Math.max(0, oldTotal - removed);
+    const current = total > 0 ? clampInt(oldCurrent - removed, 0, total, total) : 0;
+
+    if (total <= 0) {
+      await this.actor.update({ [`system.ammoBins.-=${ammo.key}`]: null });
+      return;
+    }
+
+    await this.actor.update({
+      [`system.ammoBins.${ammo.key}.name`]: String(existing.name ?? ammo.name ?? ammo.key),
+      [`system.ammoBins.${ammo.key}.total`]: total,
+      [`system.ammoBins.${ammo.key}.current`]: current
+    });
   }
 }

@@ -192,6 +192,94 @@ export const CHARACTER_INITIATIVE_MODIFIERS = Object.freeze({
   })
 });
 
+function normalizeInitiativeName(value) {
+  return String(value ?? "").trim().toLowerCase();
+}
+
+function isSkillItem(item) {
+  return item?.type === "skill" || item?.type === "characterSkill";
+}
+
+function isTraitItem(item) {
+  return item?.type === "trait" || item?.type === "characterTrait";
+}
+
+function getSkillRank(item) {
+  const rawRank = Number(item?.system?.rank);
+  if (Number.isFinite(rawRank)) return Math.max(0, Math.floor(rawRank));
+
+  const xp = Number(item?.system?.xp ?? 0) || 0;
+  if (xp < 20) return 0;
+  if (xp < 30) return 1;
+  if (xp < 50) return 2;
+  if (xp < 80) return 3;
+  if (xp < 120) return 4;
+  if (xp < 170) return 5;
+  if (xp < 230) return 6;
+  if (xp < 300) return 7;
+  if (xp < 380) return 8;
+  if (xp < 470) return 9;
+  if (xp < 570) return 10;
+  return 10;
+}
+
+function getInitiativeTacticsRank(actor) {
+  const items = actor?.items?.contents ?? actor?.items ?? [];
+  let bestRank = 0;
+
+  for (const item of items) {
+    if (!isSkillItem(item)) continue;
+    const name = normalizeInitiativeName(item?.name);
+    if (!name) continue;
+    if (name !== "tactics" && !name.startsWith("tactics:") && !name.startsWith("tactics ") && !name.startsWith("tactics-")) continue;
+    bestRank = Math.max(bestRank, getSkillRank(item));
+  }
+
+  return bestRank;
+}
+
+export function getCharacterInitiativeDetails(actor) {
+  const details = {
+    diceFormula: "2d6",
+    bonus: 0,
+    formula: "2d6",
+    label: "Initiative",
+    modifiers: [],
+    combatSense: false,
+    combatParalysis: false,
+    tacticsRank: 0
+  };
+
+  const items = actor?.items?.contents ?? actor?.items ?? [];
+  const hasCombatSense = items.some((item) => isTraitItem(item) && normalizeInitiativeName(item?.name) === "combat sense");
+  const hasCombatParalysis = items.some((item) => isTraitItem(item) && normalizeInitiativeName(item?.name) === "combat paralysis");
+
+  if (hasCombatSense) {
+    details.diceFormula = "3d6kh2";
+    details.combatSense = true;
+    details.modifiers.push("Combat Sense");
+  } else if (hasCombatParalysis) {
+    details.diceFormula = "3d6kl2";
+    details.combatParalysis = true;
+    details.modifiers.push("Combat Paralysis");
+  }
+
+  const tacticsRank = getInitiativeTacticsRank(actor);
+  if (tacticsRank > 0) {
+    details.tacticsRank = tacticsRank;
+    details.bonus += tacticsRank;
+    details.modifiers.push(`Tactics +${tacticsRank}`);
+  }
+
+  details.formula = `${details.diceFormula}${details.bonus > 0 ? ` + ${details.bonus}` : ""}`;
+  details.label = details.modifiers.length ? `Initiative (${details.modifiers.join(", ")})` : "Initiative";
+  return details;
+}
+
+export function getCharacterInitiativeRollFormula(actor) {
+  return getCharacterInitiativeDetails(actor).formula;
+}
+
 function num(value, fallback = 0) {
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
@@ -408,7 +496,8 @@ export function registerCharacterCombatApi(namespace) {
     getMovementModes: getCharacterMovementModes,
     getMovementManeuvers: getCharacterMovementManeuvers,
     getInitiativeModes: getCharacterInitiativeModes,
-    getInitiativeFormula: getCharacterInitiativeFormula,
+    getInitiativeFormula: getCharacterInitiativeRollFormula,
+    getInitiativeDetails: getCharacterInitiativeDetails,
     metersToMovementPoints: metersToCharacterMovementPoints,
     hexesToMovementPoints: hexesToCharacterMovementPoints,
     getMovementModeBudget: getCharacterMovementModeBudget,

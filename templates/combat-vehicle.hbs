@@ -111,6 +111,7 @@
             <h3>Combat Loadout</h3>
 
             <div class="cv-drop-zone" data-drop-zone="combat-vehicle-weapons">
+              <div class="cv-drop-hint">Drop weapons here.</div>
               <div class="cv-we-table">
                 <div class="cv-we-row cv-we-header">
                   <div class="cv-we-col type">Type</div>
@@ -131,6 +132,30 @@
                     </div>
                   </div>
                 {{/each}}
+              </div>
+
+              <div class="cv-ammo-section">
+                <div class="cv-subheading">Ammunition</div>
+                {{#if hasAmmoBins}}
+                  <div class="cv-ammo-table">
+                    <div class="cv-ammo-row cv-ammo-header">
+                      <div class="cv-ammo-col type">Type</div>
+                      <div class="cv-ammo-col cur">Current</div>
+                      <div class="cv-ammo-col tot">Total</div>
+                    </div>
+                    {{#each ammoBins as |bin|}}
+                      <div class="cv-ammo-row" data-ammo-key="{{bin.key}}">
+                        <div class="cv-ammo-col type">{{bin.name}}</div>
+                        <div class="cv-ammo-col cur">
+                          <input name="system.ammoBins.{{bin.key}}.current" type="number" value="{{bin.current}}" min="0" max="{{bin.total}}" />
+                        </div>
+                        <div class="cv-ammo-col tot">{{bin.total}}</div>
+                      </div>
+                    {{/each}}
+                  </div>
+                {{else}}
+                  <div class="cv-ammo-empty">No ammunition loaded.</div>
+                {{/if}}
               </div>
             </div>
           </section>
@@ -185,6 +210,35 @@
           <section class="cv-panel cv-panel-portrait">
             <h3>Profile</h3>
             <img class="cv-portrait" src="{{actor.img}}" data-edit="img" title="{{actor.name}}" />
+          </section>
+
+          <section class="cv-panel cv-panel-equipment">
+            <h3>Equipment Bay</h3>
+
+            <div class="cv-drop-zone cv-equipment-drop-zone" data-drop-zone="combat-vehicle-equipment">
+              <div class="cv-drop-hint">Drop mech equipment or ammunition here.</div>
+
+              <div class="cv-eq-grid">
+                {{#if hasVehicleEquipment}}
+                  {{#each vehicleEquipment as |item|}}
+                    <div class="cv-eq-row {{#if item.isAmmo}}is-ammo{{/if}}" data-item-id="{{item._id}}" data-item-uuid="{{item.itemUuid}}">
+                      <div class="cv-eq-slot"></div>
+                      <div class="cv-eq-main">
+                        <div class="cv-eq-name">{{item.name}}</div>
+                        {{#if item.isAmmo}}
+                          <div class="cv-eq-meta">{{item.ammoName}} / {{item.ammoAmount}} shots</div>
+                        {{else}}
+                          <div class="cv-eq-meta">{{item.type}}</div>
+                        {{/if}}
+                      </div>
+                      <a class="item-delete cv-eq-delete" title="Delete">X</a>
+                    </div>
+                  {{/each}}
+                {{else}}
+                  <div class="cv-eq-empty">No equipment installed.</div>
+                {{/if}}
+              </div>
+            </div>
           </section>
 
           <section class="cv-panel">

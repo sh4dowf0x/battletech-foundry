@@ -2,6 +2,8 @@
 // version: 0.1.4
 // NOTE: This sheet now loads a dedicated stylesheet: systems/atow-battletech/styles/character-sheet.css
 
+import { getCharacterInitiativeDetails } from "./character-combat.js";
+
 const SYSTEM_ID = "atow-battletech";
 // NOTE: v2 sheet uses its own template file.
 const TEMPLATE = `systems/${SYSTEM_ID}/templates/character-sheet.hbs`;
@@ -1476,7 +1478,9 @@ export class ATOWCharacterSheet extends HandlebarsApplicationMixin(ActorSheetV2)
 
     const actor = this.actor;
     const combat = game.combat;
-    const formula = "2d6";
+    const initiative = getCharacterInitiativeDetails(actor);
+    const formula = initiative.formula;
+    const flavor = `${actor.name} | ${initiative.label}`;
 
     if (combat?.isActive) {
       const controlled = canvas?.tokens?.controlled?.find(t => t.actor?.id === actor.id) ?? null;
@@ -1503,7 +1507,7 @@ export class ATOWCharacterSheet extends HandlebarsApplicationMixin(ActorSheetV2)
           formula,
           messageOptions: {
             speaker: ChatMessage.getSpeaker({ actor, token: tokenDoc ?? undefined }),
-            flavor: `${actor.name} | Initiative`
+            flavor
           }
         });
       }
@@ -1514,7 +1518,7 @@ export class ATOWCharacterSheet extends HandlebarsApplicationMixin(ActorSheetV2)
     const roll = await new Roll(formula).evaluate();
     return roll.toMessage({
       speaker: ChatMessage.getSpeaker({ actor }),
-      flavor: `${actor.name} | Initiative`
+      flavor
     });
   }
 

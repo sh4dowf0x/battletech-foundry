@@ -2,7 +2,7 @@
     "id":  "atow-battletech",
     "title":  "BattleTech: A Time of War",
     "description":  "A Foundry VTT system for BattleTech: A Time of War (AToW).",
-    "version":  "0.0.7",
+    "version":  "0.0.8",
     "authors":  [
                     {
                         "name":  "Sh4dowf0x"
@@ -59,6 +59,20 @@
                       "type":  "Item",
                       "name":  "character-creation",
                       "path":  "packs/character-creation",
+                      "system":  "atow-battletech",
+                      "ownership":  {
+                                        "PLAYER":  "OBSERVER",
+                                        "ASSISTANT":  "OWNER"
+                                    },
+                      "flags":  {
+
+                                }
+                  },
+                  {
+                      "label":  "Character Equipment",
+                      "type":  "Item",
+                      "name":  "character-equipment",
+                      "path":  "packs/character-equipment",
                       "system":  "atow-battletech",
                       "ownership":  {
                                         "PLAYER":  "OBSERVER",

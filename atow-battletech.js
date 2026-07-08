@@ -1,5 +1,5 @@
 // atow-battletech.js (ROOT)
-// version 0.0.7
+// version 0.0.8
 
 import { ATOWCharacterSheet } from "./module/character-sheet.js";
 import { ATOWAbominationSheet } from "./module/abomination-sheet.js";
@@ -11,7 +11,7 @@ import { AToWMechWeaponSheet} from "./module/mech-weapon.js";
 import { ATOWCombatVehicleSheet } from "./module/combat-vehicle.js";
 import { ATOWDropshipSheet } from "./module/dropship-sheet.js";
 import { ATOWCompanySheet } from "./module/company-sheet.js";
-import { registerCharacterCombatApi } from "./module/character-combat.js";
+import { getCharacterInitiativeDetails, registerCharacterCombatApi } from "./module/character-combat.js";
 
 import { AToWMechEquipmentSheet } from "./module/mech-equipment.js";
 import { registerATOWCharacterWeaponSheet } from "./module/character-weapon.js";
@@ -85,6 +85,38 @@ Hooks.once("init", async () => {
   CONFIG.Combat.initiative = CONFIG.Combat.initiative ?? { decimals: 0, formula: null };
   CONFIG.Combat.initiative.decimals = 0;
   CONFIG.Combat.initiative.formula = "2d6";
+
+  const patchCombatInitiativeRoll = () => {
+    const proto = Combat?.prototype;
+    if (!proto || proto._atowInitiativePatched) return;
+    const original = proto.rollInitiative;
+    if (typeof original !== "function") return;
+
+    proto.rollInitiative = async function (combatantIds, options = {}) {
+      const ids = Array.isArray(combatantIds) ? combatantIds : [combatantIds];
+      if (ids.length === 1) {
+        const combatantId = ids[0];
+        const combatant = this.combatants?.get?.(combatantId) ?? this.combatants?.find?.((c) => c.id === combatantId) ?? null;
+        const actor = combatant?.actor ?? null;
+        const initiative = getCharacterInitiativeDetails(actor);
+
+        const nextOptions = { ...(options ?? {}) };
+        if (!nextOptions.formula) nextOptions.formula = initiative.formula;
+        nextOptions.messageOptions = {
+          ...(nextOptions.messageOptions ?? {}),
+          flavor: nextOptions.messageOptions?.flavor ?? `${actor?.name ?? "Combatant"} | ${initiative.label}`
+        };
+
+        return original.call(this, combatantId, nextOptions);
+      }
+
+      return original.call(this, combatantIds, options);
+    };
+
+    proto._atowInitiativePatched = true;
+  };
+
+  patchCombatInitiativeRoll();
 
 
 

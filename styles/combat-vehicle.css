@@ -517,6 +517,149 @@
   color: #fff2e6;
 }
 
+.combat-vehicle-sheet .cv-equipment-drop-zone {
+  min-height: 154px;
+}
+
+.combat-vehicle-sheet .cv-eq-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 6px;
+}
+
+.combat-vehicle-sheet .cv-eq-row {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) 22px;
+  gap: 7px;
+  align-items: center;
+  min-height: 34px;
+  padding: 5px 6px;
+  border: 1px solid rgba(201, 220, 231, 0.12);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.combat-vehicle-sheet .cv-eq-row.is-ammo {
+  border-color: rgba(105, 170, 220, 0.28);
+  background: rgba(65, 130, 190, 0.08);
+}
+
+.combat-vehicle-sheet .cv-eq-slot {
+  width: 22px;
+  height: 22px;
+  border: 1px solid rgba(223, 123, 62, 0.34);
+  border-radius: 6px;
+  background: rgba(7, 10, 14, 0.45);
+  box-shadow: inset 3px 0 0 rgba(223, 123, 62, 0.42);
+}
+
+.combat-vehicle-sheet .cv-eq-row.is-ammo .cv-eq-slot {
+  border-color: rgba(105, 170, 220, 0.4);
+  box-shadow: inset 3px 0 0 rgba(105, 170, 220, 0.66);
+}
+
+.combat-vehicle-sheet .cv-eq-main {
+  min-width: 0;
+}
+
+.combat-vehicle-sheet .cv-eq-name,
+.combat-vehicle-sheet .cv-eq-meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.combat-vehicle-sheet .cv-eq-name {
+  color: var(--cv-text);
+  font-size: 0.75rem;
+  font-weight: 800;
+}
+
+.combat-vehicle-sheet .cv-eq-meta {
+  margin-top: 1px;
+  color: var(--cv-muted);
+  font-size: 0.66rem;
+  text-transform: uppercase;
+}
+
+.combat-vehicle-sheet .cv-eq-delete {
+  display: grid;
+  place-items: center;
+}
+
+.combat-vehicle-sheet .cv-eq-empty {
+  display: grid;
+  place-items: center;
+  min-height: 68px;
+  border: 1px dashed rgba(201, 220, 231, 0.16);
+  border-radius: 8px;
+  color: var(--cv-muted);
+  font-size: 0.72rem;
+}
+
+.combat-vehicle-sheet .cv-ammo-section {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(201, 220, 231, 0.12);
+}
+
+.combat-vehicle-sheet .cv-subheading {
+  margin-bottom: 6px;
+  color: var(--cv-muted);
+  font-size: 0.68rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.combat-vehicle-sheet .cv-ammo-table {
+  display: grid;
+  gap: 2px;
+}
+
+.combat-vehicle-sheet .cv-ammo-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 70px 54px;
+  gap: 6px;
+  align-items: center;
+  min-height: 28px;
+  padding: 4px 5px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  font-size: 0.72rem;
+}
+
+.combat-vehicle-sheet .cv-ammo-header {
+  min-height: 24px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--cv-muted);
+  font-size: 0.68rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.combat-vehicle-sheet .cv-ammo-col.type {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.combat-vehicle-sheet .cv-ammo-col.cur input {
+  height: 22px;
+}
+
+.combat-vehicle-sheet .cv-ammo-col.tot {
+  text-align: center;
+  font-weight: 800;
+}
+
+.combat-vehicle-sheet .cv-ammo-empty {
+  padding: 7px 8px;
+  border: 1px dashed rgba(201, 220, 231, 0.14);
+  border-radius: 10px;
+  color: var(--cv-muted);
+  font-size: 0.72rem;
+}
+
 .combat-vehicle-sheet .cv-panel-portrait,
 .combat-vehicle-sheet .cv-panel-crit-grid {
   flex: 1 1 auto;
