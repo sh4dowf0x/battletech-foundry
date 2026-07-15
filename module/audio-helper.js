@@ -17,6 +17,7 @@ export const ATOW_AUDIO_CUES = {
   powerRestored: `systems/${SYSTEM_ID}/assets/sounds/status-power-restored.ogg`,
   shuttingDown: `systems/${SYSTEM_ID}/assets/sounds/status-shutting-down.ogg`,
   systemsNominal: `systems/${SYSTEM_ID}/assets/sounds/status-systems-nominal.ogg`,
+  weaponJammed: `systems/${SYSTEM_ID}/assets/sounds/status-weapon-jammed.ogg`,
   weaponDestroyed: `systems/${SYSTEM_ID}/assets/sounds/status-weapon-destroyed.ogg`,
   targetDestroyed: `systems/${SYSTEM_ID}/assets/sounds/target-destroyed.ogg`
 };

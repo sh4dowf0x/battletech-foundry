@@ -2,7 +2,7 @@
     "id":  "atow-battletech",
     "title":  "BattleTech: A Time of War",
     "description":  "A Foundry VTT system for BattleTech: A Time of War (AToW).",
-    "version":  "0.0.9",
+    "version":  "0.0.10",
     "authors":  [
                     {
                         "name":  "Sh4dowf0x"

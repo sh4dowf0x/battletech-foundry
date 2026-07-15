@@ -49,7 +49,8 @@ export class AToWMechWeaponSheet extends HandlebarsApplicationMixin(ItemSheetV2)
     system.notes ??= "";
     system.dmgType ??= "DE";
 
-    system.critSlots = Math.max(1, Math.floor(toNumber(system.critSlots, 1)));
+    const isDerivedMeleeWeapon = ["hatchet", "sword"].includes(String(item.name ?? "").trim().toLowerCase());
+    system.critSlots = Math.max(isDerivedMeleeWeapon ? 0 : 1, Math.floor(toNumber(system.critSlots, isDerivedMeleeWeapon ? 0 : 1)));
     system.tonnage = Math.max(0, toNumber(system.tonnage ?? system.tons ?? system.weight, 0));
     system.heat = Math.max(0, toNumber(system.heat, 0));
     system.damage = Math.max(0, toNumber(system.damage, 0));

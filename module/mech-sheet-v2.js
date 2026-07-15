@@ -1,7 +1,7 @@
 // systems/atow-battletech/mech-sheet.js
 // lets fix ferro fibrous armor
 
-import { promptAndRollWeaponAttack, promptAndRollMeleeAttack, resolveAmmoExplosionEvent, rollHitLocation, applyMechDamageCluster, applyMechPilotHit, resolvePilotSeatbeltCheck } from "./mech-attack.js";
+import { promptAndRollWeaponAttack, promptAndRollMeleeAttack, resolveAmmoExplosionEvent, rollHitLocation, applyMechDamageCluster, applyMechPilotHit, resolvePilotSeatbeltCheck, syncNarcPodsForDestroyedLocations, getHatchetProfile, getSwordProfile, getRotaryACProfile } from "./mech-attack.js";
 import { ATOW_AUDIO_CUES, ATOW_AUDIO_EFFECTS, enqueueActorAudioCues, playActorMechExplosionEffect, playActorPowerRestoredAnnouncement, playActorShutdownAnnouncement } from "./audio-helper.js";
 
 const SYSTEM_ID = "atow-battletech";
@@ -695,7 +695,7 @@ async function collectInstalledCritSlotTonnage(actor) {
     }
 
     // Weapons are tracked separately (autoWeapons). Some weapon-like items are stored as equipment.
-    if (_WEAPON_TYPES.has(docType) || _looksLikeWeaponLabel(label) || _looksLikeWeaponLabel(name)) continue;
+    if (_isWeaponItemType(docType) || _looksLikeWeaponLabel(label) || _looksLikeWeaponLabel(name)) continue;
 
     // Heat sinks are tracked separately
     if (isHeatSinkItemName(name) || isHeatSinkItemName(label)) continue;
@@ -772,6 +772,20 @@ function _ammoKeyFromType(typeText) {
   const isCluster = /\bcluster\b/i.test(t);
   let m;
 
+  // LRM/SRM special munitions retain their rack size and variant so the attack
+  // dialog can offer each installed bin independently.
+  m = t.match(/\b(lrm|mml|srm)\b[^\d]*(\d+)\b/i) ?? t.match(/\b(lrm|mml|srm)\s*[-/]?\s*(\d+)\b/i);
+  if (m?.[1] && m?.[2]) {
+    let variant = "";
+    if (/\bartemis[\s-]*(?:v|5)\b/i.test(t)) variant = "artemis-v";
+    else if (/\bartemis[\s-]*(?:iv|4)\b/i.test(t)) variant = "artemis-iv";
+    else if (/\bfragmentation\b/i.test(t)) variant = "fragmentation";
+    else if (/\binferno\b/i.test(t)) variant = "inferno";
+    else if (/\bsemi[ -]?guided\b/i.test(t)) variant = "semi-guided";
+    else if (/\bnarc(?:[ -]?equipped)?\b/i.test(t)) variant = "narc";
+    return _slugifyKey(`${m[1]}-${m[2]}${variant ? `-${variant}` : ""}`);
+  }
+
   // LB-X Autocannon ammo (various label styles):
   // - "LB 10-X AC"
   // - "LB10-X AC"
@@ -810,6 +824,8 @@ function _ammoKeyFromType(typeText) {
 
   // Arrow IV homing artillery ammunition
   if (/\barrow\s*iv\b/i.test(t) && /\bhoming\b/i.test(t)) return "arrow-iv-homing";
+
+  if (t === "narc" || /\bnarc\s+(missile\s+)?(beacon\s+)?pods?\b/i.test(t)) return "narc";
 
   return null;
 }
@@ -871,7 +887,23 @@ function buildAmmoBinsFromCritSlots(actorSystem) {
 // ------------------------------------------------------------
 // Auto Weapons (derived from installed crit-slot items)
 // ------------------------------------------------------------
-const _WEAPON_TYPES = new Set(["weapon", "mechWeapon"]);
+// Item type comparisons are normalized because Foundry's canonical type is
+// "mechWeapon" while several collection paths lower-case it first.
+const _WEAPON_TYPES = new Set(["weapon", "mechweapon"]);
+
+function _isWeaponItemType(type) {
+  return _WEAPON_TYPES.has(String(type ?? "").trim().toLowerCase());
+}
+
+function _isCanonicalHatchet(itemOrName) {
+  const name = typeof itemOrName === "string" ? itemOrName : (itemOrName?.name ?? "");
+  return String(name).trim().toLowerCase() === "hatchet";
+}
+
+function _isCanonicalSword(itemOrName) {
+  const name = typeof itemOrName === "string" ? itemOrName : (itemOrName?.name ?? "");
+  return String(name).trim().toLowerCase() === "sword";
+}
 
 function _looksLikeAmmoLabel(label) {
   const s = String(label ?? "").trim();
@@ -883,6 +915,8 @@ function _looksLikeWeaponLabel(label) {
   const s = String(label);
   if (_looksLikeAmmoLabel(s)) return false;
 
+  if (/^\s*narc\s+missile\s+beacon\s*$/i.test(s)) return true;
+  if (/^\s*(?:hatchet|sword)\s*$/i.test(s)) return true;
   if (/^\s*arrow\s*iv\s*system(?:\s*\(c\))?\s*$/i.test(s)) return true;
   if (/^\s*ams\s*$/i.test(s) || /\banti\s*-?\s*missile\s+system\b/i.test(s)) return true;
   if (/\batm\b[^\d]*(3|6|9|12)\b/i.test(s) || /\badvanced\s+tactical\s+missiles?\b[^\d]*(3|6|9|12)\b/i.test(s)) return true;
@@ -895,7 +929,7 @@ function _looksLikeWeaponLabel(label) {
   if (/\blb\s*\d+\s*-\s*x\s*ac\b/i.test(s)) return true;
   if (/\blbx\b[^\d]*(\d+)\b/i.test(s)) return true;
 
-  return /(laser|ppc|\bac\s*\/?\s*\d+\b|\blrm\s*\d+\b|\bmrm\s*\d+\b|\bsrm\s*\d+\b|\batm\b[^\d]*\d+\b|advanced\s+tactical\s+missile|gauss|\bmg\b|machine gun|flamer|autocannon|rifle|plasma|pulse|artillery)/i.test(s);
+  return /(laser|ppc|\bac\s*\/?\s*\d+\b|\blrm\s*\d+\b|\bmml\s*\d+\b|\bmrm\s*\d+\b|\bsrm\s*\d+\b|\batm\b[^\d]*\d+\b|advanced\s+tactical\s+missile|gauss|\bmg\b|machine gun|flamer|autocannon|rifle|plasma|pulse|artillery)/i.test(s);
 }
 
 function _critLocAbbr(locKey) {
@@ -987,7 +1021,7 @@ async function buildAutoWeaponsFromCritSlots(actor) {
     // Determine weapon-ness
     const isAmmo = _looksLikeAmmoLabel(c.label) || _looksLikeAmmoLabel(doc?.name);
     const isWeapon = !isAmmo && (doc
-      ? (_WEAPON_TYPES.has(doc.type) || _looksLikeWeaponLabel(doc.name) || _looksLikeWeaponLabel(c.label))
+      ? (_isWeaponItemType(doc.type) || _looksLikeWeaponLabel(doc.name) || _looksLikeWeaponLabel(c.label))
       : _looksLikeWeaponLabel(c.label));
     if (!isWeapon) continue;
 
@@ -1004,6 +1038,28 @@ async function buildAutoWeaponsFromCritSlots(actor) {
     o.destroyed = Boolean(c.destroyed);
 
     o.system = o.system ?? {};
+    if (_isCanonicalHatchet(o)) {
+      const profile = getHatchetProfile(actor);
+      o.system.damage = profile.damage;
+      o.system.tonnage = profile.tonnage;
+      o.system.critSlots = profile.critSlots;
+      o.system.hatchetProfile = profile;
+    }
+    if (_isCanonicalSword(o)) {
+      const profile = getSwordProfile(actor);
+      o.system.damage = profile.damage;
+      o.system.tonnage = profile.tonnage;
+      o.system.critSlots = profile.critSlots;
+      o.system.swordProfile = profile;
+    }
+    const rotaryProfile = getRotaryACProfile(o);
+    if (rotaryProfile) {
+      o.system.damage = rotaryProfile.damage;
+      o.system.heat = rotaryProfile.heat;
+      o.system.rapidFire = rotaryProfile.rapidFire;
+      o.system.ammoKey = rotaryProfile.ammoKey;
+      o.system.rotaryACProfile = rotaryProfile;
+    }
     // Display-only mount location. (We don't persist this onto the source item.)
     o.system.loc = `${_critLocAbbr(c.locKey)}${o.rearMounted ? " (R)" : ""}`;
 
@@ -2596,6 +2652,9 @@ function _ammoExplosionDamageForType(typeText) {
   // Anti-Missile System
   if (t === "ams" || /\banti\s*-?\s*missile\s+system\b/i.test(t)) return 48;
 
+  // The caller supplies the remaining pod count for Narc bins.
+  if (t === "narc" || /\bnarc\s+(missile\s+)?(beacon\s+)?pods?\b/i.test(t)) return 2;
+
   // Advanced Tactical Missile ammo. Raw explosion value is intentionally high enough
   // to trip the modern 20-point cap while still recording the ammo as explosive.
   if (/\batm\s*[-/]?\s*(3|6|9|12)\b/i.test(t)) return 100;
@@ -2617,6 +2676,10 @@ function _ammoExplosionDamageForType(typeText) {
   // MRM
   m = t.match(/\bmrm\s*-?\s*(\d+)\b/i);
   if (m?.[1]) return 120;
+
+  // Multi-Missile Launcher ammunition
+  m = t.match(/\bmml\s*-?\s*(3|5|7|9)\b/i);
+  if (m?.[1]) return 100;
 
   // SRM
   m = t.match(/\bsrm\s*-?\s*(\d+)\b/i);
@@ -2860,12 +2923,16 @@ async function _processAmmoExplosionQueue(actor) {
         break;
       }
 
-      const { locKey, label, typeText, reason } = job;
+      const { locKey, label, typeText, reason, shots } = job;
 
       // Play SFX once per explosion event
       playAtowSfx(AMMO_EXPLOSION_SFX, { volume: 1.0 });
 
-      const rawDmg = _ammoExplosionDamageForType(typeText);
+      const perPodOrBinDamage = _ammoExplosionDamageForType(typeText);
+      const isNarcAmmo = String(job?.key ?? "").toLowerCase() === "narc" ||
+        /\bnarc\b/i.test(String(typeText ?? ""));
+      const remainingPods = Number(actor.system?.ammoBins?.[job?.key]?.current ?? shots ?? 0);
+      const rawDmg = isNarcAmmo ? (perPodOrBinDamage * Math.max(0, remainingPods)) : perPodOrBinDamage;
       if (!rawDmg) continue;
       const caseProtected = isLocationProtectedByCASE(actor, locKey);
       const caseIIProtected = hasCaseIIProtection(actor, locKey);
@@ -3417,6 +3484,10 @@ Hooks.on("updateActor", async (actor, changed, options) => {
     for (const locKey of becameDestroyed) {
       await applyStructureLocationDestruction(actor, locKey);
     }
+
+    // A Narc pod is destroyed with the structure location to which it attached.
+    // The GM performs the shared ActiveEffect update so all clients see it vanish.
+    if (game.user?.isGM) await syncNarcPodsForDestroyedLocations(actor);
 
     _atowLocDestroyState.set(actor.id, now);
   } catch (err) {
@@ -4326,8 +4397,8 @@ function _classifyCritLabel(label) {
     return { category: "case", iconClass: "fas fa-shield-alt" };
   }
 
-  // Artemis IV FCS
-  if (t === "artemis iv fcs" || t === "artemis 4 fcs" || t.includes("artemis iv fcs") || t.includes("artemis 4 fcs")) {
+  // Artemis IV/V FCS
+  if (/\bartemis\s*(?:iv|v|4|5)\s*fcs\b/i.test(t)) {
     return { category: "artemis", iconClass: "fas fa-crosshairs" };
   }
 
@@ -4352,7 +4423,7 @@ function _classifyCritLabel(label) {
   // Weapon-ish keywords (best-effort; we don't want to async resolve fromUuid for every slot)
   if (
     // Include LB-X autocannon label styles (e.g., "LB 10-X AC") so they don't fall into "system/other".
-    /(laser|ppc|ac\s*\/?\s*\d+|lrm\s*\d+|mrm\s*\d+|srm\s*\d+|\batm\s*[-/]?\s*\d+\b|\blb\s*\d+\s*-\s*x\s*ac\b|\blbx\b|gauss|mg\b|machine gun|flamer|autocannon|rifle|plasma|pulse|anti-missile|\bams\b)/i.test(label)
+    /(hatchet|sword|narc\s+missile\s+beacon|laser|ppc|ac\s*\/?\s*\d+|lrm\s*\d+|mml\s*\d+|mrm\s*\d+|srm\s*\d+|\batm\s*[-/]?\s*\d+\b|\blb\s*\d+\s*-\s*x\s*ac\b|\blbx\b|gauss|mg\b|machine gun|flamer|autocannon|rifle|plasma|pulse|anti-missile|\bams\b)/i.test(label)
   ) {
     return { category: "weapon", iconClass: "fas fa-crosshairs" };
   }
@@ -4712,7 +4783,7 @@ engineSinksRemoved: Math.max(0, (Number(engineMountedSinksAuto) || 0) - (Number(
       if (!t) return false;
       if (/\bammo\b/i.test(t)) return false;
       if (/\bstreak\s*srm\b/i.test(t)) return false;
-      return /\b(lrm|srm)\s*[-]?\s*(\d+)\b/i.test(t);
+      return /\b(lrm|mml|srm)\s*[-]?\s*(\d+)\b/i.test(t);
     };
 
     const artemisByLoc = {};
@@ -5274,7 +5345,12 @@ if (zone === "crit") {
   if (!loc || Number.isNaN(index)) return;
 
   const droppedName = String(dropped?.name ?? "").trim();
-  const isArtemis = /^artemis\s*iv\s*fcs$/i.test(droppedName);
+  const isHatchet = _isCanonicalHatchet(droppedName);
+  const isSword = _isCanonicalSword(droppedName);
+  const artemisMatch = droppedName.match(/^artemis\s*(iv|v|4|5)\s*fcs$/i);
+  const isArtemis = Boolean(artemisMatch);
+  const artemisVersion = /^(?:v|5)$/i.test(String(artemisMatch?.[1] ?? "")) ? "V" : "IV";
+  const artemisLabelRe = artemisVersion === "V" ? /^artemis\s*(?:v|5)\s*fcs$/i : /^artemis\s*(?:iv|4)\s*fcs$/i;
   const isTSM = _TSM_LABEL_RE.test(droppedName);
   const isMASC = _MASC_LABEL_RE.test(droppedName);
 
@@ -5302,11 +5378,16 @@ if (zone === "crit") {
     return n;
   };
 
-  const launcherCount = _countStartSlotsInLoc((lbl) => /\b(lrm|srm)\s*[-]?\s*\d+\b/i.test(lbl) && !/\bstreak\s*srm\b/i.test(lbl) && !/\bammo\b/i.test(lbl));
-  const artemisCount = _countStartSlotsInLoc((lbl) => /^artemis\s*iv\s*fcs$/i.test(lbl));
+  const launcherCount = _countStartSlotsInLoc((lbl) => {
+    const match = String(lbl ?? "").match(/\b(lrm|mml|srm)\s*[-]?\s*\d+\b/i);
+    if (!match || /\bstreak\s*srm\b/i.test(lbl) || /\bammo\b/i.test(lbl)) return false;
+    return artemisVersion !== "V" || String(match[1]).toUpperCase() !== "MML";
+  });
+  const artemisCount = _countStartSlotsInLoc((lbl) => artemisLabelRe.test(lbl));
 
   if (isArtemis && launcherCount <= 0) {
-    ui?.notifications?.warn?.("Artemis IV FCS must be installed in the same location as an LRM/SRM launcher.");
+    const compatibleLaunchers = artemisVersion === "V" ? "LRM/SRM" : "LRM/MML/SRM";
+    ui?.notifications?.warn?.(`Artemis ${artemisVersion} FCS must be installed in the same location as a compatible ${compatibleLaunchers} launcher.`);
     return;
   }
 
@@ -5314,11 +5395,11 @@ if (zone === "crit") {
   const storedHere = this.actor.system?.crit?.[loc]?.slots?.[index] ?? {};
   const startIndexCandidate = (storedHere?.partOf !== undefined && storedHere.partOf !== null) ? Number(storedHere.partOf) : index;
   const startSlot = this.actor.system?.crit?.[loc]?.slots?.[startIndexCandidate] ?? {};
-  const replacingArtemis = /^artemis\s*iv\s*fcs$/i.test(String(startSlot?.label ?? "").trim());
+  const replacingArtemis = artemisLabelRe.test(String(startSlot?.label ?? "").trim());
   const projectedArtemis = isArtemis ? (artemisCount + (replacingArtemis ? 0 : 1)) : artemisCount;
 
   if (isArtemis && projectedArtemis > launcherCount) {
-    ui?.notifications?.warn?.("This location already has enough Artemis IV FCS units for its missile launchers.");
+    ui?.notifications?.warn?.(`This location already has enough Artemis ${artemisVersion} FCS units for its missile launchers.`);
     return;
   }
 
@@ -5331,6 +5412,8 @@ if (zone === "crit") {
   );
   if (isArtemis) requested = 1;
   if (isTSM) requested = 1; // TSM is installed as six separate 1-slot components, distributed anywhere.
+  if (isHatchet) requested = getHatchetProfile(this.actor).critSlots;
+  if (isSword) requested = getSwordProfile(this.actor).critSlots;
 
   // TSM and MASC are mutually exclusive.
   if (isTSM) {
@@ -5405,7 +5488,7 @@ if (zone === "crit") {
   // Weapons should be installed via crit slots (they will auto-appear in the list).
   if (dropped.parent?.id === this.actor.id) return;
 
-  if (_WEAPON_TYPES.has(dropped.type) || _looksLikeWeaponLabel(dropped.name)) {
+  if (_isWeaponItemType(dropped.type) || _looksLikeWeaponLabel(dropped.name)) {
     ui.notifications?.info?.("Install weapons by dragging them into a crit slot.");
     return;
   }
@@ -5820,7 +5903,7 @@ if (Object.keys(updates).length) {
     if (uuid) {
       const weapon = await fromUuid(uuid);
       if (!weapon) return;
-      if (!_WEAPON_TYPES.has(weapon.type)) return;
+      if (!_isWeaponItemType(weapon.type) && !_looksLikeWeaponLabel(weapon.name)) return;
       await promptAndRollWeaponAttack(this.actor, weapon, { defaultSide: "front", weaponFireKey, weaponMountLoc, weaponRearMounted });
       return;
     }
@@ -5828,7 +5911,7 @@ if (Object.keys(updates).length) {
     if (!itemId) return;
     const weapon = this.actor.items.get(itemId);
     if (!weapon) return;
-    if (!_WEAPON_TYPES.has(weapon.type)) return;
+    if (!_isWeaponItemType(weapon.type) && !_looksLikeWeaponLabel(weapon.name)) return;
     await promptAndRollWeaponAttack(this.actor, weapon, { defaultSide: "front", weaponFireKey, weaponMountLoc, weaponRearMounted });
   }
 

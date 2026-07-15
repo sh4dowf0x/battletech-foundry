@@ -8,6 +8,7 @@ import { enqueueActorAudioCues } from "./audio-helper.js";
 const SYSTEM_ID = "atow-battletech";// ------------------------------------------------------------
 const VEHICLE_ATTACK_TEMPLATE = `systems/${SYSTEM_ID}/templates/vehicle-attack.hbs`;
 const TAGGED_STATUS_ID = "tagged";
+const NARC_STATUS_ID = "narc";
 const ARROW_IV_INDIRECT_FLAG = "arrowIVIndirectStrikes";
 const ARROW_IV_INDIRECT_MIN_HEXES = 17;
 const ARROW_IV_LAUNCH_VFX = "jb2a.smoke.puff.side.grey";
@@ -337,6 +338,13 @@ async function _gmApplyActorStatus(actorUuid, statusId, active = true) {
   return applyActorStatus(targetActor, statusId, active);
 }
 
+async function _gmAddHeatToActor(actorUuid, amount) {
+  const targetActor = await _resolveActorFromUuid(actorUuid);
+  if (!targetActor) return { ok: false, reason: "No target actor" };
+  await addHeatToActor(targetActor, amount);
+  return { ok: true, amount: Math.max(0, Number(amount ?? 0) || 0) };
+}
+
 async function _gmScheduleArrowIVIndirectStrike(sceneUuid, strikeData = {}) {
   const scene = await _resolveSceneFromUuid(sceneUuid);
   if (!scene?.setFlag) return { ok: false, reason: "No scene" };
@@ -350,6 +358,11 @@ async function _gmScheduleArrowIVIndirectStrike(sceneUuid, strikeData = {}) {
 function isTAGWeapon(item) {
   const name = String(item?.name ?? item?.system?.name ?? "").trim().toLowerCase();
   return name === "tag";
+}
+
+function isNarcMissileBeaconWeapon(item) {
+  const name = String(item?.name ?? item?.system?.name ?? "").trim().toLowerCase();
+  return name === "narc missile beacon";
 }
 
 function isAMSWeapon(item) {
@@ -460,6 +473,115 @@ async function applyTaggedToTargetActorAuto(targetActor, source = {}) {
   return socket.executeAsGM("gmApplyTaggedToTargetActor", targetActor.uuid, source);
 }
 
+function _effectHasStatus(effect, statusId) {
+  const sid = (effect?.getFlag?.("core", "statusId") ?? effect?.flags?.core?.statusId) ?? null;
+  if (sid === statusId) return true;
+  if (effect?.statuses?.has?.(statusId)) return true;
+  return Array.isArray(effect?.statuses) && effect.statuses.includes(statusId);
+}
+
+function _narcEffectForActor(actor) {
+  return Array.from(actor?.effects ?? []).find(effect => !effect?.disabled && _effectHasStatus(effect, NARC_STATUS_ID)) ?? null;
+}
+
+function _normalizeNarcPods(raw) {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map(pod => ({ ...pod, loc: String(pod?.loc ?? "").trim().toLowerCase() }))
+    .filter(pod => Boolean(pod.loc));
+}
+
+function buildNarcEffectData(source = {}) {
+  const def = getStatusDefinition(NARC_STATUS_ID);
+  const loc = String(source.loc ?? "").trim().toLowerCase();
+  return {
+    name: def?.name ?? def?.label ?? "Narc'd",
+    icon: def?.icon ?? `systems/${SYSTEM_ID}/assets/status/tagged.svg`,
+    disabled: false,
+    statuses: [NARC_STATUS_ID],
+    flags: {
+      core: { statusId: NARC_STATUS_ID },
+      [SYSTEM_ID]: {
+        narcPods: [{
+          loc,
+          attackerActorUuid: source.attackerActorUuid ?? null,
+          attackerTokenUuid: source.attackerTokenUuid ?? null,
+          appliedRound: game.combat?.started ? game.combat.round : null,
+          appliedTurn: game.combat?.started ? game.combat.turn : null
+        }]
+      }
+    }
+  };
+}
+
+async function applyNarcToTargetActor(targetActor, source = {}) {
+  if (!targetActor) return { ok: false, reason: "No target actor" };
+  if (!isMechActor(targetActor)) return { ok: false, reason: "Narc pods can only attach to a BattleMech" };
+  if (!game.user?.isGM && !targetActor.isOwner) return { ok: false, reason: "No permission to update target" };
+
+  const loc = _normalizeDamageLocation(targetActor, source.loc);
+  if (!loc) return { ok: false, reason: "No valid hit location" };
+  const effectData = buildNarcEffectData({ ...source, loc });
+  const matches = Array.from(targetActor.effects ?? []).filter(effect => _effectHasStatus(effect, NARC_STATUS_ID));
+
+  if (matches.length) {
+    const keep = matches.find(effect => !effect.disabled) ?? matches[0];
+    const existingPods = _normalizeNarcPods(keep.getFlag?.(SYSTEM_ID, "narcPods") ?? keep.flags?.[SYSTEM_ID]?.narcPods);
+    const nextPod = effectData.flags[SYSTEM_ID].narcPods[0];
+    // One entry per location is enough to preserve the rules-relevant state. A
+    // later hit to the same location refreshes its source metadata.
+    const pods = [...existingPods.filter(pod => pod.loc !== loc), nextPod];
+    await keep.update({
+      disabled: false,
+      statuses: [NARC_STATUS_ID],
+      [`flags.${SYSTEM_ID}.narcPods`]: pods
+    });
+    for (const effect of matches) {
+      if (effect.id !== keep.id) await effect.delete().catch(() => {});
+    }
+    return { ok: true, effectId: keep.id, refreshed: true, loc, pods };
+  }
+
+  const created = await targetActor.createEmbeddedDocuments("ActiveEffect", [effectData]);
+  return { ok: true, effectId: created?.[0]?.id ?? null, refreshed: false, loc, pods: effectData.flags[SYSTEM_ID].narcPods };
+}
+
+async function _gmApplyNarcToTargetActor(actorUuid, source = {}) {
+  const targetActor = await _resolveActorFromUuid(actorUuid);
+  return targetActor ? applyNarcToTargetActor(targetActor, source) : { ok: false, reason: "No target actor" };
+}
+
+async function applyNarcToTargetActorAuto(targetActor, source = {}) {
+  if (!targetActor) return { ok: false, reason: "No target actor" };
+  if (game.user?.isGM || targetActor.isOwner) return applyNarcToTargetActor(targetActor, source);
+  const socket = getATOWSocket();
+  if (!socket) return { ok: false, reason: "AToW socket is not ready" };
+  return socket.executeAsGM("gmApplyNarcToTargetActor", targetActor.uuid, source);
+}
+
+/** Remove attached Narc pods whose recorded structure location has been destroyed. */
+export async function syncNarcPodsForDestroyedLocations(actor) {
+  if (!actor || (!game.user?.isGM && !actor.isOwner)) return { ok: false, reason: "No permission" };
+  const effect = _narcEffectForActor(actor);
+  if (!effect) return { ok: true, changed: false, pods: [] };
+  const pods = _normalizeNarcPods(effect.getFlag?.(SYSTEM_ID, "narcPods") ?? effect.flags?.[SYSTEM_ID]?.narcPods);
+  // A manually toggled Narc status has no location metadata; leave it under GM control.
+  if (!pods.length) return { ok: true, changed: false, pods: [] };
+  const remaining = pods.filter(pod => {
+    const node = actor.system?.structure?.[pod.loc];
+    const max = Number(node?.max ?? 0);
+    const dmg = Number(node?.dmg ?? 0);
+    return !(max > 0 && dmg >= max);
+  });
+  if (remaining.length === pods.length) return { ok: true, changed: false, pods: remaining };
+  if (!remaining.length) {
+    await effect.delete();
+    return { ok: true, changed: true, removed: true, pods: [] };
+  }
+  await effect.update({ [`flags.${SYSTEM_ID}.narcPods`]: remaining });
+  return { ok: true, changed: true, pods: remaining };
+}
+
 async function applyActorStatus(targetActor, statusId, active = true) {
   if (!targetActor || !statusId) return { ok: false, reason: "No target actor or status" };
   if (!game.user?.isGM && !targetActor.isOwner) return { ok: false, reason: "No permission to update target status" };
@@ -506,6 +628,17 @@ async function applyActorStatusAuto(targetActor, statusId, active = true) {
   const socket = getATOWSocket();
   if (!socket) return { ok: false, reason: "AToW socket is not ready" };
   return socket.executeAsGM("gmApplyActorStatus", targetActor.uuid, statusId, active);
+}
+
+async function addHeatToActorAuto(targetActor, amount) {
+  if (!targetActor) return { ok: false, reason: "No target actor" };
+  if (game.user?.isGM || targetActor.isOwner) {
+    await addHeatToActor(targetActor, amount);
+    return { ok: true, amount: Math.max(0, Number(amount ?? 0) || 0) };
+  }
+  const socket = getATOWSocket();
+  if (!socket) return { ok: false, reason: "AToW socket is not ready" };
+  return socket.executeAsGM("gmAddHeatToActor", targetActor.uuid, amount);
 }
 
 async function applyDamageToTargetActorAuto(targetActor, hitLoc, damage, opts = {}) {
@@ -563,7 +696,9 @@ export function registerATOWAttackSockets() {
   if (!socket.functions?.has?.("gmApplyDamageToAbominationActor")) socket.register("gmApplyDamageToAbominationActor", _gmApplyDamageToAbominationActor);
   if (!socket.functions?.has?.("gmResolveAmmoExplosionEvent")) socket.register("gmResolveAmmoExplosionEvent", _gmResolveAmmoExplosionEvent);
   if (!socket.functions?.has?.("gmApplyTaggedToTargetActor")) socket.register("gmApplyTaggedToTargetActor", _gmApplyTaggedToTargetActor);
+  if (!socket.functions?.has?.("gmApplyNarcToTargetActor")) socket.register("gmApplyNarcToTargetActor", _gmApplyNarcToTargetActor);
   if (!socket.functions?.has?.("gmApplyActorStatus")) socket.register("gmApplyActorStatus", _gmApplyActorStatus);
+  if (!socket.functions?.has?.("gmAddHeatToActor")) socket.register("gmAddHeatToActor", _gmAddHeatToActor);
   if (!socket.functions?.has?.("gmApplyMechPilotHit")) socket.register("gmApplyMechPilotHit", _gmApplyMechPilotHit);
   if (!socket.functions?.has?.("gmScheduleArrowIVIndirectStrike")) socket.register("gmScheduleArrowIVIndirectStrike", _gmScheduleArrowIVIndirectStrike);
   if (!socket.functions?.has?.("gmResolveAMSDefense")) socket.register("gmResolveAMSDefense", _gmResolveAMSDefense);
@@ -973,6 +1108,10 @@ const AMMO_EXPLOSION_DAMAGE = {
   "srm-6": 180,
   "srm-4": 200,
   "srm-2": 200,
+  "mml-3": 100,
+  "mml-5": 100,
+  "mml-7": 100,
+  "mml-9": 100,
   "mg": 400,
   "ams": 48,
   "atm-3": 100,
@@ -993,6 +1132,66 @@ const AMMO_EXPLOSION_DAMAGE_CAP = 20;
 const AMMO_EXPLOSION_CASE_DAMAGE_CAP = 10;
 const AMMO_EXPLOSION_CASE_II_DAMAGE_CAP = 1;
 
+const MISSILE_AMMO_VARIANTS = Object.freeze({
+  STANDARD: "standard",
+  ARTEMIS_IV: "artemis-iv",
+  ARTEMIS_V: "artemis-v",
+  FRAGMENTATION: "fragmentation",
+  INFERNO: "inferno",
+  NARC: "narc",
+  SEMI_GUIDED: "semi-guided"
+});
+
+function getMissileAmmoVariant(typeText) {
+  const t = String(typeText ?? "").trim().toLowerCase();
+  if (/\bartemis[\s-]*(?:v|5)\b/i.test(t)) return MISSILE_AMMO_VARIANTS.ARTEMIS_V;
+  if (/\bartemis[\s-]*(?:iv|4)\b/i.test(t)) return MISSILE_AMMO_VARIANTS.ARTEMIS_IV;
+  if (/\bfragmentation\b/i.test(t)) return MISSILE_AMMO_VARIANTS.FRAGMENTATION;
+  if (/\binferno\b/i.test(t)) return MISSILE_AMMO_VARIANTS.INFERNO;
+  if (/\bsemi[ -]?guided\b/i.test(t)) return MISSILE_AMMO_VARIANTS.SEMI_GUIDED;
+  if (/\bnarc(?:[ -]?equipped)?\b/i.test(t)) return MISSILE_AMMO_VARIANTS.NARC;
+  return MISSILE_AMMO_VARIANTS.STANDARD;
+}
+
+function getMissileAmmoKey(typeText) {
+  const rack = parseMissileRackLabel(typeText);
+  const type = String(rack?.type ?? "").toUpperCase();
+  if (!["LRM", "MML", "SRM"].includes(type) || !Number.isFinite(Number(rack?.size))) return null;
+  const base = `${type.toLowerCase()}-${Number(rack.size)}`;
+  const variant = getMissileAmmoVariant(typeText);
+  return variant === MISSILE_AMMO_VARIANTS.STANDARD ? base : `${base}-${variant}`;
+}
+
+function isMissileAmmoVariantCompatible(rackType, variant) {
+  const type = String(rackType ?? "").toUpperCase();
+  if (!["LRM", "MML", "SRM"].includes(type)) return variant === MISSILE_AMMO_VARIANTS.STANDARD;
+  switch (variant) {
+    case MISSILE_AMMO_VARIANTS.ARTEMIS_IV: return ["LRM", "MML", "SRM"].includes(type);
+    case MISSILE_AMMO_VARIANTS.ARTEMIS_V: return ["LRM", "SRM"].includes(type);
+    case MISSILE_AMMO_VARIANTS.FRAGMENTATION: return ["LRM", "MML", "SRM"].includes(type);
+    case MISSILE_AMMO_VARIANTS.INFERNO: return ["MML", "SRM"].includes(type);
+    case MISSILE_AMMO_VARIANTS.NARC: return ["LRM", "MML", "SRM"].includes(type);
+    case MISSILE_AMMO_VARIANTS.SEMI_GUIDED: return ["LRM", "MML"].includes(type);
+    default: return true;
+  }
+}
+
+function getBaseMissileAmmoKey(ammoKey) {
+  return String(ammoKey ?? "").replace(/-(?:artemis-iv|artemis-v|fragmentation|inferno|narc|semi-guided)$/i, "");
+}
+
+function getMissileAmmoVariantLabel(variant) {
+  switch (variant) {
+    case MISSILE_AMMO_VARIANTS.ARTEMIS_IV: return "Artemis IV";
+    case MISSILE_AMMO_VARIANTS.ARTEMIS_V: return "Artemis V";
+    case MISSILE_AMMO_VARIANTS.FRAGMENTATION: return "Fragmentation";
+    case MISSILE_AMMO_VARIANTS.INFERNO: return "Inferno";
+    case MISSILE_AMMO_VARIANTS.NARC: return "Narc-equipped";
+    case MISSILE_AMMO_VARIANTS.SEMI_GUIDED: return "Semi-guided";
+    default: return "Standard";
+  }
+}
+
 function _hasCaseIIProtection(_actor, _loc) {
   return false;
 }
@@ -1007,6 +1206,9 @@ function _cappedAmmoExplosionDamage(rawDamage, { caseProtected = false, caseIIPr
 
 function _ammoKeyFromType(typeText) {
   const t = String(typeText ?? "").trim().toLowerCase();
+
+  const missileAmmoKey = getMissileAmmoKey(t);
+  if (missileAmmoKey) return missileAmmoKey;
 
   // AC/20, AC 20
   let m = t.match(/\bac\s*\/\s*(\d+)\b/i) || t.match(/\bac\s*(\d+)\b/i);
@@ -1039,6 +1241,8 @@ function _ammoKeyFromType(typeText) {
 
   if (/\barrow\s*iv\b/i.test(t) && /\bhoming\b/i.test(t)) return "arrow-iv-homing";
 
+  if (t === "narc" || /\bnarc\s+(missile\s+)?(beacon\s+)?pods?\b/i.test(t)) return "narc";
+
   return null;
 }
 
@@ -1056,7 +1260,8 @@ function _parseAmmoLabel(label) {
   // Gauss ammo never explodes when hit
   if (/\bgauss\b/i.test(typeText)) return { key, typeText, qty, gaussAmmo: true };
 
-  const damage = AMMO_EXPLOSION_DAMAGE[key];
+  // Narc ammunition explodes for 2 points per remaining pod.
+  const damage = key === "narc" ? (2 * qty) : AMMO_EXPLOSION_DAMAGE[getBaseMissileAmmoKey(key)];
   if (!Number.isFinite(damage)) return null;
 
   return { key, typeText, qty, damage, gaussAmmo: false };
@@ -1353,12 +1558,37 @@ function num(v, fallback = 0) {
   return Number.isFinite(n) ? n : fallback;
 }
 
+/**
+ * Canonical Rotary Autocannon combat profiles. The item name is authoritative so
+ * an RAC cannot accidentally use a stale damage, heat, or rapid-fire value from
+ * a copied weapon item.
+ */
+export function getRotaryACProfile(weaponItemOrName) {
+  const name = typeof weaponItemOrName === "string"
+    ? weaponItemOrName
+    : String(weaponItemOrName?.name ?? "");
+  const match = name.trim().match(/^(?:rotary\s+(?:auto\s*cannon|autocannon|ac)|rac)\s*\/?\s*([25])$/i);
+  if (!match) return null;
+
+  const caliber = Number(match[1]);
+  return {
+    caliber,
+    damage: caliber,
+    heat: 1,
+    rapidFire: 6,
+    ammoKey: `ac-${caliber}`
+  };
+}
+
 
 /**
  * Rapid Fire rating (R#). Stored on weapons as a number (e.g. 2 or 6) but older sheets may store
  * it under different keys or as a string like "R6". This helper normalizes to an integer >= 1.
  */
 function getRapidFireRating(weaponItem) {
+  const rotaryProfile = getRotaryACProfile(weaponItem);
+  if (rotaryProfile) return rotaryProfile.rapidFire;
+
   const sys = weaponItem?.system ?? {};
   const raw = (sys.rapidFire ?? sys.rapidFireRating ?? sys.rapid ?? sys.rof ?? 1);
 
@@ -2281,7 +2511,7 @@ function isMissileWeapon(weaponItem) {
   const kind = String(sys.type ?? sys.category ?? sys.weaponType ?? "").toLowerCase();
   return (
     kind.includes("missile") ||
-    name.includes("lrm") || name.includes("mrm") || name.includes("srm") ||
+    name.includes("lrm") || name.includes("mrm") || name.includes("mml") || name.includes("srm") ||
     name.includes("missile") || name.includes("rocket") || name.includes("atm")
   );
 }
@@ -2403,12 +2633,19 @@ function slugifyAmmoKey(s) {
  * Accepts inputs like: "AC/20", "AC 20", "LRM 20", "SRM-6", "ac-10", etc.
  */
 function ammoKeyFromTypeLabel(typeText) {
-  const t = String(typeText ?? "").trim().toLowerCase();
+  const raw = String(typeText ?? "").trim();
+  // Accept both a bare ammo type ("NARC") and the complete crit-slot label
+  // ("Ammo (NARC) 6"). Weapon items and mounted-slot fallbacks can supply either.
+  const installedAmmoLabel = raw.match(/^\s*ammo\s*\(([^)]+)\)\s*\d+\s*$/i);
+  const t = String(installedAmmoLabel?.[1] ?? raw).trim().toLowerCase();
 
   // Ammo-less weapons use labels like "None" or "N/A"; do not turn those into fake bins.
   if (!t || t === "none" || t === "n/a" || t === "na" || t === "n-a" || t === "no ammo" || t === "ammo none") {
     return null;
   }
+
+  const missileAmmoKey = getMissileAmmoKey(t);
+  if (missileAmmoKey) return missileAmmoKey;
 
   // If already looks like our key, keep it stable
   if (/^(ac|lrm|mrm|srm|atm)-\d+(?:-(?:er|he))?$/.test(t)) return t;
@@ -2450,6 +2687,8 @@ function ammoKeyFromTypeLabel(typeText) {
   // Machine guns / other common ammo users (optional)
   if (t.includes("machine gun") || t === "mg") return "mg";
   if (t === "ams" || /\banti\s*-?\s*missile\s+system\b/i.test(t)) return "ams";
+
+  if (t === "narc" || /\bnarc\s+(missile\s+)?(beacon\s+)?pods?\b/i.test(t)) return "narc";
 
   return slugifyAmmoKey(t);
 }
@@ -2551,11 +2790,17 @@ function getATMProfile(weaponItem, ammoKey = null) {
 }
 
 function weaponSupportsAmmoSelection(weaponItem) {
-  return isLBXWeapon(weaponItem) || isATMWeapon(weaponItem);
+  const rack = getMissileRack(weaponItem);
+  const rackType = String(rack?.type ?? "").toUpperCase();
+  const isStreak = /\bstreak\b/i.test(String(weaponItem?.name ?? ""));
+  return isLBXWeapon(weaponItem) || isATMWeapon(weaponItem) || (["LRM", "MML", "SRM"].includes(rackType) && !isStreak);
 }
 
 function getAmmoKeyForWeapon(weaponItem) {
   const sys = weaponItem?.system ?? {};
+
+  const rotaryProfile = getRotaryACProfile(weaponItem);
+  if (rotaryProfile) return rotaryProfile.ammoKey;
 
   // Allow explicit mapping on the weapon item (many possible schemas)
   const explicit =
@@ -2591,8 +2836,8 @@ function getAmmoKeyForWeapon(weaponItem) {
   let m = name.match(/\bac\s*\/?\s*(\d+)\b/i);
   if (m?.[1]) return slugifyAmmoKey(`ac-${m[1]}`);
 
-  // LRMs / MRMs / SRMs
-  m = name.match(/\b(lrm|mrm|srm)\s*-?\s*(\d+)\b/i) ?? name.match(/\b(lrm|mrm|srm)\b[^\d]*(\d+)\b/i);
+  // LRMs / MMLs / MRMs / SRMs
+  m = name.match(/\b(lrm|mml|mrm|srm)\s*-?\s*(\d+)\b/i) ?? name.match(/\b(lrm|mml|mrm|srm)\b[^\d]*(\d+)\b/i);
   if (m?.[1] && m?.[2]) return slugifyAmmoKey(`${m[1]}-${m[2]}`);
   m = name.match(/\bmedium\s+range\s+missiles?\b[^\d]*(10|20|30|40)\b/i);
   if (m?.[1]) return slugifyAmmoKey(`mrm-${m[1]}`);
@@ -2636,6 +2881,26 @@ async function getAmmoSelectionOptions(actor, weaponItem) {
     addOption(slugifyAmmoKey(`atm-${atmSize}`), `Standard (ATM ${atmSize})`);
     addOption(slugifyAmmoKey(`atm-${atmSize}-er`), `ER (ATM ${atmSize})`);
     addOption(slugifyAmmoKey(`atm-${atmSize}-he`), `HE (ATM ${atmSize})`);
+  }
+
+  const missileRack = getMissileRack(weaponItem);
+  const missileType = String(missileRack?.type ?? "").toUpperCase();
+  if (["LRM", "MML", "SRM"].includes(missileType) && Number.isFinite(Number(missileRack?.size))) {
+    const baseKey = `${missileType.toLowerCase()}-${Number(missileRack.size)}`;
+    const variants = [
+      MISSILE_AMMO_VARIANTS.STANDARD,
+      MISSILE_AMMO_VARIANTS.ARTEMIS_IV,
+      MISSILE_AMMO_VARIANTS.ARTEMIS_V,
+      MISSILE_AMMO_VARIANTS.FRAGMENTATION,
+      MISSILE_AMMO_VARIANTS.INFERNO,
+      MISSILE_AMMO_VARIANTS.NARC,
+      MISSILE_AMMO_VARIANTS.SEMI_GUIDED
+    ];
+    for (const variant of variants) {
+      if (!isMissileAmmoVariantCompatible(missileType, variant)) continue;
+      const key = variant === MISSILE_AMMO_VARIANTS.STANDARD ? baseKey : `${baseKey}-${variant}`;
+      addOption(key, `${getMissileAmmoVariantLabel(variant)} (${missileType}-${missileRack.size})`);
+    }
   }
 
   if (!options.length) return { options: [], defaultKey: null, hasMultiple: false };
@@ -3705,8 +3970,8 @@ function parseMissileRackLabel(label) {
   const name = String(label ?? "").trim();
   if (!name) return null;
 
-  let m = name.match(/\b(LRM|SRM|MRM|ATM)\s*[-/]?\s*(\d+)\b/i);
-  if (!m) m = name.match(/\b(LRM|SRM|MRM|ATM)\b[^\d]*(\d+)\b/i);
+  let m = name.match(/\b(LRM|SRM|MRM|MML|ATM)\s*[-/]?\s*(\d+)\b/i);
+  if (!m) m = name.match(/\b(LRM|SRM|MRM|MML|ATM)\b[^\d]*(\d+)\b/i);
   if (!m) {
     m = name.match(/\badvanced\s+tactical\s+missiles?\b[^\d]*(3|6|9|12)\b/i);
     if (m?.[1]) return { type: "ATM", size: Number(m[1]) };
@@ -3788,19 +4053,22 @@ async function rollClusterHits(rackSize, bonus = 0, { forcedTotal = null } = {})
 // - If any launcher is Artemis-linked, all eligible launchers must be linked
 // - MRMs are unguided and are not eligible for Artemis IV.
 // ------------------------------------------------------------
-const ARTEMIS_LABEL = "artemis iv fcs";
+const ARTEMIS_LABELS = Object.freeze({ iv: "artemis iv fcs", v: "artemis v fcs" });
 
-function _isArtemisLabel(label) {
-  return String(label ?? "").trim().toLowerCase() === ARTEMIS_LABEL;
+function _isArtemisLabel(label, version = "iv") {
+  const normalized = String(label ?? "").trim().toLowerCase().replace(/\bartemis\s+4\b/, "artemis iv").replace(/\bartemis\s+5\b/, "artemis v");
+  return normalized === ARTEMIS_LABELS[version];
 }
 
-function _isEligibleLauncherLabel(label) {
+function _isEligibleLauncherLabel(label, version = "iv") {
   const t = String(label ?? "").trim();
   if (!t) return false;
   // Use the same detection as getMissileRack (but from a string label)
   if (/\bstreak\s*srm\b/i.test(t)) return false;
   if (/\bammo\b/i.test(t)) return false;
-  return /\b(lrm|srm)\s*[-]?\s*(\d+)\b/i.test(t);
+  const match = t.match(/\b(lrm|mml|srm)\s*[-]?\s*(\d+)\b/i);
+  if (!match) return false;
+  return version !== "v" || String(match[1]).toUpperCase() !== "MML";
 }
 
 function _getCritLocMax(locKey) {
@@ -3837,7 +4105,7 @@ function _iterCritStartSlots(actor) {
   return out;
 }
 
-function _countArtemisAndLaunchers(actor) {
+function _countArtemisAndLaunchers(actor, version = "iv") {
   const byLoc = {};
   let totalLaunchers = 0;
   let totalArtemis = 0;
@@ -3845,14 +4113,14 @@ function _countArtemisAndLaunchers(actor) {
   for (const s of _iterCritStartSlots(actor)) {
     if (s.destroyed) continue;
 
-    if (_isArtemisLabel(s.label)) {
+    if (_isArtemisLabel(s.label, version)) {
       byLoc[s.locKey] ??= { launchers: 0, artemis: 0 };
       byLoc[s.locKey].artemis += 1;
       totalArtemis += 1;
       continue;
     }
 
-    if (_isEligibleLauncherLabel(s.label)) {
+    if (_isEligibleLauncherLabel(s.label, version)) {
       byLoc[s.locKey] ??= { launchers: 0, artemis: 0 };
       byLoc[s.locKey].launchers += 1;
       totalLaunchers += 1;
@@ -3862,8 +4130,8 @@ function _countArtemisAndLaunchers(actor) {
   return { byLoc, totalLaunchers, totalArtemis };
 }
 
-function _isArtemisFullyLinked(actor) {
-  const { byLoc, totalLaunchers, totalArtemis } = _countArtemisAndLaunchers(actor);
+function _isArtemisFullyLinked(actor, version = "iv") {
+  const { byLoc, totalLaunchers, totalArtemis } = _countArtemisAndLaunchers(actor, version);
 
   // No eligible launchers => no functional Artemis.
   if (totalLaunchers <= 0) return false;
@@ -3903,19 +4171,17 @@ function _findWeaponCritLoc(actor, weaponItem) {
   return null;
 }
 
-function _weaponHasArtemisLink(actor, weaponItem, pre = null) {
-  const fullyLinked = Boolean(pre?.fullyLinked ?? _isArtemisFullyLinked(actor));
+function _weaponHasArtemisLink(actor, weaponItem, pre = null, version = "iv") {
+  const fullyLinked = Boolean(pre?.fullyLinked ?? _isArtemisFullyLinked(actor, version));
   if (!fullyLinked) return false;
 
   const locKey = _findWeaponCritLoc(actor, weaponItem);
   if (!locKey) return false;
 
-  const byLoc = pre?.byLoc ?? _countArtemisAndLaunchers(actor).byLoc;
+  const byLoc = pre?.byLoc ?? _countArtemisAndLaunchers(actor, version).byLoc;
   const v = byLoc?.[locKey];
   return Boolean(v && num(v.artemis, 0) > 0 && num(v.launchers, 0) > 0);
 }
-
-
 
 function splitIntoNs(totalHits, n) {
   const hits = Math.max(0, num(totalHits, 0));
@@ -4510,6 +4776,7 @@ export async function rollWeaponAttack(actor, weaponItem, opts = {}) {
     return null;
   }
   const isTagAttack = isTAGWeapon(weaponItem);
+  const isNarcAttack = isNarcMissileBeaconWeapon(weaponItem);
   const isArrowIVHomingAttack = isArrowIVSystemWeapon(weaponItem);
 
   const pilot = actor.system?.pilot ?? {};
@@ -4536,6 +4803,10 @@ export async function rollWeaponAttack(actor, weaponItem, opts = {}) {
   if (!attackerToken) {
     ui?.notifications?.warn?.("Place/control your attacker token on the scene before making an attack.");
     return null;
+  }
+  if (isNarcAttack && !isMechActor(targetActor)) {
+    ui?.notifications?.warn?.("Narc Missile Beacon pods can only attach to a BattleMech target.");
+    return { ok: false, blocked: true, reason: "narcRequiresMechTarget" };
   }
   if (isArrowIVHomingAttack && !tokenHasStatus(targetToken, TAGGED_STATUS_ID)) {
     ui?.notifications?.warn?.("Arrow IV Homing direct fire requires a Tagged target.");
@@ -4566,10 +4837,33 @@ export async function rollWeaponAttack(actor, weaponItem, opts = {}) {
 
   let ammoKey = String(opts.ammoKey ?? "").trim();
   ammoKey = ammoKey ? ammoKeyFromTypeLabel(ammoKey) : getAmmoKeyForWeapon(weaponItem);
+  const rotaryProfile = getRotaryACProfile(weaponItem);
   const atmSize = getATMWeaponSize(weaponItem);
   if (Number.isFinite(atmSize) && !ammoKey) ammoKey = slugifyAmmoKey(`atm-${atmSize}`);
   const weaponRack = getMissileRack(weaponItem);
   const weaponRackType = String(weaponRack?.type ?? "").toUpperCase();
+  const selectedMissileAmmoVariant = ["LRM", "MML", "SRM"].includes(weaponRackType)
+    ? getMissileAmmoVariant(ammoKey)
+    : MISSILE_AMMO_VARIANTS.STANDARD;
+  if (!isMissileAmmoVariantCompatible(weaponRackType, selectedMissileAmmoVariant)) {
+    const variantLabel = getMissileAmmoVariantLabel(selectedMissileAmmoVariant);
+    ui?.notifications?.warn?.(`${variantLabel} ammunition is not compatible with ${weaponRackType || "this"} launchers.`);
+    return { ok: false, blocked: true, reason: "incompatibleMissileAmmo", weaponRackType, selectedMissileAmmoVariant };
+  }
+  const artemisIVCounts = Boolean(weaponRack) ? _countArtemisAndLaunchers(actor, "iv") : { byLoc: {}, totalLaunchers: 0, totalArtemis: 0 };
+  const artemisVCounts = Boolean(weaponRack) ? _countArtemisAndLaunchers(actor, "v") : { byLoc: {}, totalLaunchers: 0, totalArtemis: 0 };
+  const artemisIVFullyLinked = Boolean(weaponRack) && _isArtemisFullyLinked(actor, "iv");
+  const artemisVFullyLinked = Boolean(weaponRack) && _isArtemisFullyLinked(actor, "v");
+  const artemisIVLinked = Boolean(weaponRack) && _weaponHasArtemisLink(actor, weaponItem, { fullyLinked: artemisIVFullyLinked, byLoc: artemisIVCounts.byLoc }, "iv");
+  const artemisVLinked = Boolean(weaponRack) && _weaponHasArtemisLink(actor, weaponItem, { fullyLinked: artemisVFullyLinked, byLoc: artemisVCounts.byLoc }, "v");
+  if (selectedMissileAmmoVariant === MISSILE_AMMO_VARIANTS.ARTEMIS_IV && !artemisIVLinked) {
+    ui?.notifications?.warn?.("Artemis IV missiles require a fully linked, operational Artemis IV FCS in this launcher's location.");
+    return { ok: false, blocked: true, reason: "artemisIVAmmoNotLinked" };
+  }
+  if (selectedMissileAmmoVariant === MISSILE_AMMO_VARIANTS.ARTEMIS_V && !artemisVLinked) {
+    ui?.notifications?.warn?.("Artemis V missiles require a fully linked, operational Artemis V FCS in this launcher's location.");
+    return { ok: false, blocked: true, reason: "artemisVAmmoNotLinked" };
+  }
   const mrmTNMod = weaponRackType === "MRM" ? 1 : 0;
 
   const { band, mod: rangeMod, minPenalty } = calcRangeBandAndMod(weaponItem, distance, { ammoKey });
@@ -4640,8 +4934,8 @@ export async function rollWeaponAttack(actor, weaponItem, opts = {}) {
   const aimed = opts.aimedShot ?? {};
   let aimedEnabled = Boolean(aimed.enabled) && !isAbomTarget;
   let aimedDisabledReason = "";
-  if (isArrowIVHomingAttack && aimedEnabled) {
-    ui?.notifications?.warn?.("Arrow IV Homing attacks cannot make aimed shots.");
+  if ((isArrowIVHomingAttack || isNarcAttack) && aimedEnabled) {
+    ui?.notifications?.warn?.(`${isNarcAttack ? "Narc Missile Beacon" : "Arrow IV Homing"} attacks cannot make aimed shots.`);
     return null;
   }
   if (isVehicleTarget && aimedEnabled) {
@@ -4654,12 +4948,30 @@ export async function rollWeaponAttack(actor, weaponItem, opts = {}) {
   let aimedLocRaw = String(aimed.location ?? "").trim().toLowerCase();
   let useTCForAim = Boolean(aimed.useTC);
   const indirectFire = Boolean(opts.indirectFire);
-  const rapidFireRating = (isTagAttack || isArrowIVHomingAttack) ? 1 : getRapidFireRating(weaponItem);
+  const rapidFireRating = (isTagAttack || isNarcAttack || isArrowIVHomingAttack) ? 1 : getRapidFireRating(weaponItem);
   const clusterShotsOverride = num(opts.clusterShots, null);
   const hasClusterShotsOverride = Number.isFinite(clusterShotsOverride);
-  const rapidShots = (isTagAttack || isArrowIVHomingAttack) ? 1 : (hasClusterShotsOverride
+  const rapidShots = (isTagAttack || isNarcAttack || isArrowIVHomingAttack) ? 1 : (hasClusterShotsOverride
     ? clamp(Math.max(1, clusterShotsOverride), 1, Math.max(1, Math.floor(clusterShotsOverride)))
     : clamp(Math.max(1, num(opts.rapidShots ?? 1, 1)), 1, rapidFireRating));
+
+  // Validate the whole RAC burst before rolling. This prevents a partial/failed
+  // six-shot attack from adding heat before discovering that only five rounds remain.
+  if (rotaryProfile) {
+    const { totals } = await ensureActorAmmoBins(actor);
+    const bins = actor.system?.ammoBins ?? {};
+    const bin = bins?.[rotaryProfile.ammoKey];
+    const total = num(bin?.total, totals.get(rotaryProfile.ammoKey)?.total ?? 0);
+    const current = Number.isFinite(Number(bin?.current)) ? num(bin.current, total) : total;
+    if (!bin && !totals.has(rotaryProfile.ammoKey)) {
+      ui?.notifications?.error?.(`${weaponItem.name} requires Ammo (AC/${rotaryProfile.caliber}).`);
+      return { ok: false, blocked: true, reason: "missingRotaryACAmmo" };
+    }
+    if (current < rapidShots) {
+      ui?.notifications?.error?.(`${weaponItem.name} needs ${rapidShots} round(s), but only ${current} remain.`);
+      return { ok: false, blocked: true, reason: "insufficientRotaryACAmmo", required: rapidShots, current };
+    }
+  }
   const lbxSize = getLBXWeaponSize(weaponItem);
   const lbxSlugAmmoKey = Number.isFinite(lbxSize) ? slugifyAmmoKey(`lbx-${lbxSize}`) : null;
   const lbxClusterAmmoKey = Number.isFinite(lbxSize) ? slugifyAmmoKey(`lbx-${lbxSize}-cluster`) : null;
@@ -4670,7 +4982,11 @@ export async function rollWeaponAttack(actor, weaponItem, opts = {}) {
     ? `LB-X cluster ammo (${ammoKey})`
     : (Number.isFinite(lbxSize)
       ? `LB-X slug ammo (${ammoKey})`
-      : (atmProfile ? `ATM ${atmProfile.label} ammo (${ammoKey})` : String(ammoKey ?? "")));
+      : (atmProfile
+          ? `ATM ${atmProfile.label} ammo (${ammoKey})`
+          : (["LRM", "MML", "SRM"].includes(weaponRackType)
+              ? `${getMissileAmmoVariantLabel(selectedMissileAmmoVariant)} ${weaponRackType}-${weaponRack?.size} missiles (${ammoKey})`
+              : String(ammoKey ?? ""))));
 
   const targetImmobile = tokenHasStatus(targetToken, "atow-immobile") || tokenHasStatus(targetToken, "immobile");
   const targetHasStatusPartialCover = tokenHasStatus(targetToken, "partial-cover");
@@ -4782,7 +5098,7 @@ export async function rollWeaponAttack(actor, weaponItem, opts = {}) {
 
   const toHit = await (new Roll(isArrowIVHomingAttack ? "2d6" : `2d6 + ${gunnery}`)).evaluate();
   // Missile rack size (LRM/SRM/MRM etc). Used to distinguish missile cluster weapons vs rapid-fire cluster.
-  const rack = (isTagAttack || isArrowIVHomingAttack) ? null : (isLBXClusterFire ? { type: "LBX", size: lbxSize } : weaponRack);
+  const rack = (isTagAttack || isNarcAttack || isArrowIVHomingAttack) ? null : (isLBXClusterFire ? { type: "LBX", size: lbxSize } : weaponRack);
   const rackType = String(rack?.type ?? "").toUpperCase();
   const rackATMProfile = (rackType === "ATM") ? (atmProfile ?? getATMProfile(weaponItem, ammoKey)) : null;
   const rackPerHitDamage = rackATMProfile?.damagePerMissile ?? ((rackType === "SRM") ? 2 : (rackType === "LBX" ? 1 : 1));
@@ -4830,6 +5146,7 @@ if (!isAbomChat && rapidShots > 1 && !rack) {
   if (jammed) {
     // Persist jam state on the weapon so it can't be fired again.
     await weaponItem.update({ "system.jammed": true }).catch(() => {});
+    enqueueActorAudioCues(actor, ["weaponJammed"], { volume: 0.95 });
   }
 
   jam = { rollTotal, threshold, jammed };
@@ -4837,13 +5154,13 @@ if (!isAbomChat && rapidShots > 1 && !rack) {
 
 const hit = (toHit.total ?? 0) >= tn;
 
-  const rawHeat = num(weaponItem.system?.heat, 0);
-  const rawBaseDamage = num(weaponItem.system?.damage, 0);
+  const rawHeat = rotaryProfile?.heat ?? num(weaponItem.system?.heat, 0);
+  const rawBaseDamage = rotaryProfile?.damage ?? num(weaponItem.system?.damage, 0);
   const dazzleMode = isActorDazzleModeActive(actor) && isLaserWeapon(weaponItem);
   const dazzleHalvesDamage = dazzleMode && !isAbomTarget;
 
   let heat = isVehicleAttacker ? 0 : rawHeat;
-  let baseDamage = isTagAttack ? 0 : rawBaseDamage;
+  let baseDamage = (isTagAttack || isNarcAttack) ? 0 : rawBaseDamage;
 
   if (dazzleMode) {
     if (!isVehicleAttacker) heat = Math.max(0, Math.floor(rawHeat / 2));
@@ -4875,12 +5192,14 @@ const hit = (toHit.total ?? 0) >= tn;
     heat = heat * rapidShots;
   }
 
-  // Artemis IV FCS: +2 to cluster roll (max modified roll of 12) when fully linked.
-  const artemisCounts = Boolean(rack) ? _countArtemisAndLaunchers(actor) : { byLoc: {}, totalLaunchers: 0, totalArtemis: 0 };
-  const artemisInstalled = Boolean(rack) ? (num(artemisCounts.totalArtemis, 0) > 0) : false;
-  const artemisFullyLinked = Boolean(rack) ? _isArtemisFullyLinked(actor) : false;
-  const artemisLinked = Boolean(rack) ? _weaponHasArtemisLink(actor, weaponItem, { fullyLinked: artemisFullyLinked, byLoc: artemisCounts.byLoc }) : false;
-  const amsEligible = hit && isMechActor(targetActor) && Boolean(rack) && ["LRM", "MRM", "SRM"].includes(String(rack.type ?? "").toUpperCase());
+  const artemisInstalled = num(artemisIVCounts.totalArtemis, 0) > 0;
+  const artemisVInstalled = num(artemisVCounts.totalArtemis, 0) > 0;
+  const artemisLinked = selectedMissileAmmoVariant === MISSILE_AMMO_VARIANTS.ARTEMIS_IV && artemisIVLinked;
+  const artemisVActive = selectedMissileAmmoVariant === MISSILE_AMMO_VARIANTS.ARTEMIS_V && artemisVLinked;
+  const targetNarced = Boolean(rack) && tokenHasStatus(targetToken, NARC_STATUS_ID);
+  const narcAmmoSelected = selectedMissileAmmoVariant === MISSILE_AMMO_VARIANTS.NARC;
+  const narcActive = narcAmmoSelected && targetNarced && !isStreakLauncher;
+  const amsEligible = hit && isMechActor(targetActor) && Boolean(rack) && ["LRM", "MML", "MRM", "SRM"].includes(String(rack.type ?? "").toUpperCase());
   const amsDefense = amsEligible
     ? await resolveAMSDefense(targetActor, {
         attackerName: attackerToken?.name ?? actor.name,
@@ -4892,7 +5211,10 @@ const hit = (toHit.total ?? 0) >= tn;
       })
     : { active: false };
   const atmBuiltInArtemis = rackType === "ATM";
-  const clusterBonus = (((artemisLinked || atmBuiltInArtemis) && !isStreakLauncher) ? 2 : 0) + ((amsDefense?.active && !isStreakLauncher) ? -4 : 0);
+  const guidanceBonus = !isStreakLauncher
+    ? (artemisVActive ? 3 : ((narcActive || artemisLinked || atmBuiltInArtemis) ? 2 : 0))
+    : 0;
+  const clusterBonus = guidanceBonus + ((amsDefense?.active && !isStreakLauncher) ? -4 : 0);
 
   if (hit && rack && hasClusterShotsOverride) {
     const volleyRoll = await rollClusterHits(rapidShots, 0);
@@ -4997,7 +5319,8 @@ const hit = (toHit.total ?? 0) >= tn;
       volleyRollBaseTotal: volleyRoll.baseTotal,
       volleyRollMod: volleyRoll.mod,
       volleyRollModifiedTotal: volleyRoll.modifiedTotal,
-      artemisLinked: artemisLinked || atmBuiltInArtemis,
+      artemisLinked: artemisLinked || artemisVActive || atmBuiltInArtemis,
+      narcActive,
       ams: amsDefense,
       streakUsed: isStreakLauncher,
       perHitDamage,
@@ -5097,7 +5420,8 @@ const hit = (toHit.total ?? 0) >= tn;
       clusterRollBaseTotal: clusterRoll.baseTotal,
       clusterRollMod: clusterRoll.mod,
       clusterRollModifiedTotal: clusterRoll.modifiedTotal,
-      artemisLinked: artemisLinked || atmBuiltInArtemis,
+      artemisLinked: artemisLinked || artemisVActive || atmBuiltInArtemis,
+      narcActive,
       ams: amsDefense,
       streakUsed: isStreakLauncher,
       missilesHit,
@@ -5109,6 +5433,17 @@ const hit = (toHit.total ?? 0) >= tn;
 
     damage = packets.reduce((sum, p) => sum + num(p.damage, 0), 0);
 
+  }
+
+  let infernoHeat = 0;
+  if (cluster && selectedMissileAmmoVariant === MISSILE_AMMO_VARIANTS.INFERNO) {
+    const missilesHit = cluster.mode === "volley"
+      ? (cluster.subclusters ?? []).reduce((sum, row) => sum + num(row?.missilesHit, 0), 0)
+      : num(cluster.missilesHit, 0);
+    infernoHeat = Math.max(0, missilesHit * 2);
+    cluster.infernoHeat = infernoHeat;
+    cluster.packets = [];
+    damage = 0;
   }
 
   // Rapid-fire cluster handling: resolve how many shells hit via the Cluster Hits Table,
@@ -5199,7 +5534,7 @@ const hit = (toHit.total ?? 0) >= tn;
 
   let locResult = null;
   let tacSingle = false;
-  const shouldResolveHitLocation = (hit || isArrowIVHomingAttack) && (opts.showLocation || opts.applyDamage) && !cluster && !isAbomTarget && !isTagAttack;
+  const shouldResolveHitLocation = (hit || isArrowIVHomingAttack) && (opts.showLocation || opts.applyDamage || isNarcAttack) && !cluster && !isAbomTarget && !isTagAttack;
   if (shouldResolveHitLocation) {
     if (isVehicleTarget) {
       locResult = await rollVehicleHitLocation(side, { hasTurret: hasVehicleTurret });
@@ -5302,6 +5637,18 @@ if (weaponFired && opts.spendAmmo !== false && (weaponConsumesAmmo(weaponItem, a
   }
 }
 
+let infernoHeatApplied = null;
+if (weaponFired && hit && infernoHeat > 0) {
+  if (isMechActor(targetActor)) {
+    infernoHeatApplied = await addHeatToActorAuto(targetActor, infernoHeat);
+    if (infernoHeatApplied?.ok === false) {
+      ui?.notifications?.warn?.(`Inferno missiles hit, but target heat was not applied: ${infernoHeatApplied.reason ?? "unknown reason"}`);
+    }
+  } else {
+    infernoHeatApplied = { ok: false, reason: "Target is not a BattleMech" };
+  }
+}
+
 if (weaponFired) {
   try {
     await markWeaponFiredThisTurn(actor, weaponItem, opts);
@@ -5328,11 +5675,23 @@ if (isTagAttack && hit) {
   }
 }
 
+let narcApplied = null;
+if (isNarcAttack && hit && locResult?.loc && !locResult.partialCoverBlocked) {
+  narcApplied = await applyNarcToTargetActorAuto(targetActor, {
+    loc: locResult.loc,
+    attackerActorUuid: actor?.uuid ?? null,
+    attackerTokenUuid: (attackerToken?.document ?? attackerToken)?.uuid ?? null
+  });
+  if (narcApplied?.ok === false) {
+    ui?.notifications?.warn?.(`Narc hit, but the pod was not attached: ${narcApplied.reason ?? "unknown reason"}`);
+  }
+}
+
 // ---- Automatic Damage Application (first pass) ----
 // If enabled, apply damage to the targeted mech immediately after resolving the hit location.
   let damageApplied = null;
   let massiveDamagePsr = null;
-  const shouldApplyAttackDamage = (hit || isArrowIVHomingAttack) && opts.applyDamage && !isTagAttack;
+  const shouldApplyAttackDamage = (hit || isArrowIVHomingAttack) && opts.applyDamage && !isTagAttack && !isNarcAttack && infernoHeat <= 0;
   if (shouldApplyAttackDamage) {
     if (!targetActor) {
       ui?.notifications?.warn?.("No target actor found to apply damage.");
@@ -5424,7 +5783,9 @@ if (isArrowIVHomingAttack && weaponFired) {
   const attackerName = attackerToken?.name ?? actor.name;
 
 const clusterNote = cluster
-  ? (cluster.mode === "missile"
+  ? (selectedMissileAmmoVariant === MISSILE_AMMO_VARIANTS.INFERNO
+      ? "Inferno missiles deal no damage; each missile that hits adds 2 heat to the target BattleMech."
+      : (cluster.mode === "missile"
       ? (cluster.type === "SRM"
           ? "SRM damage is 2 per missile; each missile rolls its own location (group size 1)."
           : (cluster.type === "LBX"
@@ -5433,10 +5794,12 @@ const clusterNote = cluster
                   ? `ATM ${rackATMProfile?.label ?? "Standard"} ammo deals ${cluster.perHitDamage} damage per missile; total damage is grouped into 5-point clusters.`
                   : (cluster.type === "MRM"
                       ? "MRM damage is 1 per missile; packets are grouped in 5s."
-                      : "LRM damage is 1 per missile; packets are grouped in 5s."))))
+                      : (cluster.type === "MML"
+                          ? "MML damage is resolved from the selected missile ammunition; packets are grouped in 5s."
+                          : "LRM damage is 1 per missile; packets are grouped in 5s.")))))
       : (cluster.mode === "volley"
           ? `${cluster.label ?? "Volley"}: roll to see how many attackers hit, then resolve missile clusters per hit.`
-          : `${cluster.label ?? "Rapid Fire"} damage is applied per hit; each hit is resolved as its own packet.`))
+          : `${cluster.label ?? "Rapid Fire"} damage is applied per hit; each hit is resolved as its own packet.`)))
   : "";
 
   const facingLine = arc
@@ -5449,14 +5812,31 @@ const clusterNote = cluster
 
   const weaponMeta = _getWeaponAutomationMeta(weaponItem);
 
-  // Display whether Artemis IV FCS is installed/active for this attack (cluster weapons only).
-  const artemisInfoLine = (rack && artemisInstalled)
-    ? (artemisLinked
-        ? `<div><b>Artemis IV FCS:</b> Active (+2 to cluster roll)</div>`
-        : (artemisFullyLinked
-            ? `<div><b>Artemis IV FCS:</b> Installed but not linked to this launcher (no bonus)</div>`
-            : `<div><b>Artemis IV FCS:</b> Installed but NOT fully linked (no +2)</div>`))
-    : (rackType === "ATM" ? `<div><b>Artemis IV:</b> Built into ATM launcher (+2 to cluster roll)</div>` : "");
+  const artemisInfoLine = artemisLinked
+    ? `<div><b>Artemis IV FCS:</b> Artemis IV missiles linked (+2 to cluster roll)</div>`
+    : (artemisVActive
+        ? `<div><b>Artemis V FCS:</b> Artemis V missiles linked (+3 to cluster roll)</div>`
+        : (rackType === "ATM"
+            ? `<div><b>Artemis IV:</b> Built into ATM launcher (+2 to cluster roll)</div>`
+            : ((artemisInstalled || artemisVInstalled) && selectedMissileAmmoVariant === MISSILE_AMMO_VARIANTS.STANDARD
+                ? `<div><b>Artemis FCS:</b> Standard ammunition selected (no Artemis bonus)</div>`
+                : "")));
+
+  const narcInfoLine = rack
+    ? (narcActive
+        ? `<div><b>Narc Guidance:</b> Narc-equipped missiles tracking Narc'd target (+2 to cluster roll)</div>`
+        : (narcAmmoSelected
+            ? `<div><b>Narc Guidance:</b> Narc-equipped missiles selected, but target is not Narc'd (no bonus)</div>`
+            : (targetNarced ? `<div><b>Narc Guidance:</b> Target is Narc'd, but Narc-equipped ammunition was not selected (no bonus)</div>` : "")))
+    : "";
+
+  const specialMissileAmmoInfoLine = selectedMissileAmmoVariant === MISSILE_AMMO_VARIANTS.INFERNO
+    ? `<div><b>Inferno Missiles:</b> ${Math.floor(infernoHeat / 2)} hit; ${infernoHeat} heat applied to target; no damage.</div>`
+    : (selectedMissileAmmoVariant === MISSILE_AMMO_VARIANTS.FRAGMENTATION
+        ? `<div><b>Fragmentation Missiles:</b> Selected. Woods/jungle damage automation is not yet implemented.</div>`
+        : (selectedMissileAmmoVariant === MISSILE_AMMO_VARIANTS.SEMI_GUIDED
+            ? `<div><b>Semi-guided LRMs:</b> Selected. Indirect-fire/TAG modifier automation is not yet implemented.</div>`
+            : ""));
 
   const streakInfoLine = isStreakLauncher
     ? (hit
@@ -5486,6 +5866,8 @@ const jamInfoLine = (jam && !isAbomChat && !rack && rapidShots > 1)
 
   const weaponSummary = isTagAttack
     ? "TAG designation (no damage)"
+    : isNarcAttack
+      ? "Narc homing pod (no damage)"
     : isArrowIVHomingAttack
       ? `Arrow IV Homing (${hit ? "guided hit" : "ground impact"}), Damage ${damage}`
     : cluster
@@ -5603,12 +5985,15 @@ const jamInfoLine = (jam && !isAbomChat && !rack && rapidShots > 1)
     `${rapidFireInfoLine}`,
     `${jamInfoLine}`,
     `${artemisInfoLine}`,
+    `${narcInfoLine}`,
+    `${specialMissileAmmoInfoLine}`,
     `${amsInfoLine}`,
     `${streakInfoLine}`,
     `${arrowIVInfoLine}`,
     `${ammoModeLine}`,
     `${ammoSpend?.key ? `<div><b>Ammo</b>: ${ammoSpend.after}/${ammoSpend.total} (${ammoSpend.key.toUpperCase()})</div>` : ""}`,
     `${isTagAttack ? `<div><b>TAG:</b> ${hit ? (tagApplied?.ok ? "Target marked with Tagged status until the TAG user's next turn." : `Hit, but status was not applied (${tagApplied?.reason ?? "unknown reason"}).`) : "No mark applied on miss."}</div>` : ""}`,
+    `${isNarcAttack ? `<div><b>Narc:</b> ${!hit ? "No pod attached on miss." : (locResult?.partialCoverBlocked ? "Pod struck a location protected by partial cover and did not attach." : (narcApplied?.ok ? `Pod attached to ${String(narcApplied.loc ?? locResult?.loc ?? "unknown").toUpperCase()}; the status remains until that location is destroyed.` : `Hit, but pod was not attached (${narcApplied?.reason ?? "unknown reason"}).`))}</div>` : ""}`,
     `${clusterPacketsHtml}`,
   ];
 
@@ -5991,6 +6376,39 @@ async function scheduleArrowIVIndirectAttack(actor, weaponItem, opts = {}) {
 // Melee Weapons (Hatchet, Sword, etc.)
 // ------------------------------------------------------------
 
+function isCanonicalHatchet(itemOrName) {
+  const name = typeof itemOrName === "string" ? itemOrName : (itemOrName?.name ?? "");
+  return String(name).trim().toLowerCase() === "hatchet";
+}
+
+function isCanonicalSword(itemOrName) {
+  const name = typeof itemOrName === "string" ? itemOrName : (itemOrName?.name ?? "");
+  return String(name).trim().toLowerCase() === "sword";
+}
+
+/** Derive the canonical Hatchet statistics from its carrier's BattleMech tonnage. */
+export function getHatchetProfile(actor) {
+  const mechTonnage = Math.max(0, Number(getMechTonnage(actor) ?? 0) || 0);
+  const tons = mechTonnage > 0 ? Math.ceil(mechTonnage / 15) : 0;
+  return {
+    mechTonnage,
+    damage: mechTonnage > 0 ? Math.floor(mechTonnage / 5) : 0,
+    tonnage: tons,
+    critSlots: tons
+  };
+}
+
+/** Derive the canonical Sword statistics from its carrier's BattleMech tonnage. */
+export function getSwordProfile(actor) {
+  const mechTonnage = Math.max(0, Number(getMechTonnage(actor) ?? 0) || 0);
+  return {
+    mechTonnage,
+    damage: mechTonnage > 0 ? (Math.ceil(mechTonnage / 10) + 1) : 0,
+    tonnage: mechTonnage > 0 ? Math.ceil(mechTonnage / 20) : 0,
+    critSlots: mechTonnage > 0 ? Math.ceil(mechTonnage / 15) : 0
+  };
+}
+
 function isMeleeWeaponItem(weaponItem) {
   const name = String(weaponItem?.name ?? "").toLowerCase();
   const sys = weaponItem?.system ?? {};
@@ -6119,7 +6537,10 @@ export async function rollMeleeWeaponAttack(actor, weaponItem, opts = {}) {
   const toHit = await (new Roll(`2d6 + ${piloting}`)).evaluate();
   const hit = (toHit.total ?? 0) >= tn;
 
-  let damage = num(weaponItem.system?.damage, 0);
+  const hatchetProfile = isCanonicalHatchet(weaponItem) ? getHatchetProfile(actor) : null;
+  const swordProfile = isCanonicalSword(weaponItem) ? getSwordProfile(actor) : null;
+  const derivedMeleeProfile = hatchetProfile ?? swordProfile;
+  let damage = derivedMeleeProfile ? derivedMeleeProfile.damage : num(weaponItem.system?.damage, 0);
   if (isTSMActive(actor)) damage = damage * 2;
 
   let locResult = null;
@@ -6180,14 +6601,8 @@ export async function rollMeleeWeaponAttack(actor, weaponItem, opts = {}) {
     const targetName = targetToken?.name ?? "Target";
     const weaponMeta = _getWeaponAutomationMeta(weaponItem);
 
-  // Display whether Artemis IV FCS is installed/active for this attack (cluster weapons only).
-  const artemisInfoLine = (rack && artemisInstalled)
-    ? (artemisLinked
-        ? `<div><b>Artemis IV FCS:</b> Active (+2 to cluster roll)</div>`
-        : (artemisFullyLinked
-            ? `<div><b>Artemis IV FCS:</b> Installed but not linked to this launcher (no bonus)</div>`
-            : `<div><b>Artemis IV FCS:</b> Installed but NOT fully linked (no +2)</div>`))
-    : "";
+    // Artemis guidance is missile-only and never applies to melee weapons.
+    const artemisInfoLine = "";
     const header = `<header><b>${weaponMeta.name}</b> — Melee Weapon Attack</header>`;
     const facingLine = arc
       ? `<div><b>Target Facing:</b> ${Math.round(arc.facingDeg)}° | <b>Attack Arc:</b> ${side.toUpperCase()}</div>`
@@ -6203,6 +6618,8 @@ export async function rollMeleeWeaponAttack(actor, weaponItem, opts = {}) {
       `<div><b>Attacker:</b> ${attackerName} | <b>Target:</b> ${targetName}</div>`,
       facingLine,
       `<div><b>Distance:</b> ${distance} (adjacent)</div>`,
+      `${hatchetProfile ? `<div><b>Hatchet Profile:</b> ${hatchetProfile.mechTonnage}-ton carrier; Damage ${hatchetProfile.damage}, Weight ${hatchetProfile.tonnage} tons, ${hatchetProfile.critSlots} critical slots</div>` : ""}`,
+      `${swordProfile ? `<div><b>Sword Profile:</b> ${swordProfile.mechTonnage}-ton carrier; Damage ${swordProfile.damage}, Weight ${swordProfile.tonnage} tons, ${swordProfile.critSlots} critical slots</div>` : ""}`,
       `<div><b>Hit Location:</b> ${isVehicleTarget ? "Vehicle Hit Location Table" : (usePunchTable ? `Punch Table (+${punchTableMod} TN)` : "Normal (Shooting) Table")}</div>`,
       `<div><b>Roll:</b> ${toHit.total} (2d6 + Piloting ${piloting}) vs <b>TN:</b> ${tn} → <b>${hit ? "HIT" : "MISS"}</b></div>`,
       buildAttackDetailsOpen(),
@@ -6303,17 +6720,6 @@ export async function promptAndRollMeleeWeaponAttack(actor, weaponItem, { defaul
   const statusTNMods = getStatusTNMods(attackerToken, targetToken);
   const weaponTNMod = getMeleeWeaponTNMod(weaponItem);
 
-  const isSpecialDesignationAttack = isTAGWeapon(weaponItem) || isArrowIVSystemWeapon(weaponItem);
-  const rapidFireRating = isSpecialDesignationAttack ? 1 : getRapidFireRating(weaponItem);
-  const rapidFireHtml = (rapidFireRating > 1)
-    ? `
-    <div class="form-group">
-      <label>Rapid-Fire Shots (R${rapidFireRating})</label>
-      <input type="number" name="rapidShots" value="1" min="1" max="${rapidFireRating}"/>
-      <small>If &gt; 1, this attack cannot be an aimed shot.</small>
-    </div>`
-    : `<input type="hidden" name="rapidShots" value="1"/>`;
-
   const dialogHtml = `
   <form class="atow-attack-dialog">
     <div class="form-group">
@@ -6384,35 +6790,6 @@ export async function promptAndRollMeleeWeaponAttack(actor, weaponItem, { defaul
 
 
     
-    ${rapidFireHtml}
-<hr/>
-
-    <div class="form-group">
-      <label><input type="checkbox" name="aimedShot"/> Aimed Shot</label>
-      <small>
-        Aimed shots require an <b>Immobile</b> target, unless you have a <b>Targeting Computer</b> installed.
-        Cluster/Area-Effect/Flak weapons cannot be aimed; indirect fire and multi-shot rapid-fire cannot be aimed.
-      </small>
-    </div>
-
-    <div class="form-group">
-      <label>Aimed Location</label>
-      <select name="aimedLoc">
-        ${caseLine}
-</select>
-      <small>
-        ${caseLine}
-</small>
-    </div>
-
-    ${caseLine}
-<div class="form-group">
-      <label><input type="checkbox" name="indirectFire"/> Indirect Fire</label>
-      <small>If checked, this attack cannot be an aimed shot.</small>
-    </div>
-    ${rapidFireHtml}
-    ${rapidFireHtml}
-
     <div class="form-group">
       <label>Hit Side (auto-detected)</label>
       <select name="side">
@@ -6457,14 +6834,7 @@ export async function promptAndRollMeleeWeaponAttack(actor, weaponItem, { defaul
               targetType: String(fd.get("targetType") ?? "biped"),
               usePunchTable: String(fd.get("locTable") ?? "normal") === "punch",
               applyDamage: fd.get("applyDamage") === "on",
-              showLocation: fd.get("showLocation") === "on",
-              indirectFire: fd.get("indirectFire") === "on",
-              rapidShots: num(fd.get("rapidShots"), 1),
-              aimedShot: {
-                enabled: fd.get("aimedShot") === "on",
-                location: String(fd.get("aimedLoc") ?? "").trim(),
-                useTC: (fd.get("useTC") === "on") || (fd.get("useTC") === null) // null when checkbox is disabled in HTML
-              }
+              showLocation: fd.get("showLocation") === "on"
             };
 
             const result = await rollMeleeWeaponAttack(actor, weaponItem, opts);
@@ -6704,7 +7074,7 @@ export async function promptAndRollWeaponAttack(actor, weaponItem, { defaultSide
     totalTN: dialogTN,
     showRapidFire: !isSpecialDesignationAttack && rapidFireRating > 1,
     rapidFireRating,
-    weaponHeat: num(weaponItem.system?.heat, 0),
+    weaponHeat: getRotaryACProfile(weaponItem)?.heat ?? num(weaponItem.system?.heat, 0),
     showArrowIVIndirectControl: isArrowIVAttack,
     showAmmoSelection: weaponSupportsAmmoSelection(weaponItem) && ammoSelection.options.length > 0,
     ammoSelectionOptions,

@@ -1,5 +1,5 @@
 // atow-battletech.js (ROOT)
-// version 0.0.9
+// version 0.0.10
 
 import { ATOWCharacterSheet } from "./module/character-sheet.js";
 import { ATOWAbominationSheet } from "./module/abomination-sheet.js";
@@ -285,6 +285,9 @@ registerSystemSettings();
       mk("in-water",      "In Water",      icon("in-water")),
       mk("partial-cover", "Partial Cover", icon("partial-cover")),
       mk("tagged",        "Tagged",        icon("tagged")),
+      // Narc uses the same target-designator artwork as TAG, but is a separate,
+      // persistent status whose attached hit location is tracked by the attack engine.
+      mk("narc",          "Narc'd",        icon("tagged")),
 
       // Core AToW conditions
       mk("atow-shutdown",  "Shutdown", icon("shutdown")),
@@ -1170,6 +1173,8 @@ const _findActorStatusEffects = (actor, statusId) => {
     const defIcon = String(def?.icon ?? def?.img ?? "").trim();
     const defName = String(def?.name ?? def?.label ?? "").trim().toLowerCase();
     const idText = String(statusId ?? "").trim().toLowerCase();
+    // Narc intentionally shares TAG's icon, so it must be matched by status ID
+    // rather than visual identity or the two effects could be conflated.
     const allowVisualMatch = idText.startsWith("atow-") || ["jumped", "light-woods", "heavy-woods", "in-water", "prone", "skidding", "partial-cover", "tagged"].includes(idText);
 
     return Array.from(actor.effects ?? []).filter(e => {
