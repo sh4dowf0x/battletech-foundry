@@ -19,16 +19,7 @@
         <input name="name" type="text" value="{{item.name}}" placeholder="Skill Name" />
       </div>
 
-      <div class="atow-item-meta-grid" style="display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:6px;">
-        <div class="atow-field">
-          <label>Default TN</label>
-          <select name="system.tn">
-            {{#each tnOptions as |tn|}}
-              <option value="{{tn}}" {{#ifEq tn ../selected.tn}}selected{{/ifEq}}>{{tn}}</option>
-            {{/each}}
-          </select>
-        </div>
-
+      <div class="atow-item-meta-grid" style="display:grid; grid-template-columns:minmax(0, 1fr); gap:6px;">
         <div class="atow-field">
           <label>XP</label>
           <input name="system.xp" type="number" value="{{system.xp}}" />
@@ -43,7 +34,10 @@
         <tr>
           <th>Link 1</th>
           <th>Link 2</th>
-          <th>Legacy Link</th>
+          <th>TN</th>
+          <th>Action</th>
+          <th>Training</th>
+          <th>TN/C</th>
         </tr>
         <tr>
           <td>
@@ -61,8 +55,27 @@
             </select>
           </td>
           <td>
-            <input type="text" value="{{selected.linkedAttribute1}}" disabled />
+            <select name="system.tn">
+              {{#each tnOptions as |tn|}}
+                <option value="{{tn}}" {{#ifEq tn ../selected.tn}}selected{{/ifEq}}>{{tn}}</option>
+              {{/each}}
+            </select>
           </td>
+          <td>
+            <select name="system.actionComplexity">
+              {{#each actionComplexityOptions as |option|}}
+                <option value="{{option.value}}" {{#ifEq option.value ../selected.actionComplexity}}selected{{/ifEq}}>{{option.label}}</option>
+              {{/each}}
+            </select>
+          </td>
+          <td>
+            <select name="system.trainingCategory">
+              {{#each trainingCategoryOptions as |option|}}
+                <option value="{{option.value}}" {{#ifEq option.value ../selected.trainingCategory}}selected{{/ifEq}}>{{option.label}}</option>
+              {{/each}}
+            </select>
+          </td>
+          <td><input type="text" value="{{selected.tn}}/{{classification.code}}" disabled /></td>
         </tr>
       </table>
     </div>

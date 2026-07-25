@@ -491,6 +491,11 @@
       ],
       "rank": 0,
       "linkedAttribute": "",
+      "actionComplexity": "simple",
+      "trainingCategory": "basic",
+      "complexityCode": "SB",
+      "c": "SB",
+      "classificationReferenceVersion": 0,
       "specializations": []
     },
     "mechWeapon": {
@@ -560,6 +565,15 @@
       },
       "range": "",
       "shots": "",
+      "weaponCategory": "",
+      "resourceMode": "",
+      "pps": 0,
+      "powerPackId": "",
+      "ammunitionItemId": "",
+      "magazine": {
+        "current": "",
+        "max": ""
+      },
       "costReload": "",
       "affiliation": "",
       "mass": {
@@ -602,6 +616,11 @@
       ],
       "rank": 0,
       "linkedAttribute": "",
+      "actionComplexity": "simple",
+      "trainingCategory": "basic",
+      "complexityCode": "SB",
+      "c": "SB",
+      "classificationReferenceVersion": 0,
       "specializations": []
     },
     "trait": {
@@ -632,6 +651,10 @@
       "costCbills": 0,
       "massKg": 0,
       "powerUsePph": 0,
+      "powerCapacity": {
+        "current": "",
+        "max": ""
+      },
       "range": "",
       "notes": ""
     }

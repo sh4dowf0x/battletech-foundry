@@ -1,6 +1,8 @@
 // module/character-equipment.js
 // AToW Battletech (Foundry VTT v13) - Character Equipment Item Sheet (ItemSheetV2)
 
+import { getCharacterPowerPackCapacity, isCharacterPowerPack } from "./character-power.js";
+
 const SYSTEM_ID = "atow-battletech";
 const TEMPLATE = `systems/${SYSTEM_ID}/templates/character-equipment.hbs`;
 
@@ -16,6 +18,7 @@ const GEAR_TYPE_OPTIONS = [
   { value: "optics", label: "Optics" },
   { value: "sensors", label: "Sensors" },
   { value: "powerPacks", label: "Power Packs" },
+  { value: "ammunition", label: "Ammunition" },
   { value: "rechargers", label: "Rechargers" },
   { value: "espionage", label: "Espionage Gear" },
   { value: "repair", label: "Repair / Salvage Gear" },
@@ -68,6 +71,7 @@ export class ATOWCharacterEquipmentSheet extends HandlebarsApplicationMixin(Item
     system.costCbills = Math.max(0, toNumber(system.costCbills, 0));
     system.massKg = Math.max(0, toNumber(system.massKg, 0));
     system.powerUsePph = Math.max(0, toNumber(system.powerUsePph, 0));
+    system.powerCapacity ??= {};
     system.range ??= "";
     system.notes ??= "";
 
@@ -76,6 +80,8 @@ export class ATOWCharacterEquipmentSheet extends HandlebarsApplicationMixin(Item
     context.gearTypeOptions = GEAR_TYPE_OPTIONS;
     context.gearTypeLabel =
       GEAR_TYPE_OPTIONS.find((option) => option.value === system.gearType)?.label ?? "Equipment";
+    context.isPowerPack = isCharacterPowerPack(item);
+    context.powerCapacity = getCharacterPowerPackCapacity(item);
 
     return context;
   }
@@ -84,6 +90,25 @@ export class ATOWCharacterEquipmentSheet extends HandlebarsApplicationMixin(Item
     super._onRender(context, options);
 
     const root = this.element;
+    const recharge = root?.querySelector?.('[data-action="recharge-power-pack"]');
+    if (recharge && recharge.dataset.atowBound !== "1") {
+      recharge.dataset.atowBound = "1";
+      recharge.addEventListener("click", async event => {
+        event.preventDefault();
+        if (!this.isEditable) return;
+        const capacity = getCharacterPowerPackCapacity(this.item);
+        if (!capacity.tracked) {
+          ui.notifications?.warn?.("Set this Power Pack's maximum Power Capacity first.");
+          return;
+        }
+        await this.item.update({
+          "system.powerCapacity.current": capacity.maximum,
+          "system.powerCapacity.max": capacity.maximum
+        });
+        ui.notifications?.info?.(`${this.item.name} recharged (${capacity.maximum}/${capacity.maximum} PP).`);
+      });
+    }
+
     const portrait = root?.querySelector?.('[data-edit="img"]');
     if (!portrait || portrait.dataset.atowImgBound === "1") return;
 

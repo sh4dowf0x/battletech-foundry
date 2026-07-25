@@ -149,9 +149,50 @@
 
 .top-right {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
   align-items: center;
   gap: 8px;
+}
+
+.character-header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.character-header-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  width: auto;
+  min-width: 0;
+  height: 22px;
+  padding: 0 9px;
+  border: 1px solid rgba(223, 123, 62, 0.28);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--char-text);
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.character-header-action-btn strong {
+  color: #fff4ea;
+  font-size: 0.68rem;
+  letter-spacing: 0;
+}
+
+.character-header-action-btn:hover {
+  border-color: rgba(223, 123, 62, 0.52);
+  background: rgba(223, 123, 62, 0.14);
 }
 
 .atow-icon-btn,
@@ -683,6 +724,40 @@ img.char-portrait:hover {
 
 .move-line input {
   width: 56px;
+}
+
+.combat-input.ammo-empty {
+  border-color: rgba(210, 72, 72, 0.75);
+  color: #ff9b91;
+}
+
+.move-name-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.movement-mode-control {
+  width: auto;
+  min-width: 0;
+  height: auto;
+  margin: 0;
+  padding: 0 2px;
+  border: 0;
+  background: transparent;
+  color: var(--char-accent);
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: uppercase;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.movement-mode-control:hover,
+.movement-mode-control:focus-visible,
+.movement-mode-control.active {
+  color: #fff4ea;
+  text-shadow: 0 0 7px rgba(223, 123, 62, 0.75);
 }
 
 .combat-list {

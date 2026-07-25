@@ -3,6 +3,14 @@
 //
 // Expected item type: "characterWeapon" (adjust in registerATOWCharacterWeaponSheet if you use a different type key)
 
+import { getCharacterWeaponMagazine } from "./character-attack.js";
+import {
+  CHARACTER_WEAPON_CATEGORY_CHOICES,
+  FLEXIBLE_RESOURCE_MODE_CHOICES,
+  getCharacterWeaponResourceProfile
+} from "./character-weapon-types.js";
+import { getCharacterPowerPackCapacity, getCharacterPowerPacks } from "./character-power.js";
+
 const SYSTEM_ID = "atow-battletech";
 const TEMPLATE = `systems/${SYSTEM_ID}/templates/character-weapon.hbs`;
 
@@ -55,6 +63,12 @@ export class ATOWCharacterWeaponSheet extends HandlebarsApplicationMixin(ItemShe
 
     sys.range ??= "";
     sys.shots ??= "";
+    sys.magazine ??= {};
+    sys.weaponCategory ??= "";
+    sys.resourceMode ??= "";
+    sys.pps ??= 0;
+    sys.powerPackId ??= "";
+    sys.ammunitionItemId ??= "";
     sys.costReload ??= "";
     sys.affiliation ??= "";
 
@@ -67,6 +81,22 @@ export class ATOWCharacterWeaponSheet extends HandlebarsApplicationMixin(ItemShe
     sys.skillKey ??= "melee";
     context.skillChoices = WEAPON_SKILL_CHOICES;
     context.skillTied = WEAPON_SKILL_TIED[sys.skillKey] ?? "";
+    context.magazine = getCharacterWeaponMagazine(this.item);
+    context.weaponCategoryChoices = CHARACTER_WEAPON_CATEGORY_CHOICES;
+    context.resourceModeChoices = FLEXIBLE_RESOURCE_MODE_CHOICES;
+    context.resourceProfile = getCharacterWeaponResourceProfile(this.item);
+    const owningActor = this.item.parent?.documentName === "Actor" ? this.item.parent : null;
+    const powerPacks = getCharacterPowerPacks(owningActor);
+    context.powerPackChoices = Object.fromEntries(powerPacks.map(pack => {
+      const capacity = getCharacterPowerPackCapacity(pack);
+      return [pack.id, `${pack.name} (${capacity.display})`];
+    }));
+    context.hasPowerPacks = powerPacks.length > 0;
+    const ammunitionItems = Array.from(owningActor?.items?.contents ?? owningActor?.items ?? [])
+      .filter(item => ["characterEquipment", "gear"].includes(String(item?.type ?? "")))
+      .filter(item => String(item?.system?.gearType ?? "").trim() === "ammunition");
+    context.ammunitionChoices = Object.fromEntries(ammunitionItems.map(ammunition => [ammunition.id, ammunition.name]));
+    context.hasAmmunitionItems = ammunitionItems.length > 0;
 
     return context;
   }

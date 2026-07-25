@@ -57,8 +57,72 @@ export const CHARACTER_ACTION_DEFINITIONS = Object.freeze({
     pluralLabel: "Movement Actions",
     perTurn: 1,
     summary: "The character's declared movement mode for the turn.",
-    examples: Object.freeze(["Stationary", "Walk", "Run", "Sprint", "Crawl", "Climb", "Swim"]),
+    examples: Object.freeze(["Stationary", "Walk", "Run", "Sprint", "Evade", "Crawl", "Climb", "Swim"]),
     mayCombineWith: Object.freeze(["incidental", "simple", "complex"])
+  })
+});
+
+// A Time of War: Action Complexity Table. Keep this as the canonical rules
+// reference for personal-scale automation as more individual actions are added.
+export const CHARACTER_ACTION_COMPLEXITY_TABLE = Object.freeze({
+  incidental: Object.freeze({
+    nonMovement: Object.freeze([
+      "Crouch",
+      "Drop Object",
+      "Drop Prone",
+      "Gesture",
+      "Leaping (Downward)",
+      "Melee Defense (except Break Grapple)",
+      "Observe Quickly (No Perception Skill)",
+      "Sit Down",
+      "Speak (Single Word)",
+      "Stand Up"
+    ]),
+    movement: Object.freeze(["No Movement", "Walking"])
+  }),
+  simple: Object.freeze({
+    nonMovement: Object.freeze([
+      "Lead Team",
+      "Leaping (Upward or Horizontally)",
+      "Load Weapon",
+      "Melee Attack",
+      "Melee Defense (Break Grapple)",
+      "Observe in Detail (Perception Skill)",
+      "Pick Up/Put Down Object",
+      "Ranged Attack (other than Suppression Fire)",
+      "Ready/Draw Non-Crewed Weapon/Small Equipment",
+      "Recover From Stun",
+      "Speak (Brief Phrase)",
+      "Stow/Sheath Equipment",
+      "Use Simple Object",
+      "Use Simple Skill (Trained)"
+    ]),
+    movement: Object.freeze([
+      "Climbing (with Climbing Skill)",
+      "Crawling",
+      "Running",
+      "Swimming (with Swimming Skill)"
+    ])
+  }),
+  complex: Object.freeze({
+    nonMovement: Object.freeze([
+      "Careful Aim",
+      "Extinguish Fire",
+      "Ranged Attack (Suppression Fire)",
+      "Ready Large Equipment/Crewed Weapon",
+      "Recover Fatigue",
+      "Speak (Conversation)",
+      "Spot for Indirect Fire",
+      "Use Complex Object",
+      "Use Complex Skill",
+      "Use Untrained Skill"
+    ]),
+    movement: Object.freeze([
+      "Climbing (without Climbing Skill)",
+      "Evading",
+      "Sprinting",
+      "Swimming (without Swimming Skill)"
+    ])
   })
 });
 
@@ -66,10 +130,10 @@ export const CHARACTER_MOVEMENT_MODES = Object.freeze({
   stationary: Object.freeze({
     key: "stationary",
     label: "Stationary",
-    actionCost: CHARACTER_ACTION_TYPES.INCIDENTAL,
+    actionCost: null,
     mayMove: false,
     derivedMoveKey: null,
-    summary: "Default if no movement is declared; the character may not willingly move this turn."
+    summary: "Default if no movement is declared; the character may not willingly move this turn and spends no action."
   }),
   walk: Object.freeze({
     key: "walk",
@@ -91,6 +155,13 @@ export const CHARACTER_MOVEMENT_MODES = Object.freeze({
     actionCost: CHARACTER_ACTION_TYPES.COMPLEX,
     mayMove: true,
     derivedMoveKey: "sprint"
+  }),
+  evade: Object.freeze({
+    key: "evade",
+    label: "Evade",
+    actionCost: CHARACTER_ACTION_TYPES.COMPLEX,
+    mayMove: true,
+    derivedMoveKey: "evade"
   }),
   crawl: Object.freeze({
     key: "crawl",
@@ -127,15 +198,18 @@ export const CHARACTER_MOVEMENT_MANEUVERS = Object.freeze({
   changeFacing: Object.freeze({
     key: "changeFacing",
     label: "Change Facing",
-    mp: 1,
-    perFacingStep: true,
-    summary: "Turn one hexside/facing step."
+    mp: 0,
+    rulesMpPer180Degrees: 1,
+    automationOverride: true,
+    summary: "Facing changes are currently free in personal-scale automation; the tabletop rule charges 1 MP per 180 degrees turned."
   }),
   aboutFace: Object.freeze({
     key: "aboutFace",
     label: "About Face",
-    mp: 3,
-    summary: "Turn three hexsides/facing steps."
+    mp: 0,
+    rulesMp: 1,
+    automationOverride: true,
+    summary: "A 180-degree facing change is currently free in personal-scale automation."
   }),
   goProne: Object.freeze({
     key: "goProne",
@@ -301,12 +375,214 @@ function movementCostCounts(modeKey) {
   };
 }
 
+function getCombatTurnStamp(combat = game.combat) {
+  if (!combat?.started) return "no-combat";
+  return `${combat.id ?? "combat"}:${combat.round ?? 0}:${combat.turn ?? 0}`;
+}
+
+function getCharacterTokenDocument(actor, explicitToken = null) {
+  const explicit = explicitToken?.document ?? explicitToken;
+  if (explicit) return explicit;
+  const actorId = String(actor?.id ?? "");
+  const controlled = canvas?.tokens?.controlled?.find?.(token => String(token?.actor?.id ?? "") === actorId);
+  if (controlled?.document) return controlled.document;
+  const combatant = game.combat?.combatants?.find?.(entry =>
+    String(entry?.actorId ?? entry?.actor?.id ?? entry?.token?.actor?.id ?? "") === actorId
+  );
+  if (combatant?.token) return combatant.token;
+  return canvas?.tokens?.placeables?.find?.(token => String(token?.actor?.id ?? "") === actorId)?.document ?? null;
+}
+
+function getActionTrackerDocument(actor, tokenDocument = null) {
+  return getCharacterTokenDocument(actor, tokenDocument) ?? actor ?? null;
+}
+
+function getActionTrackerStamp(document) {
+  return String(document?.getFlag?.(SYSTEM_ID, "turnStamp") ?? getCombatTurnStamp());
+}
+
+function emptyActionTracker(stamp) {
+  return {
+    stamp,
+    counts: { incidental: 0, simple: 0, complex: 0 },
+    entries: []
+  };
+}
+
+function normalizeActionTracker(document) {
+  const stamp = getActionTrackerStamp(document);
+  const saved = document?.getFlag?.(SYSTEM_ID, "characterActionTracker") ?? document?.flags?.[SYSTEM_ID]?.characterActionTracker ?? null;
+  if (!saved || String(saved.stamp ?? "") !== stamp) return emptyActionTracker(stamp);
+  return {
+    stamp,
+    counts: {
+      incidental: Math.max(0, wholeMp(saved?.counts?.incidental)),
+      simple: Math.max(0, wholeMp(saved?.counts?.simple)),
+      complex: Math.max(0, wholeMp(saved?.counts?.complex))
+    },
+    entries: Array.isArray(saved.entries) ? saved.entries.slice(-25) : []
+  };
+}
+
+function getTrackedMovementMode(document) {
+  const mode = String(document?.getFlag?.(SYSTEM_ID, "moveMode") ?? "stationary").trim().toLowerCase();
+  return CHARACTER_MOVEMENT_MODES[mode] ? mode : "stationary";
+}
+
+export function getCharacterActionState(actor, { tokenDocument = null } = {}) {
+  const document = getActionTrackerDocument(actor, tokenDocument);
+  const tracker = normalizeActionTracker(document);
+  const movement = getTrackedMovementMode(document);
+  const validation = validateCharacterActionBudget({ movement, ...tracker.counts });
+  const movementDefinition = CHARACTER_MOVEMENT_MODES[movement] ?? CHARACTER_MOVEMENT_MODES.stationary;
+  return {
+    document,
+    stamp: tracker.stamp,
+    counts: tracker.counts,
+    entries: tracker.entries,
+    movement,
+    movementLabel: movementDefinition.label,
+    movementActionCost: movementDefinition.actionCost,
+    used: validation.used,
+    limits: CHARACTER_ACTION_LIMITS,
+    remaining: {
+      incidental: Math.max(0, CHARACTER_ACTION_LIMITS.incidental - validation.used.incidental),
+      simple: Math.max(0, CHARACTER_ACTION_LIMITS.simple - validation.used.simple),
+      complex: Math.max(0, CHARACTER_ACTION_LIMITS.complex - validation.used.complex),
+      movement: 0
+    },
+    valid: validation.valid,
+    errors: validation.errors
+  };
+}
+
+export function canSpendCharacterAction(actor, actionType, { count = 1, tokenDocument = null } = {}) {
+  const type = String(actionType ?? "").trim().toLowerCase();
+  if (![CHARACTER_ACTION_TYPES.INCIDENTAL, CHARACTER_ACTION_TYPES.SIMPLE, CHARACTER_ACTION_TYPES.COMPLEX].includes(type)) {
+    return { ok: false, reason: `Unknown character action type: ${actionType}` };
+  }
+  const amount = Math.max(1, wholeMp(count));
+  const state = getCharacterActionState(actor, { tokenDocument });
+  const nextCounts = { ...state.counts, [type]: state.counts[type] + amount };
+  const validation = validateCharacterActionBudget({ movement: state.movement, ...nextCounts });
+  return {
+    ok: validation.valid,
+    reason: validation.errors[0] ?? "",
+    errors: validation.errors,
+    type,
+    count: amount,
+    state,
+    nextCounts,
+    nextUsed: validation.used
+  };
+}
+
+export function canUseCharacterMovementMode(actor, movementMode, { tokenDocument = null } = {}) {
+  const state = getCharacterActionState(actor, { tokenDocument });
+  const movement = String(movementMode ?? "stationary").trim().toLowerCase();
+  if (!CHARACTER_MOVEMENT_MODES[movement]) return { ok: false, reason: `Unknown movement type: ${movementMode}`, state };
+  const validation = validateCharacterActionBudget({ movement, ...state.counts });
+  return {
+    ok: validation.valid,
+    reason: validation.errors[0] ?? "",
+    errors: validation.errors,
+    movement,
+    used: validation.used,
+    state
+  };
+}
+
+export async function spendCharacterAction(actor, actionType, { count = 1, label = "", tokenDocument = null } = {}) {
+  const check = canSpendCharacterAction(actor, actionType, { count, tokenDocument });
+  if (!check.ok) return check;
+  const document = check.state.document;
+  if (!document?.setFlag) return { ...check, ok: false, reason: "No actor or token document is available to track actions." };
+  const entry = {
+    type: check.type,
+    count: check.count,
+    label: String(label || CHARACTER_ACTION_DEFINITIONS[check.type]?.label || check.type),
+    at: Date.now()
+  };
+  const tracker = {
+    stamp: check.state.stamp,
+    counts: check.nextCounts,
+    entries: [...check.state.entries, entry].slice(-25)
+  };
+  await document.setFlag(SYSTEM_ID, "characterActionTracker", tracker);
+  try { if (actor?.sheet?.rendered) actor.sheet.render(false); } catch (_) {}
+  return { ...check, ok: true, tracker, state: getCharacterActionState(actor, { tokenDocument: document }) };
+}
+
+export async function refundCharacterAction(actor, actionType, { count = 1, tokenDocument = null } = {}) {
+  const type = String(actionType ?? "").trim().toLowerCase();
+  if (![CHARACTER_ACTION_TYPES.INCIDENTAL, CHARACTER_ACTION_TYPES.SIMPLE, CHARACTER_ACTION_TYPES.COMPLEX].includes(type)) {
+    return { ok: false, reason: `Unknown character action type: ${actionType}` };
+  }
+  const state = getCharacterActionState(actor, { tokenDocument });
+  if (!state.document?.setFlag) return { ok: false, reason: "No actor or token document is available to track actions." };
+  const amount = Math.max(1, wholeMp(count));
+  const counts = { ...state.counts, [type]: Math.max(0, state.counts[type] - amount) };
+  const entries = state.entries.slice();
+  for (let i = entries.length - 1; i >= 0; i -= 1) {
+    if (entries[i]?.type === type) {
+      entries.splice(i, 1);
+      break;
+    }
+  }
+  await state.document.setFlag(SYSTEM_ID, "characterActionTracker", { stamp: state.stamp, counts, entries });
+  try { if (actor?.sheet?.rendered) actor.sheet.render(false); } catch (_) {}
+  return { ok: true, state: getCharacterActionState(actor, { tokenDocument: state.document }) };
+}
+
+export async function resetCharacterActions(actor, { tokenDocument = null } = {}) {
+  const document = getActionTrackerDocument(actor, tokenDocument);
+  if (!document?.setFlag) return { ok: false, reason: "No actor or token document is available to track actions." };
+  const tracker = emptyActionTracker(getActionTrackerStamp(document));
+  await document.setFlag(SYSTEM_ID, "characterActionTracker", tracker);
+  try { if (actor?.sheet?.rendered) actor.sheet.render(false); } catch (_) {}
+  return { ok: true, state: getCharacterActionState(actor, { tokenDocument: document }) };
+}
+
+export function registerCharacterActionHooks() {
+  if (globalThis.__ATOW_CHARACTER_ACTION_HOOKS_REGISTERED__) return;
+  globalThis.__ATOW_CHARACTER_ACTION_HOOKS_REGISTERED__ = true;
+  Hooks.on("updateToken", (tokenDocument, changed) => {
+    const actor = tokenDocument?.actor;
+    if (String(actor?.type ?? "").toLowerCase() !== "character") return;
+    const flattened = foundry.utils.flattenObject(changed ?? {});
+    const relevant = Object.keys(flattened).some(key =>
+      key.includes(`flags.${SYSTEM_ID}.characterActionTracker`)
+      || key.endsWith(`flags.${SYSTEM_ID}.moveMode`)
+      || key.endsWith(`flags.${SYSTEM_ID}.turnStamp`)
+    );
+    if (!relevant) return;
+    try { if (actor?.sheet?.rendered) actor.sheet.render(false); } catch (_) {}
+  });
+}
+
 export function getCharacterActionDefinitions() {
   return CHARACTER_ACTION_DEFINITIONS;
 }
 
 export function getCharacterMovementModes() {
   return CHARACTER_MOVEMENT_MODES;
+}
+
+export function getCharacterActionComplexityTable() {
+  return CHARACTER_ACTION_COMPLEXITY_TABLE;
+}
+
+export function getCharacterMovementModeForMeters(metersMoved, movementRates = {}) {
+  const meters = Math.max(0, num(metersMoved));
+  const walk = Math.max(0, num(movementRates?.walk));
+  const run = Math.max(walk, num(movementRates?.run));
+  const sprint = Math.max(run, num(movementRates?.sprint));
+
+  if (meters <= 0) return "stationary";
+  if (walk > 0 && meters <= walk) return "walk";
+  if (run > 0 && meters <= run) return "run";
+  if (sprint > 0 && meters <= sprint) return "sprint";
+  return sprint > 0 ? "sprint" : (run > 0 ? "run" : "walk");
 }
 
 export function getCharacterMovementManeuvers() {
@@ -479,12 +755,14 @@ export function registerCharacterCombatApi(namespace) {
   if (!namespace) return null;
   namespace.config = namespace.config ?? {};
   namespace.api = namespace.api ?? {};
+  registerCharacterActionHooks();
 
   namespace.config.characterCombat = {
     scale: CHARACTER_PERSONAL_SCALE,
     actionTypes: CHARACTER_ACTION_TYPES,
     actionLimits: CHARACTER_ACTION_LIMITS,
     actions: CHARACTER_ACTION_DEFINITIONS,
+    actionComplexityTable: CHARACTER_ACTION_COMPLEXITY_TABLE,
     movementModes: CHARACTER_MOVEMENT_MODES,
     movementManeuvers: CHARACTER_MOVEMENT_MANEUVERS,
     initiativeModes: CHARACTER_INITIATIVE_MODES,
@@ -493,6 +771,7 @@ export function registerCharacterCombatApi(namespace) {
 
   namespace.api.characterCombat = {
     getActionDefinitions: getCharacterActionDefinitions,
+    getActionComplexityTable: getCharacterActionComplexityTable,
     getMovementModes: getCharacterMovementModes,
     getMovementManeuvers: getCharacterMovementManeuvers,
     getInitiativeModes: getCharacterInitiativeModes,
@@ -501,12 +780,19 @@ export function registerCharacterCombatApi(namespace) {
     metersToMovementPoints: metersToCharacterMovementPoints,
     hexesToMovementPoints: hexesToCharacterMovementPoints,
     getMovementModeBudget: getCharacterMovementModeBudget,
+    getMovementModeForMeters: getCharacterMovementModeForMeters,
     getManeuverCost: getCharacterManeuverCost,
     summarizeMovementBudget: summarizeCharacterMovementBudget,
     validateMovementSpend: validateCharacterMovementSpend,
     summarizeActionBudget: summarizeCharacterActionBudget,
     validateActionBudget: validateCharacterActionBudget,
-    validateTurnActions: validateCharacterTurnActions
+    validateTurnActions: validateCharacterTurnActions,
+    getActionState: getCharacterActionState,
+    canSpendAction: canSpendCharacterAction,
+    canUseMovementMode: canUseCharacterMovementMode,
+    spendAction: spendCharacterAction,
+    refundAction: refundCharacterAction,
+    resetActions: resetCharacterActions
   };
 
   console.log(`${SYSTEM_ID} | Registered character combat rules API`);

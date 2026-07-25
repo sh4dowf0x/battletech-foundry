@@ -2,7 +2,11 @@
 // version: 0.1.4
 // NOTE: This sheet now loads a dedicated stylesheet: systems/atow-battletech/styles/character-sheet.css
 
-import { getCharacterInitiativeDetails } from "./character-combat.js";
+import { canSpendCharacterAction, canUseCharacterMovementMode, getCharacterActionState, getCharacterInitiativeDetails, refundCharacterAction, spendCharacterAction } from "./character-combat.js";
+import { getCharacterWeaponMagazine, promptAndRollCharacterWeaponAttack } from "./character-attack.js";
+import { SKILL_CLASSIFICATION_REFERENCE_VERSION, getEffectiveSkillClassification, getReferencedSkillClassification } from "./skill-classifications.js";
+import { getCharacterWeaponResourceProfile } from "./character-weapon-types.js";
+import { getCharacterPowerPackCapacity, getSelectedCharacterPowerPack } from "./character-power.js";
 
 const SYSTEM_ID = "atow-battletech";
 // NOTE: v2 sheet uses its own template file.
@@ -96,6 +100,7 @@ function buildMovementStatusForActor(actor, derivedMove = {}) {
   return {
     hasToken: true,
     mode,
+    isEvading: mode === "evade",
     modeLabel: labelFromMovementMode(mode),
     mpUsed,
     mpMax,
@@ -330,6 +335,17 @@ function coerceIndexedCollection(raw) {
  */
 function combatWeaponRowFromItem(item) {
   const sys = item?.system ?? {};
+  const magazine = getCharacterWeaponMagazine(item);
+  const resources = getCharacterWeaponResourceProfile(item);
+  const pps = Math.max(0, Math.floor(Number(sys.pps ?? 0) || 0));
+  const selectedPowerPack = getSelectedCharacterPowerPack(item?.parent, item);
+  const powerPackDisplay = selectedPowerPack
+    ? `${selectedPowerPack.name} ${getCharacterPowerPackCapacity(selectedPowerPack).display}`
+    : "No Pack";
+  const resourceDisplay = [
+    resources.usesAmmo ? magazine.display : "",
+    resources.usesPps ? `${pps} PPS (${powerPackDisplay})` : ""
+  ].filter(Boolean).join(" + ") || "--";
 
   // Skill mapping (stored on the Character Weapon item sheet as system.skillKey)
   const skillKey = String(sys.skillKey ?? sys.skill ?? sys.attackSkill ?? sys.skillName ?? "").trim();
@@ -375,7 +391,8 @@ function combatWeaponRowFromItem(item) {
     tiedSkill,
     apbd,
     range: String(sys.range ?? ""),
-    ammo: String(sys.shots ?? sys.ammo ?? sys.ammoCount ?? "").trim(),
+    ammo: resourceDisplay,
+    ammoEmpty: magazine.tracked && magazine.current <= 0,
     notes: String(sys.notes ?? "")
   };
 }
@@ -554,6 +571,7 @@ export class ATOWCharacterSheet extends HandlebarsApplicationMixin(ActorSheetV2)
         name: i.name,
         img: i.img,
         type: i.type,
+        isWeapon: i.type === "characterWeapon",
         typeLabel: i.type === "characterWeapon"
           ? "Weapon"
           : (i.type === "characterArmor"
@@ -598,8 +616,16 @@ export class ATOWCharacterSheet extends HandlebarsApplicationMixin(ActorSheetV2)
         const tnRaw = Number(s.system?.tn);
         const tn = Number.isFinite(tnRaw) ? tnRaw : null;
 
-        // Optional "C" (category/check) field if you store it on the skill
-        const c = String(s.system?.c ?? s.system?.check ?? s.system?.categoryShort ?? "").trim();
+        const referencedClassification = getReferencedSkillClassification(s);
+        const classificationVersion = Number(s.system?.classificationReferenceVersion ?? 0) || 0;
+        const c = String(
+          (classificationVersion < SKILL_CLASSIFICATION_REFERENCE_VERSION ? referencedClassification?.code : "")
+          || s.system?.complexityCode
+          || s.system?.c
+          || s.system?.check
+          || s.system?.categoryShort
+          || ""
+        ).trim().toUpperCase();
 
         const tnc = [
           tn !== null ? String(tn) : "",
@@ -692,6 +718,14 @@ export class ATOWCharacterSheet extends HandlebarsApplicationMixin(ActorSheetV2)
     // Derived movement display values (computed; not editable)
     context.derivedMove = computeDerivedMove(this.actor);
     context.movementStatus = buildMovementStatusForActor(this.actor, context.derivedMove);
+    const actionState = getCharacterActionState(this.actor, { tokenDocument: getSheetTokenDocForActor(this.actor) });
+    context.actionEconomy = {
+      rows: [
+        { key: "incidental", label: "Incidental", used: actionState.used.incidental, remaining: actionState.remaining.incidental, limit: actionState.limits.incidental },
+        { key: "simple", label: "Simple", used: actionState.used.simple, remaining: actionState.remaining.simple, limit: actionState.limits.simple },
+        { key: "complex", label: "Complex", used: actionState.used.complex, remaining: actionState.remaining.complex, limit: actionState.limits.complex }
+      ]
+    };
 
     // Derived vitals display values (computed; max values are not editable)
     context.derivedVitals = computeDerivedVitals(this.actor);
@@ -746,6 +780,7 @@ export class ATOWCharacterSheet extends HandlebarsApplicationMixin(ActorSheetV2)
       apbd: String(row.apbd ?? ""),
       range: String(row.range ?? ""),
       ammo: row.ammo ?? "",
+      ammoEmpty: Boolean(row.ammoEmpty),
       notes: String(row.notes ?? "")
     });
 
@@ -1250,6 +1285,56 @@ export class ATOWCharacterSheet extends HandlebarsApplicationMixin(ActorSheetV2)
     }
 
     // ------------------------------------------------
+    // Personal-scale action economy controls
+    // ------------------------------------------------
+    const actionAdjust = target.closest("[data-action='character-action-adjust']");
+    if (actionAdjust) {
+      event.preventDefault();
+      const actionType = String(actionAdjust.dataset.actionType ?? "");
+      const delta = event.shiftKey ? -1 : Number(actionAdjust.dataset.delta ?? 0);
+      const tokenDocument = getSheetTokenDocForActor(this.actor);
+      const result = delta > 0
+        ? await spendCharacterAction(this.actor, actionType, { tokenDocument, label: `Manual ${titleCase(actionType)} Action` })
+        : await refundCharacterAction(this.actor, actionType, { tokenDocument });
+      if (!result?.ok) ui.notifications?.warn?.(result?.reason ?? "That action cannot be recorded.");
+      return;
+    }
+
+    const evadeControl = target.closest("[data-action='start-evading']");
+    if (evadeControl) {
+      event.preventDefault();
+      const tokenDocument = getSheetTokenDocForActor(this.actor);
+      if (!tokenDocument) {
+        ui.notifications?.warn?.("Place or control this character's token before declaring Evasion.");
+        return;
+      }
+      if (String(tokenDocument.getFlag?.(SYSTEM_ID, "moveMode") ?? "").toLowerCase() === "evade") {
+        ui.notifications?.info?.(`${this.actor.name} is already Evading.`);
+        return;
+      }
+
+      const runSpeed = Math.max(0, Number(this.actor.system?.derived?.move?.run ?? 0) || 0);
+      const movementSpent = Math.max(0, Number(
+        tokenDocument.getFlag?.(SYSTEM_ID, "mpSpentThisTurn")
+        ?? tokenDocument.getFlag?.(SYSTEM_ID, "movedHexesThisTurn")
+        ?? 0
+      ) || 0);
+      if (movementSpent > runSpeed) {
+        ui.notifications?.warn?.(`Cannot Evade after moving beyond Run speed (${runSpeed} m).`);
+        return;
+      }
+
+      const check = canUseCharacterMovementMode(this.actor, "evade", { tokenDocument });
+      if (!check.ok) {
+        ui.notifications?.warn?.(`Cannot Evade: ${check.reason}`);
+        return;
+      }
+
+      await tokenDocument.setFlag(SYSTEM_ID, "moveMode", "evade");
+      ui.notifications?.info?.(`${this.actor.name} is Evading and may move up to ${runSpeed} m.`);
+      return;
+    }
+
     // Weapon attack roll (click weapon name in combat list)
     // ------------------------------------------------
     const weaponRoll = target.closest("[data-action='roll-weapon'], .weapon-roll");
@@ -1271,6 +1356,7 @@ export class ATOWCharacterSheet extends HandlebarsApplicationMixin(ActorSheetV2)
       if (!item) return;
 
       const next = !item.system?.equipped;
+      const autoStowVictims = [];
 
       // Enforce maximum equipped weapons/armor (4 each). If we would exceed the cap,
       // automatically unequip the lowest-priority currently equipped item (the last slot).
@@ -1285,12 +1371,50 @@ export class ATOWCharacterSheet extends HandlebarsApplicationMixin(ActorSheetV2)
         while (equippedIds.length >= cap) {
           const victimId = equippedIds[equippedIds.length - 1];
           const victim = this.actor.items.get(victimId);
-          if (victim) await victim.update({ "system.equipped": false });
+          if (victim) autoStowVictims.push(victim);
           equippedIds = equippedIds.slice(0, -1);
         }
       }
 
-      await item.update({ "system.equipped": next });
+      const tracksWeaponAction = item.type === "characterWeapon" && Boolean(game.combat?.started);
+      const actionCount = tracksWeaponAction ? 1 + autoStowVictims.length : 0;
+      const tokenDocument = tracksWeaponAction ? getSheetTokenDocForActor(this.actor) : null;
+      if (tracksWeaponAction) {
+        const check = canSpendCharacterAction(this.actor, "simple", { count: actionCount, tokenDocument });
+        if (!check.ok) {
+          ui.notifications?.warn?.(`Cannot ${next ? "ready" : "stow"} ${item.name}: ${check.reason}`);
+          return;
+        }
+      }
+
+      let actionSpend = null;
+      if (tracksWeaponAction) {
+        const extra = autoStowVictims.length ? ` and stow ${autoStowVictims.map(victim => victim.name).join(", ")}` : "";
+        actionSpend = await spendCharacterAction(this.actor, "simple", {
+          count: actionCount,
+          tokenDocument,
+          label: `${next ? "Ready" : "Stow"}: ${item.name}${extra}`
+        });
+        if (!actionSpend.ok) {
+          ui.notifications?.warn?.(`Cannot ${next ? "ready" : "stow"} ${item.name}: ${actionSpend.reason}`);
+          return;
+        }
+      }
+
+      try {
+        for (const victim of autoStowVictims) await victim.update({ "system.equipped": false });
+        await item.update({ "system.equipped": next });
+      } catch (error) {
+        for (const victim of autoStowVictims) {
+          await victim.update({ "system.equipped": true }).catch(() => {});
+        }
+        if (actionSpend?.ok) {
+          await refundCharacterAction(this.actor, "simple", { count: actionCount, tokenDocument }).catch(() => {});
+        }
+        console.error(`${SYSTEM_ID} | Failed to ready or stow character weapon`, error);
+        ui.notifications?.error?.(`Could not ${next ? "ready" : "stow"} ${item.name}.`);
+        return;
+      }
 
       // Prefer showing the toggled-on item at the top.
       const opts = {};
@@ -1298,6 +1422,9 @@ export class ATOWCharacterSheet extends HandlebarsApplicationMixin(ActorSheetV2)
       if (next && item.type === "characterArmor") opts.preferArmorId = item.id;
 
       await this._syncEquippedToCombatTables(opts);
+      if (tracksWeaponAction) {
+        ui.notifications?.info?.(`${item.name} ${next ? "readied" : "stowed"} (1 Simple Action${autoStowVictims.length ? ` + ${autoStowVictims.length} automatic stow` : ""}).`);
+      }
       return;
     }
 
@@ -1356,63 +1483,9 @@ export class ATOWCharacterSheet extends HandlebarsApplicationMixin(ActorSheetV2)
   }
 
   async _rollWeaponAttack(itemId) {
-    const actor = this.actor;
-    const weapon = actor.items.get(itemId);
+    const weapon = this.actor.items.get(itemId);
     if (!weapon || weapon.type !== "characterWeapon") return;
-
-    // Normalize weapon info similarly to the combat table.
-    const row = combatWeaponRowFromItem(weapon);
-    const tiedSkillName = String(row.tiedSkill || "").trim();
-    const displaySkill = String(row.skill || "").trim();
-
-    // Find the Skill item to roll against (preferred).
-    const skillItem = tiedSkillName ? findSkillByName(actor, tiedSkillName) : null;
-
-    if (!skillItem) {
-      ui.notifications?.warn?.(`No matching Skill item found for ${weapon.name} (${tiedSkillName || displaySkill || "Unknown Skill"}).`);
-      return;
-    }
-
-    const skillXp = Number(skillItem.system?.xp ?? skillMinXpForRank(skillItem.system?.rank)) || 0;
-    const rank = skillRankFromXp(skillXp);
-
-    // Linked attributes: up to 2, with legacy fallback.
-    const linked1 = String(skillItem.system?.linkedAttribute1 ?? skillItem.system?.linkedAttribute ?? "").trim();
-    const linked2 = String(skillItem.system?.linkedAttribute2 ?? "").trim();
-    const linkedKeys = Array.from(new Set([linked1, linked2].filter(k => !!k)));
-
-    const totalLink = linkedKeys
-      .map(k => attributeLinkFromValue(derivedAttributeValueFromActor(actor, k)))
-      .reduce((a, b) => a + b, 0);
-
-    const modifier = rank + totalLink;
-
-    const tnRaw = Number(skillItem.system?.tn);
-    const tn = Number.isFinite(tnRaw) ? tnRaw : undefined;
-
-    const flavorBits = [
-      `${weapon.name} | Attack`,
-      displaySkill ? `Skill: ${displaySkill}` : "",
-      row.apbd ? `AP/BD: ${row.apbd}` : "",
-      row.range ? `Range: ${row.range}` : ""
-    ].filter(Boolean);
-
-    const api = game[SYSTEM_ID]?.api;
-    if (api?.rollCheck) {
-      return api.rollCheck({
-        actor,
-        label: `${weapon.name} Attack`,
-        modifier,
-        tn,
-        flavor: flavorBits.join(" • ")
-      });
-    }
-
-    const roll = await new Roll(`2d6 + ${modifier}`).evaluate();
-    return roll.toMessage({
-      speaker: ChatMessage.getSpeaker({ actor }),
-      flavor: flavorBits.join(" • ")
-    });
+    return promptAndRollCharacterWeaponAttack(this.actor, weapon);
   }
 
   async _createItem(type = "characterEquipment") {
@@ -1532,6 +1605,18 @@ export class ATOWCharacterSheet extends HandlebarsApplicationMixin(ActorSheetV2)
     const skill = actor.items.get(itemId);
     if (!skill) return;
 
+    const classification = getEffectiveSkillClassification(skill);
+    const actionType = classification.actionComplexity === "complex" ? "complex" : "simple";
+    const tokenDocument = getSheetTokenDocForActor(actor);
+    const tracksCombatAction = Boolean(game.combat?.started);
+    if (tracksCombatAction) {
+      const actionCheck = canSpendCharacterAction(actor, actionType, { tokenDocument });
+      if (!actionCheck.ok) {
+        ui.notifications?.warn?.(`Cannot use ${skill.name}: ${actionCheck.reason}`);
+        return;
+      }
+    }
+
     const skillXp = Number(skill.system?.xp ?? skillMinXpForRank(skill.system?.rank)) || 0;
     const rank = skillRankFromXp(skillXp);
 
@@ -1555,21 +1640,37 @@ export class ATOWCharacterSheet extends HandlebarsApplicationMixin(ActorSheetV2)
     const tnRaw = Number(skill.system?.tn);
     const tn = Number.isFinite(tnRaw) ? tnRaw : undefined;
 
-    const api = game[SYSTEM_ID]?.api;
-    if (api?.rollCheck) {
-      return api.rollCheck({
-        actor,
-        label: skill.name,
-        modifier,
-        tn,
-        flavor: `${skill.name} (Rank ${rank}${linkLabel ? `, ${linkLabel} Link ${totalLink}` : ""})`
+    let actionSpend = null;
+    if (tracksCombatAction) {
+      actionSpend = await spendCharacterAction(actor, actionType, {
+        tokenDocument,
+        label: `Skill: ${skill.name} (${classification.code})`
       });
+      if (!actionSpend.ok) {
+        ui.notifications?.warn?.(`Cannot use ${skill.name}: ${actionSpend.reason}`);
+        return;
+      }
     }
 
-    const roll = await new Roll(`2d6 + ${modifier}`).evaluate();
-    return roll.toMessage({
-      speaker: ChatMessage.getSpeaker({ actor }),
-      flavor: `${skill.name}`
-    });
+    const flavor = `${skill.name} (${classification.code}, Rank ${rank}${linkLabel ? `, ${linkLabel} Link ${totalLink}` : ""})`;
+    try {
+      const api = game[SYSTEM_ID]?.api;
+      if (api?.rollCheck) {
+        return await api.rollCheck({ actor, label: skill.name, modifier, tn, flavor });
+      }
+
+      const roll = await new Roll(`2d6 + ${modifier}`).evaluate();
+      return await roll.toMessage({
+        speaker: ChatMessage.getSpeaker({ actor }),
+        flavor
+      });
+    } catch (error) {
+      if (actionSpend?.ok) {
+        await refundCharacterAction(actor, actionType, { tokenDocument }).catch(() => {});
+      }
+      console.error(`${SYSTEM_ID} | Character skill roll failed`, error);
+      ui.notifications?.error?.(`Could not roll ${skill.name}.`);
+      return null;
+    }
   }
 }

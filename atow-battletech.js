@@ -1,5 +1,5 @@
 // atow-battletech.js (ROOT)
-// version 0.0.10
+// version 0.0.11
 
 import { ATOWCharacterSheet } from "./module/character-sheet.js";
 import { ATOWAbominationSheet } from "./module/abomination-sheet.js";
@@ -17,8 +17,14 @@ import { AToWMechEquipmentSheet } from "./module/mech-equipment.js";
 import { registerATOWCharacterWeaponSheet } from "./module/character-weapon.js";
 import { registerATOWCharacterArmorSheet } from "./module/character-armor.js";
 import { registerATOWAttackSockets, rollHitLocation, applyMechDamageCluster, applyMechPilotHit, resolvePilotSeatbeltCheck } from "./module/mech-attack.js";
+import { registerATOWCharacterAttackSockets } from "./module/character-attack.js";
 import { registerAtowAudioHooks, playActorJumpjetEffect, playActorPowerRestoredAnnouncement, playActorShutdownAnnouncement, playRandomFootstepSequence, playTorsoTwistEffect } from "./module/audio-helper.js";
 import { registerAtowTerrainTools } from "./module/terrain.js";
+import {
+  SKILL_CLASSIFICATION_REFERENCE,
+  SKILL_CLASSIFICATION_REFERENCE_VERSION,
+  getSkillClassificationReferenceUpdate
+} from "./module/skill-classifications.js";
 
 export const SYSTEM_ID = "atow-battletech";
 
@@ -33,6 +39,12 @@ export const ATOW = {
 };
 
 const HEADER_ACTION_DRAG_TYPE = "ATOWHeaderAction";
+const CHARACTER_COVER_STATUS_IDS = Object.freeze([
+  "light-cover",
+  "moderate-cover",
+  "heavy-cover",
+  "full-cover"
+]);
 
 function getSingleControlledMechTokenDoc() {
   const controlled = canvas?.tokens?.controlled ?? [];
@@ -56,6 +68,65 @@ function getTokenDocById(tokenId) {
 // Simple clamp helper (Math.clamp is not standard)
 const clamp = (n, min, max) => Math.min(max, Math.max(min, n));
 
+const isCharacterSkillItem = item => ["skill", "characterSkill"].includes(String(item?.type ?? ""));
+
+async function migrateCanonicalSkillClassifications() {
+  if (!game.user?.isGM) return 0;
+  let migrated = 0;
+
+  for (const item of game.items?.contents ?? []) {
+    if (!isCharacterSkillItem(item)) continue;
+    const version = Number(item.system?.classificationReferenceVersion ?? 0) || 0;
+    if (version >= SKILL_CLASSIFICATION_REFERENCE_VERSION) continue;
+    const update = getSkillClassificationReferenceUpdate(item);
+    if (!update) continue;
+    try {
+      await item.update(update, { atowSkillClassification: true });
+      migrated += 1;
+    } catch (error) {
+      console.warn(`${SYSTEM_ID} | Could not classify world skill ${item.name}`, error);
+    }
+  }
+
+  for (const actor of game.actors?.contents ?? []) {
+    const updates = [];
+    for (const item of actor.items?.contents ?? []) {
+      if (!isCharacterSkillItem(item)) continue;
+      const version = Number(item.system?.classificationReferenceVersion ?? 0) || 0;
+      if (version >= SKILL_CLASSIFICATION_REFERENCE_VERSION) continue;
+      const update = getSkillClassificationReferenceUpdate(item);
+      if (update) updates.push({ _id: item.id, ...update });
+    }
+    if (!updates.length) continue;
+    try {
+      await actor.updateEmbeddedDocuments("Item", updates, { atowSkillClassification: true });
+      migrated += updates.length;
+    } catch (error) {
+      console.warn(`${SYSTEM_ID} | Could not classify skills on ${actor.name}`, error);
+    }
+  }
+
+  if (migrated > 0) console.info(`${SYSTEM_ID} | Auto-populated complexity for ${migrated} skill item(s).`);
+  return migrated;
+}
+
+Hooks.once("ready", () => {
+  migrateCanonicalSkillClassifications().catch(error => {
+    console.warn(`${SYSTEM_ID} | Skill classification migration failed`, error);
+  });
+});
+
+Hooks.on("createItem", async (item, options, _userId) => {
+  if (!game.user?.isGM || options?.atowSkillClassification || !isCharacterSkillItem(item)) return;
+  const update = getSkillClassificationReferenceUpdate(item);
+  if (!update) return;
+  try {
+    await item.update(update, { atowSkillClassification: true });
+  } catch (error) {
+    console.warn(`${SYSTEM_ID} | Could not auto-classify new skill ${item.name}`, error);
+  }
+});
+
 // Heat can exceed the normal 30-point token/resource bar maximum.
 // Keep system.heat.max at 30 for the bar, but allow stored heat.value/current up to this cap.
 const HEAT_HARD_CAP = 100;
@@ -65,10 +136,13 @@ Hooks.once("init", async () => {
 
   // Expose a stable namespace
   game[SYSTEM_ID] = ATOW;
+  ATOW.config.skillClassificationReference = SKILL_CLASSIFICATION_REFERENCE;
+  ATOW.config.skillClassificationReferenceVersion = SKILL_CLASSIFICATION_REFERENCE_VERSION;
 
   const tryRegisterSystemSocket = () => {
     try {
-      registerATOWAttackSockets();
+      const socket = registerATOWAttackSockets();
+      registerATOWCharacterAttackSockets(socket);
     } catch (err) {
       console.warn(`${SYSTEM_ID} | Failed to register socketlib handlers`, err);
     }
@@ -279,11 +353,17 @@ registerSystemSettings();
       mk("skidding",      "Skidding",      icon("skidding")),
       mk("atow-walked",   "Walked",        icon("atow-walked")),
       mk("atow-ran",      "Ran",           icon("atow-ran")),
+      mk("atow-sprinted", "Sprinted",      icon("atow-sprint")),
+      mk("atow-evading",  "Evading",       icon("atow-evasion")),
       mk("atow-jumped",   "Jumped",        icon("atow-jumped")),
       mk("light-woods",   "Light Woods",   icon("light-woods")),
       mk("heavy-woods",   "Heavy Woods",   icon("heavy-woods")),
       mk("in-water",      "In Water",      icon("in-water")),
       mk("partial-cover", "Partial Cover", icon("partial-cover")),
+      mk("light-cover",   "Light Cover",   icon("partial-cover")),
+      mk("moderate-cover", "Moderate Cover", icon("partial-cover")),
+      mk("heavy-cover",   "Heavy Cover",   icon("partial-cover")),
+      mk("full-cover",    "Full Cover",    icon("partial-cover")),
       mk("tagged",        "Tagged",        icon("tagged")),
       // Narc uses the same target-designator artwork as TAG, but is a separate,
       // persistent status whose attached hit location is tracked by the attack engine.
@@ -348,7 +428,10 @@ registerSystemSettings();
     "light-woods",
     "heavy-woods",
     "in-water",
-    "partial-cover"
+    "light-cover",
+    "moderate-cover",
+    "heavy-cover",
+    "full-cover"
   ]);
 
   const filterStatusChoicesForActor = (choices, actorType) => {
@@ -524,7 +607,7 @@ registerSystemSettings();
       }
 
       if (game.user?.isGM) {
-        const movementStatusIds = ["atow-walked", "atow-ran", "atow-jumped", "jumped"];
+        const movementStatusIds = ["atow-walked", "atow-ran", "atow-sprinted", "atow-evading", "atow-jumped", "jumped"];
         const seenActors = new Set();
         const dedupeActor = async (actor) => {
           const key = actor?.uuid ?? actor?.id;
@@ -816,11 +899,13 @@ registerSystemSettings();
   ATOW.api.rollCheck = rollCheck;
 
   // ------------------------------------------------
-  // Combat Movement Automation (Walk/Run/Jump effects)
+  // Combat Movement Automation (Walk/Run/Sprint/Jump effects)
   // ------------------------------------------------
   const MOVE_EFFECT_IDS = {
     walk: "atow-walked",
     run: "atow-ran",
+    sprint: "atow-sprinted",
+    evade: "atow-evading",
     jump: "atow-jumped"
   };
 
@@ -3040,6 +3125,18 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
 
   const getMoveSpeeds = (actor) => {
     const sys = actor?.system ?? {};
+    if (String(actor?.type ?? "").toLowerCase() === "character") {
+      const characterMove = sys.derived?.move ?? sys.move ?? sys.movement ?? {};
+      const walk = Number(characterMove.walk ?? characterMove.Walk ?? 0) || 0;
+      const run = Number(characterMove.run ?? characterMove.Run ?? 0) || 0;
+      const sprint = Number(characterMove.sprint ?? characterMove.Sprint ?? characterMove.jump ?? 0) || 0;
+      return {
+        walk: Math.max(0, walk),
+        run: Math.max(0, run),
+        sprint: Math.max(0, sprint),
+        jump: 0
+      };
+    }
     const isCombatVehicle = actor?.type === "wheeledvehicle" || actor?.type === "vehicle";
     if (isCombatVehicle) {
       const vehicleMove = sys.vehicle?.movement ?? {};
@@ -4180,7 +4277,8 @@ return await mod.promptAndRollWeaponAttack(actorDoc, weapon, {
   });
 
 
-  // Clamp movement to Run speed (active combatant only)
+  // Clamp movement to the active combatant's maximum movement rate.
+  // Characters may progress from Walk to Run to Sprint; other units cap at Run.
   Hooks.on("preUpdateToken", (tokenDoc, changes, options) => {
     if (!game.combat?.started) return;
     if (options?.teleport) return;
@@ -4266,9 +4364,14 @@ return await mod.promptAndRollWeaponAttack(actorDoc, weapon, {
       changes.flags["atow-battletech"].backwardUsedThisTurn = false;
       changes.flags["atow-battletech"].facingStart = getTokenFacingDegrees(tokenDoc);
     }
-    const { walk, run } = getMoveSpeeds(actor);
+    const { walk, run, sprint = run } = getMoveSpeeds(actor);
+    const isCharacter = String(actor.type ?? "").toLowerCase() === "character";
+    // Discard any facing MP left on a character by an older build or an
+    // earlier movement update during this turn.
+    if (isCharacter) turned = 0;
     const maxRun = Number(run ?? 0) || 0;
     const maxWalk = Number(walk ?? 0) || 0;
+    const maxSprint = Number(sprint ?? maxRun) || maxRun;
 
     let dest = null;
     let backwardThisMove = false;
@@ -4288,14 +4391,18 @@ return await mod.promptAndRollWeaponAttack(actorDoc, weapon, {
     }
 
     const walkOnlyThisUpdate = backwardUsedThisTurn || backwardThisMove;
-    const maxAllowedMp = walkOnlyThisUpdate ? maxWalk : maxRun;
+    const declaredEvade = isCharacter
+      && !resetForTurn
+      && String(tokenDoc.getFlag(SYSTEM_ID, "moveMode") ?? "").toLowerCase() === "evade";
+    const maxAllowedMp = walkOnlyThisUpdate ? maxWalk : (declaredEvade ? maxRun : (isCharacter ? maxSprint : maxRun));
 
-    // 1) Turning cost (facing changes)
+    // 1) Turning cost (facing changes). Personal-scale facing changes are
+    // intentionally free for now; mech and vehicle facing costs are unchanged.
     let deltaTurns = 0;
     if (isFacingTurn) {
       const fromFacing = getTokenFacingDegrees(tokenDoc);
       const toFacing = getTokenFacingDegreesAfterChanges(tokenDoc, changes);
-      deltaTurns = facingStepsFromRotationDelta(fromFacing, toFacing);
+      deltaTurns = isCharacter ? 0 : facingStepsFromRotationDelta(fromFacing, toFacing);
 
       const postureMpSpent = Number(tokenDoc.getFlag(SYSTEM_ID, "postureMpSpentThisTurn") ?? 0) || 0;
       const spentNow = movedHexes + turned + terrainMp + postureMpSpent;
@@ -4419,7 +4526,9 @@ return await mod.promptAndRollWeaponAttack(actorDoc, weapon, {
         }
         ui.notifications?.warn?.((walkOnlyThisUpdate
           ? "Movement limited to Walking MP after using backward movement."
-          : "Movement limited to Run speed for this turn.") + terrainSuffix);
+          : (declaredEvade
+            ? "Evasive movement is limited to Run speed for this turn."
+            : (isCharacter ? "Movement limited to Sprint speed for this turn." : "Movement limited to Run speed for this turn."))) + terrainSuffix);
 
         dest = {
           x: ("x" in changes) ? changes.x : tokenDoc.x,
@@ -4465,7 +4574,32 @@ return await mod.promptAndRollWeaponAttack(actorDoc, weapon, {
 
       const postureMpNext = Math.max(0, Number(tokenDoc.getFlag(SYSTEM_ID, "postureMpSpentThisTurn") ?? 0) || 0);
       const mpSpentNext = Math.max(0, movedHexesNext + turnedNext + terrainMpNext + postureMpNext);
-      const mode = (backwardUsedNext || (walk > 0 && mpSpentNext <= walk)) ? "walk" : "run";
+      const characterMode = game?.[SYSTEM_ID]?.api?.characterCombat?.getMovementModeForMeters?.(
+        movedHexesNext,
+        { walk: maxWalk, run: maxRun, sprint: maxSprint }
+      );
+      const mode = isCharacter
+        ? (declaredEvade ? "evade" : (backwardUsedNext ? "walk" : (characterMode ?? (movedHexesNext <= maxWalk ? "walk" : (movedHexesNext <= maxRun ? "run" : "sprint")))))
+        : ((backwardUsedNext || (walk > 0 && mpSpentNext <= walk)) ? "walk" : "run");
+
+      if (isCharacter) {
+        const actionCheck = game?.[SYSTEM_ID]?.api?.characterCombat?.canUseMovementMode?.(actor, mode, { tokenDocument: tokenDoc });
+        if (actionCheck && !actionCheck.ok) {
+          if (isMove) {
+            changes.x = tokenDoc.x;
+            changes.y = tokenDoc.y;
+          }
+          if (isTurn) changes.rotation = tokenDoc.rotation;
+          if (isNativeFacingTurn) foundry.utils.setProperty(changes, getNativeFacingFlagPath(), _getNativeFacing(tokenDoc) ?? 0);
+          if (isAboutFaceTurn) {
+            changes.flags = changes.flags ?? {};
+            changes.flags["about-face"] = changes.flags["about-face"] ?? {};
+            changes.flags["about-face"].direction = _getAboutFaceDir(tokenDoc) ?? 0;
+          }
+          ui.notifications?.warn?.(`Cannot use ${mode} movement: ${actionCheck.reason}`);
+          return;
+        }
+      }
 
       sysFlags.movedHexesThisTurn = movedHexesNext;
       sysFlags.turnedThisTurn = turnedNext;
@@ -4485,6 +4619,13 @@ return await mod.promptAndRollWeaponAttack(actorDoc, weapon, {
 
 
   Hooks.on("updateToken", async (tokenDoc, changed, options) => {
+    if (("x" in changed || "y" in changed) && ["character", "npc"].includes(String(tokenDoc?.actor?.type ?? "").toLowerCase())) {
+      for (const statusId of CHARACTER_COVER_STATUS_IDS) {
+        await setTokenStatusEffect(tokenDoc, statusId, false);
+        await _dedupeActorStatusEffects(tokenDoc.actor, statusId, { active: false });
+      }
+    }
+
     if (("x" in changed || "y" in changed) && !options?.atowTerrainSync) {
       syncTerrainStatusForToken(tokenDoc, {
         x: ("x" in changed) ? changed.x : tokenDoc.x,
@@ -4530,10 +4671,12 @@ return await mod.promptAndRollWeaponAttack(actorDoc, weapon, {
       ?? 0) || 0;
     movedHexes = Math.max(0, Math.round(movedHexes));
 
-    // Toggle token HUD effects (walk/run) without touching flags.
+    // Toggle token HUD effects (walk/run/sprint) without touching flags.
     const MOVE_EFFECT_IDS = {
       walk: "atow-walked",
       run: "atow-ran",
+      sprint: "atow-sprinted",
+      evade: "atow-evading",
       jump: "atow-jumped"
     };
 
@@ -4559,7 +4702,7 @@ return await mod.promptAndRollWeaponAttack(actorDoc, weapon, {
 
     // If we Jumped (even if distance is 0), keep the Jump effect visible.
     const totalMpSpent = Math.max(0, mpSpent, postureMpSpent);
-    if (movedHexes < 1 && totalMpSpent < 1 && modeFlag !== "jump") {
+    if (movedHexes < 1 && totalMpSpent < 1 && !["jump", "evade"].includes(modeFlag)) {
       await clearMoveEffectsOnly();
       return;
     }
@@ -5092,11 +5235,13 @@ Hooks.once("ready", () => {
   if (game?.[SYSTEM_ID]?.config?._moveHookRegistered) return;
 
   // ------------------------------------------------
-  // Combat Movement Automation (Walk/Run/Jump effects)
+  // Combat Movement Automation (Walk/Run/Sprint/Jump effects)
   // ------------------------------------------------
   const MOVE_EFFECT_IDS = {
     walk: "atow-walked",
     run: "atow-ran",
+    sprint: "atow-sprinted",
+    evade: "atow-evading",
     jump: "atow-jumped"
   };
 
@@ -5429,6 +5574,7 @@ function registerSystemSettings() {
 async function preloadHandlebarsTemplates() {
   const paths = [
     `systems/${SYSTEM_ID}/templates/character-sheet.hbs`,
+    `systems/${SYSTEM_ID}/templates/character-attack.hbs`,
     `systems/${SYSTEM_ID}/templates/abomination-sheet.hbs`,
     `systems/${SYSTEM_ID}/templates/skill-sheet.hbs`,
     `systems/${SYSTEM_ID}/templates/trait-sheet.hbs`,

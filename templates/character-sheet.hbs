@@ -10,6 +10,20 @@
     </div>
 
     <div class="top-right">
+      <div class="character-header-actions" aria-label="Actions this turn">
+        {{#each actionEconomy.rows as |row|}}
+          <button
+            type="button"
+            class="character-header-action-btn"
+            data-action="character-action-adjust"
+            data-action-type="{{row.key}}"
+            data-delta="1"
+            title="Record one {{row.label}} Action. Shift-click to refund one. Movement action costs are included in the counter.">
+            <span>{{row.label}}</span>
+            <strong>{{row.used}}/{{row.limit}}</strong>
+          </button>
+        {{/each}}
+      </div>
       <button type="button" class="atow-icon-btn" data-character-drag-handle draggable="true" title="Drag to the Company roster">
         <i class="fas fa-user-tag"></i>
       </button>
@@ -245,7 +259,15 @@
               <input type="number" value="{{derivedMove.walk}}" disabled />
             </div>
             <div class="move-line">
-              <span class="move-name">Run / Evade</span>
+              <span class="move-name move-name-actions">
+                <span>Run /</span>
+                <button
+                  type="button"
+                  class="movement-mode-control {{#if movementStatus.isEvading}}active{{/if}}"
+                  data-action="start-evading"
+                  aria-pressed="{{#if movementStatus.isEvading}}true{{else}}false{{/if}}"
+                  title="Declare Evasion (Complex Action)">Evade</button>
+              </span>
               <input type="number" value="{{derivedMove.run}}" disabled />
             </div>
             <div class="move-line">
@@ -315,18 +337,18 @@
             <span class="h-skill">Skill</span>
             <span class="h-apbd">AP/BD</span>
             <span class="h-range">Range</span>
-            <span class="h-ammo">Ammo</span>
+            <span class="h-ammo">Ammo / PPS</span>
             <span class="h-notes">Notes</span>
             <span class="h-controls"></span>
           </div>
 
           {{#each combatWeapons as |w idx|}}
             <div class="combat-row weapon-row">
-              <input class="combat-input grow weapon-roll" type="text" value="{{w.name}}" placeholder="--" readonly data-action="roll-weapon" data-item-id="{{w._sourceItemId}}" title="Roll Attack" />
+              <input class="combat-input grow weapon-roll {{#if w.ammoEmpty}}ammo-empty{{/if}}" type="text" value="{{w.name}}" placeholder="--" readonly data-action="roll-weapon" data-item-id="{{w._sourceItemId}}" title="{{#if w.ammoEmpty}}Reload Weapon{{else}}Roll Attack{{/if}}" />
               <input class="combat-input w-skill" type="text" value="{{w.skill}}" placeholder="Skill" readonly />
               <input class="combat-input w-apbd" type="text" value="{{w.apbd}}" placeholder="AP/BD" readonly />
               <input class="combat-input w-range" type="text" value="{{w.range}}" placeholder="Range" readonly />
-              <input class="combat-input w-ammo" type="number" value="{{w.ammo}}" placeholder="Ammo" readonly />
+              <input class="combat-input w-ammo {{#if w.ammoEmpty}}ammo-empty{{/if}}" type="text" value="{{w.ammo}}" placeholder="Ammo" readonly />
               <input class="combat-input w-notes" type="text" value="{{w.notes}}" placeholder="Notes" readonly />
             </div>
           {{/each}}
@@ -453,7 +475,7 @@
           {{#each gearItems as |g|}}
             <tr class="item" data-item-id="{{g._id}}">
               <td class="gear-eq">
-                <a class="gear-equip-toggle" data-item-id="{{g._id}}" title="Toggle Equipped">
+                <a class="gear-equip-toggle" data-item-id="{{g._id}}" title="{{#if g.isWeapon}}{{#if g.equipped}}Stow Weapon (Simple Action in combat){{else}}Ready Weapon (Simple Action in combat){{/if}}{{else}}Toggle Equipped{{/if}}">
                   <i class="{{#if g.equipped}}fas fa-check-square{{else}}far fa-square{{/if}}"></i>
                 </a>
               </td>

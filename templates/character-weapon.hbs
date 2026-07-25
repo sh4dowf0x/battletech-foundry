@@ -38,6 +38,56 @@
     </div>
   </section>
 
+  <section class="atow-card">
+    <div class="atow-field-grid compact-4">
+      <div class="atow-field">
+        <label class="atow-compact-label">Weapon Category</label>
+        <select name="system.weaponCategory">
+          <option value="">Uncategorized (Legacy Ammo)</option>
+          {{selectOptions weaponCategoryChoices selected=system.weaponCategory localize=false}}
+        </select>
+      </div>
+
+      <div class="atow-field">
+        <label class="atow-compact-label">Resource Use</label>
+        {{#if resourceProfile.flexible}}
+          <select name="system.resourceMode">
+            {{selectOptions resourceModeChoices selected=resourceProfile.resourceMode localize=false}}
+          </select>
+        {{else}}
+          <input type="text" value="{{resourceProfile.resourceLabel}}" disabled />
+        {{/if}}
+      </div>
+
+      {{#if resourceProfile.canUsePps}}
+      <div class="atow-field">
+        <label class="atow-compact-label">Power Points per Shot (PPS)</label>
+        <input type="number" min="0" step="1" name="system.pps" value="{{system.pps}}" />
+      </div>
+
+      <div class="atow-field">
+        <label class="atow-compact-label">Power Pack</label>
+          <select name="system.powerPackId">
+            <option value="">— Select Power Pack —</option>
+            {{selectOptions powerPackChoices selected=system.powerPackId localize=false}}
+          </select>
+          {{#unless hasPowerPacks}}<small>No Power Packs in this character's inventory.</small>{{/unless}}
+      </div>
+      {{/if}}
+
+      {{#if resourceProfile.canUseAmmo}}
+      <div class="atow-field">
+        <label class="atow-compact-label">Special Ammunition</label>
+        <select name="system.ammunitionItemId">
+          <option value="">— Standard / Unspecified —</option>
+          {{selectOptions ammunitionChoices selected=system.ammunitionItemId localize=false}}
+        </select>
+        {{#unless hasAmmunitionItems}}<small>Add Ammunition equipment to this character's Gear.</small>{{/unless}}
+      </div>
+      {{/if}}
+    </div>
+  </section>
+
   <section class="atow-card atow-stat-card">
     <div class="atow-stat-table-wrap">
       <table class="atow-stat-table">
@@ -45,7 +95,7 @@
           <th>AP</th>
           <th>BD</th>
           <th>Range</th>
-          <th>Shots</th>
+          <th>Ammo (Current / Max)</th>
           <th>Cost / Reload</th>
           <th>AFF</th>
           <th>Skill</th>
@@ -53,8 +103,18 @@
         <tr>
           <td><input type="text" name="system.damage.ap" value="{{system.damage.ap}}" placeholder="AP" /></td>
           <td><input type="text" name="system.damage.bd" value="{{system.damage.bd}}" placeholder="BD" /></td>
-          <td><input type="text" name="system.range" value="{{system.range}}" placeholder="1m / 5m / 10m" /></td>
-          <td><input type="text" name="system.shots" value="{{system.shots}}" placeholder="- / 6 / 30" /></td>
+          <td><input type="text" name="system.range" value="{{system.range}}" placeholder="5/20/45/105" title="Short / Medium / Long / Extreme range in meters" /></td>
+          <td>
+            {{#if resourceProfile.usesAmmo}}
+            <div style="display:grid; grid-template-columns:minmax(0, 1fr) auto minmax(0, 1fr); gap:3px; align-items:center;">
+              <input type="number" min="0" step="1" name="system.magazine.current" value="{{#if magazine.tracked}}{{magazine.current}}{{/if}}" placeholder="Current" title="Ammunition currently loaded" />
+              <span>/</span>
+              <input type="number" min="0" step="1" name="system.magazine.max" value="{{#if magazine.tracked}}{{magazine.maximum}}{{/if}}" placeholder="Max" title="Full magazine capacity" />
+            </div>
+            {{else}}
+              <input type="text" value="—" disabled title="This weapon category does not use ammunition" />
+            {{/if}}
+          </td>
           <td><input type="text" name="system.costReload" value="{{system.costReload}}" placeholder="25" /></td>
           <td><input type="text" name="system.affiliation" value="{{system.affiliation}}" placeholder="Faction / Maker" /></td>
           <td>

@@ -1,0 +1,99 @@
+<form
+  class="atow-attack-dialog atow-vehicle-attack-dialog atow-character-attack-dialog"
+  data-base-modifier="{{skillModifier}}"
+  data-range-modifier="{{rangeModifier}}"
+  data-target-evasion-modifier="{{targetEvasionModifier}}"
+  data-target-cover-modifier="{{targetCoverModifier}}"
+  data-auto-movement-mode="{{autoMovementMode}}">
+  <header class="attack-card-header">
+    <div>
+      <div class="attack-kicker">Personal-Scale {{attackTypeLabel}} Attack</div>
+      <h2>{{weaponName}}</h2>
+    </div>
+  </header>
+
+  <section class="attack-summary-grid">
+    <div><span>Attacker</span><strong>{{attackerName}}</strong></div>
+    <div><span>Target</span><strong>{{targetName}}</strong></div>
+    <div>
+      <span>{{#if isRanged}}Range{{else}}Attack{{/if}}</span>
+      <strong>{{#if isRanged}}{{distanceLabel}} — {{rangeBandLabel}}{{else}}{{attackTypeLabel}}{{/if}}</strong>
+    </div>
+  </section>
+
+  <section class="attack-mod-line">
+    <strong>Roll Mods:</strong>
+    <span class="attack-mod-chip">{{skillName}} {{signed skillModifier}}</span>
+    <span class="attack-mod-chip">{{autoMovementLabel}} {{signed movementModifier}}</span>
+    {{#if isRanged}}<span class="attack-mod-chip">{{rangeBandLabel}} {{signed rangeModifier}}</span>{{/if}}
+    <span class="attack-mod-chip">Target <span data-character-target-movement-meters>{{targetMovementMeters}}</span> m <span data-character-target-movement-mod>{{signed targetMovementModifier}}</span></span>
+    {{#if targetEvading}}<span class="attack-mod-chip">Target Evading: {{targetEvasionSkill}} {{targetEvasionRank}} ({{signed targetEvasionModifier}})</span>{{/if}}
+    {{#if targetCoverActive}}<span class="attack-mod-chip">{{targetCoverLabel}} ({{signed targetCoverModifier}})</span>{{/if}}
+  </section>
+
+  {{#if hasRangeWarning}}
+    <section class="attack-warning-line"><span>{{rangeWarning}}</span></section>
+  {{/if}}
+
+  <section class="attack-form-grid">
+    <label>
+      <span>Character Movement</span>
+      <select name="movementMode">
+        <option value="auto" selected>Auto: {{autoMovementLabel}} ({{signed movementModifier}})</option>
+        <option value="stationary">Stationary (0)</option>
+        <option value="walk">Walk (-1)</option>
+        <option value="run">Run (-2)</option>
+        <option value="crawl">Crawl (-2)</option>
+        <option value="swim">Swim (-2)</option>
+        <option value="sprint">Sprint (rules pending)</option>
+        <option value="climb">Climb (rules pending)</option>
+      </select>
+    </label>
+
+    <label>
+      <span>Target Moved (m)</span>
+      <input type="number" name="targetMovementMeters" value="{{targetMovementMeters}}" min="0" step="1" />
+    </label>
+
+    <label>
+      <span>Other Roll Modifier</span>
+      <input type="number" name="otherModifier" value="0" step="1" />
+    </label>
+
+    {{#if isRanged}}
+      <label><span>Range Profile (S/M/L/E)</span><input type="text" value="{{range}}" disabled /></label>
+      <label><span>Measured Range</span><input type="text" value="{{distanceLabel}} — {{rangeBandLabel}} ({{signed rangeModifier}})" disabled /></label>
+      <label><span>Ammo / PPS</span><input type="text" value="{{shots}}" disabled /></label>
+    {{/if}}
+
+    {{#if isMelee}}
+      <label><span>Melee Skill</span><input type="text" value="{{skillName}} (Rank {{skillRank}})" disabled /></label>
+      <label><span>Weapon AP/BD</span><input type="text" value="{{apbd}}" disabled /></label>
+    {{/if}}
+  </section>
+
+  <section class="attack-note-line">
+    <span>Uses 1 Simple Action. Currently {{simpleActionsUsed}}/{{simpleActionLimit}} used; {{simpleActionsRemaining}} remaining.</span>
+    {{#if isRanged}}
+      <span>Range is measured automatically. Cover, aiming, ammunition, and damage automation will be added here.</span>
+    {{/if}}
+    {{#if isMelee}}
+      <span>Melee scaffold: reach, defenses, situational modifiers, and damage automation will be added here.</span>
+    {{/if}}
+  </section>
+
+  <section class="attack-total-line">
+    <strong>Roll Modifier</strong>
+    <span data-character-total-mod>{{signed totalModifier}}</span>
+    <strong>Movement</strong>
+    <span data-character-movement-mod>{{signed movementModifier}}</span>
+    <strong>Target</strong>
+    <span data-character-target-movement-mod>{{signed targetMovementModifier}}</span>
+    <strong>Evasion</strong>
+    <span>{{signed targetEvasionModifier}}</span>
+    <strong>Cover</strong>
+    <span>{{signed targetCoverModifier}}</span>
+    <strong>TN</strong>
+    <span>{{targetNumber}}</span>
+  </section>
+</form>

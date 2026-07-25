@@ -40,6 +40,25 @@
     </div>
   </section>
 
+  {{#if isPowerPack}}
+  <section class="atow-card">
+    <div class="atow-field-grid compact-3">
+      <div class="atow-field">
+        <label class="atow-compact-label">Current Power</label>
+        <input type="number" min="0" step="1" name="system.powerCapacity.current" value="{{#if powerCapacity.tracked}}{{powerCapacity.current}}{{/if}}" placeholder="Current" />
+      </div>
+      <div class="atow-field">
+        <label class="atow-compact-label">Power Capacity</label>
+        <input type="number" min="0" step="1" name="system.powerCapacity.max" value="{{#if powerCapacity.tracked}}{{powerCapacity.maximum}}{{/if}}" placeholder="Maximum" />
+      </div>
+      <div class="atow-field">
+        <label class="atow-compact-label">Recharge</label>
+        <button type="button" data-action="recharge-power-pack"><i class="fas fa-bolt"></i> Recharge to Full</button>
+      </div>
+    </div>
+  </section>
+  {{/if}}
+
   <section class="atow-card atow-stat-card">
     <div class="atow-stat-table-wrap">
       <table class="atow-stat-table">
