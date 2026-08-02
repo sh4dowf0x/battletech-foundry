@@ -1,5 +1,5 @@
 // atow-battletech.js (ROOT)
-// version 0.0.14
+// version 0.0.15
 
 import { ATOWCharacterSheet } from "./module/character-sheet.js";
 import { ATOWAbominationSheet } from "./module/abomination-sheet.js";
@@ -1150,7 +1150,10 @@ const setTokenStatusEffect = async (tokenLike, statusId, active = false) => {
   if (actor) {
     const queue = globalThis.__ATOW_BT_STATUS_EFFECT_QUEUE__ ??= new Map();
     const actorKey = String(actor.uuid ?? actor.id ?? tokenDoc?.uuid ?? tokenDoc?.id ?? "actor");
-    const queueKey = `${actorKey}:${statusId}`;
+    // Serialize all status mutations for an actor, not merely mutations for the
+    // same status. Foundry V13 can otherwise process overlapping embedded
+    // ActiveEffect updates from rapid token movement against stale effect IDs.
+    const queueKey = actorKey;
     const previous = queue.get(queueKey) ?? Promise.resolve();
     const current = previous
       .catch(() => {})
@@ -1520,7 +1523,6 @@ const _setActorStatusEffect = async (actor, statusId, active) => {
     try {
       if (!e) return;
       if (!e.disabled && typeof e.update === "function") await e.update({ disabled: true });
-      else if (typeof e.delete === "function") await e.delete();
     } catch (_) {}
   };
 
@@ -1619,7 +1621,6 @@ const _setActorStatusEffectDirect = async (actor, statusId, active) => {
     try {
       if (!e) return;
       if (!e.disabled && typeof e.update === "function") await e.update({ disabled: true });
-      else if (typeof e.delete === "function") await e.delete();
     } catch (_) {}
   };
 
@@ -1663,7 +1664,6 @@ const _dedupeActorStatusEffects = async (actor, statusId, { active = null } = {}
   if (!desiredActive) {
     for (const e of matches) {
       if (!e?.disabled && typeof e.update === "function") await e.update({ disabled: true }).catch(() => {});
-      else if (typeof e?.delete === "function") await e.delete().catch(() => {});
     }
     return;
   }
@@ -1674,7 +1674,6 @@ const _dedupeActorStatusEffects = async (actor, statusId, { active = null } = {}
   for (const e of matches) {
     if (!e || e.id === keep?.id) continue;
     if (!e.disabled && typeof e.update === "function") await e.update({ disabled: true }).catch(() => {});
-    else if (typeof e.delete === "function") await e.delete().catch(() => {});
   }
 };
 
@@ -1787,10 +1786,8 @@ Hooks.once("ready", async () => {
 
   const clearMoveStatuses = async (tokenDoc, { preserveTurnStart = false } = {}) => {
     if (!tokenDoc) return;
-    const actor = tokenDoc.actor;
     for (const id of Object.values(MOVE_EFFECT_IDS)) {
       await setTokenStatusEffect(tokenDoc, id, false);
-      await _dedupeActorStatusEffects(actor, id, { active: false });
     }
     // Legacy cleanup: older builds used a "jumped" status id.
     await setTokenStatusEffect(tokenDoc, "jumped", false);
@@ -1806,12 +1803,10 @@ Hooks.once("ready", async () => {
 
   const setMoveStatus = async (tokenDoc, mode) => {
     if (!tokenDoc) return;
-    const actor = tokenDoc.actor;
     // disable all, then enable one
     for (const [m, id] of Object.entries(MOVE_EFFECT_IDS)) {
       const active = (m === mode);
       await setTokenStatusEffect(tokenDoc, id, active);
-      await _dedupeActorStatusEffects(actor, id, { active });
     }
     await tokenDoc.setFlag("atow-battletech", "moveMode", mode);
   };
@@ -2838,10 +2833,10 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
   // About Face uses the same convention for its "direction" flag. So we should NOT invert atan2().
   const _movementVectorAngleCW = (fromXY, toXY) => {
     try {
-      const [fx, fy] = canvas.grid.getCenter(fromXY.x, fromXY.y);
-      const [tx, ty] = canvas.grid.getCenter(toXY.x, toXY.y);
-      const dx = tx - fx;
-      const dy = ty - fy;
+      const fromCenter = getCenterPointFromTopLeft(fromXY.x, fromXY.y);
+      const toCenter = getCenterPointFromTopLeft(toXY.x, toXY.y);
+      const dx = toCenter.x - fromCenter.x;
+      const dy = toCenter.y - fromCenter.y;
       if (Math.hypot(dx, dy) < 1) return null;
 
       const deg = (Math.atan2(dy, dx) * 180 / Math.PI + 360) % 360;
@@ -2851,17 +2846,63 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
     }
   };
 
-  // Quantize an angle to the nearest facing step (60° on hex, 90° on square).
-  // This makes forward/back checks stable on hex grids and avoids pixel-rounding noise.
+  // Derive legal translation headings from the active grid geometry.
+  // Foundry's real adjacent-cell headings are used below so every offset layout is stable.
+  const _getActualHexDirectionAngles = (fromXY) => {
+    if (!isHexGrid()) return [];
+    try {
+      const grid = canvas?.grid;
+      if (!grid?.getOffset || !grid?.getAdjacentOffsets || !grid?.getCenterPoint) return [];
+
+      const fromCenter = getCenterPointFromTopLeft(fromXY.x, fromXY.y);
+      const origin = grid.getOffset(fromCenter);
+      const adjacent = grid.getAdjacentOffsets(origin) ?? [];
+      const angles = [];
+
+      for (const offset of adjacent) {
+        const center = grid.getCenterPoint(offset);
+        if (!center || !Number.isFinite(center.x) || !Number.isFinite(center.y)) continue;
+        const dx = center.x - fromCenter.x;
+        const dy = center.y - fromCenter.y;
+        if (Math.hypot(dx, dy) < 1) continue;
+        angles.push(normalizeDegrees(Math.atan2(dy, dx) * 180 / Math.PI));
+      }
+
+      return angles.filter((angle, index, all) =>
+        all.findIndex(other => Math.abs(signedAngleDelta(angle, other)) < 0.01) === index
+      );
+    } catch (_) {
+      return [];
+    }
+  };
+
+  const _snapToActualTranslationDirection = (fromXY, angle) => {
+    const normalized = normalizeDegrees(angle);
+    const actualHexAngles = _getActualHexDirectionAngles(fromXY);
+    if (!actualHexAngles.length) return _quantizeToFacingStep(normalized);
+
+    let best = actualHexAngles[0];
+    let bestDelta = Infinity;
+    for (const candidate of actualHexAngles) {
+      const delta = Math.abs(signedAngleDelta(normalized, candidate));
+      if (delta < bestDelta) {
+        best = candidate;
+        bestDelta = delta;
+      }
+    }
+    return normalizeDegrees(best);
+  };
+
   const _isForwardOrBackwardTranslation = (tokenDoc, fromXY, toXY, { facingDeg = null } = {}) => {
     const ang = _movementVectorAngleCW(fromXY, toXY);
     if (ang == null) return true;
 
     const step = getFacingStepDegrees();
-    const moveFacing = _quantizeToFacingStep(ang, step);
+    const moveFacing = _snapToActualTranslationDirection(fromXY, ang);
 
     // Use the same facing source as About Face when available.
-    const facing = (facingDeg == null) ? getTokenFacingDegrees(tokenDoc) : normalizeDegrees(facingDeg);
+    const rawFacing = (facingDeg == null) ? getTokenFacingDegrees(tokenDoc) : normalizeDegrees(facingDeg);
+    const facing = _snapToActualTranslationDirection(fromXY, rawFacing);
 
     // How many facing-steps separate the token facing and the movement vector?
     const steps = facingStepsFromRotationDelta(facing, moveFacing);
@@ -2877,8 +2918,9 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
     if (ang == null) return false;
 
     const step = getFacingStepDegrees();
-    const moveFacing = _quantizeToFacingStep(ang, step);
-    const facing = (facingDeg == null) ? getTokenFacingDegrees(tokenDoc) : normalizeDegrees(facingDeg);
+    const moveFacing = _snapToActualTranslationDirection(fromXY, ang);
+    const rawFacing = (facingDeg == null) ? getTokenFacingDegrees(tokenDoc) : normalizeDegrees(facingDeg);
+    const facing = _snapToActualTranslationDirection(fromXY, rawFacing);
     const steps = facingStepsFromRotationDelta(facing, moveFacing);
     const backSteps = Math.round(180 / step);
 
@@ -3862,7 +3904,6 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
 
           // Apply the core "Jumped" status effect so attack TN modifiers are automatic.
           await setTokenStatusEffect(tokenDoc, "atow-jumped", true);
-          await _dedupeActorStatusEffects(actor, "atow-jumped", { active: true });
           return;
         }
       } finally {
@@ -3965,7 +4006,6 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
       if (!(await spendPostureMovement(tokenDoc, actor, 1))) return false;
       await lockMovementResetForTurn(actor, tokenDoc, "went prone");
       await setTokenStatusEffect(tokenDoc, "prone", true);
-      await _dedupeActorStatusEffects(actor, "prone", { active: true });
       refreshTokenConditionVisuals(tokenDoc);
       await ChatMessage.create({
         speaker: ChatMessage.getSpeaker({ token: tokenDoc.object ?? tokenDoc, actor }),
@@ -3986,7 +4026,6 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
     const psr = await rollStandUpPSR(tokenDoc, actor);
     if (psr.success) {
       await setTokenStatusEffect(tokenDoc, "prone", false);
-      await _dedupeActorStatusEffects(actor, "prone", { active: false });
     }
     refreshTokenConditionVisuals(tokenDoc);
     return true;
@@ -4914,7 +4953,6 @@ return await mod.promptAndRollWeaponAttack(actorDoc, weapon, {
     if (("x" in changed || "y" in changed) && ["character", "npc"].includes(String(tokenDoc?.actor?.type ?? "").toLowerCase())) {
       for (const statusId of CHARACTER_COVER_STATUS_IDS) {
         await setTokenStatusEffect(tokenDoc, statusId, false);
-        await _dedupeActorStatusEffects(tokenDoc.actor, statusId, { active: false });
       }
     }
 
@@ -4975,7 +5013,6 @@ return await mod.promptAndRollWeaponAttack(actorDoc, weapon, {
     const clearMoveEffectsOnly = async () => {
       for (const id of Object.values(MOVE_EFFECT_IDS)) {
         await setTokenStatusEffect(tokenDoc, id, false);
-        await _dedupeActorStatusEffects(actor, id, { active: false });
       }
     };
 
@@ -4983,7 +5020,6 @@ return await mod.promptAndRollWeaponAttack(actorDoc, weapon, {
       for (const [m, id] of Object.entries(MOVE_EFFECT_IDS)) {
         const active = (m === mode);
         await setTokenStatusEffect(tokenDoc, id, active);
-        await _dedupeActorStatusEffects(actor, id, { active });
       }
     };
 
