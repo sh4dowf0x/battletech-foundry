@@ -1,0 +1,469 @@
+.atow-compendium-browser {
+  --browser-bg: #101820;
+  --browser-panel: #18232d;
+  --browser-border: rgba(147, 177, 197, 0.25);
+  --browser-text: #eef6fa;
+  --browser-muted: #a8bac6;
+  --browser-accent: #e48b35;
+  --browser-blue: #70b8df;
+}
+
+.atow-compendium-browser.application .window-content,
+.atow-compendium-browser .window-content {
+  position: relative;
+  min-height: 0;
+  padding: 0;
+  overflow: hidden;
+  color: var(--browser-text);
+  background:
+    radial-gradient(circle at 85% -20%, rgba(49, 111, 145, 0.35), transparent 38%),
+    linear-gradient(145deg, #0d141b, var(--browser-bg));
+}
+
+.atow-compendium-browser .atow-browser-shell {
+  display: grid;
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.atow-compendium-browser .atow-browser-header {
+  display: block;
+  padding: 10px 16px 8px;
+  border-bottom: 1px solid var(--browser-border);
+  background: linear-gradient(90deg, rgba(9, 15, 20, 0.96), rgba(25, 42, 54, 0.9));
+}
+
+.atow-compendium-browser .atow-browser-heading {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+}
+
+.atow-compendium-browser .atow-browser-heading h1 {
+  flex: 0 0 auto;
+  margin: 0;
+  color: var(--browser-text);
+  font-size: 21px;
+  letter-spacing: 0.02em;
+}
+
+.atow-compendium-browser .atow-browser-heading p {
+  margin: 0;
+  color: var(--browser-muted);
+  font-size: 10px;
+}
+
+.atow-compendium-browser .atow-browser-kicker {
+  color: var(--browser-accent);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.atow-compendium-browser .atow-browser-commandbar {
+  display: flex;
+  flex-flow: row nowrap;
+  gap: 7px;
+  align-items: center;
+  min-width: 0;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--browser-border);
+  background: rgba(7, 13, 18, 0.86);
+}
+
+.atow-compendium-browser .atow-browser-searchbar {
+  display: grid;
+  flex: 0 0 255px;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  width: 255px;
+  min-width: 200px;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid rgba(112, 184, 223, 0.45);
+  border-radius: 5px;
+  background: rgba(5, 11, 16, 0.72);
+}
+
+.atow-compendium-browser .atow-browser-searchbar > i {
+  color: var(--browser-blue);
+}
+
+.atow-compendium-browser .atow-browser-searchbar input[type="search"] {
+  width: 100%;
+  height: 29px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  color: var(--browser-text);
+  background: transparent;
+  box-shadow: none;
+  font-size: 11px;
+}
+
+.atow-compendium-browser .atow-browser-categories {
+  display: flex;
+  flex: 1 1 auto;
+  flex-flow: row nowrap;
+  gap: 4px;
+  min-width: 0;
+  padding: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  border: 0;
+  background: transparent;
+  white-space: nowrap;
+}
+
+.atow-compendium-browser button.atow-browser-category {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 5px;
+  align-items: center;
+  width: auto;
+  min-width: 0;
+  min-height: 29px;
+  margin: 0;
+  padding: 4px 8px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--browser-muted);
+  background: transparent;
+  font-size: 10px;
+  line-height: 1;
+}
+
+.atow-compendium-browser button.atow-browser-category b {
+  min-width: 18px;
+  padding: 2px 4px;
+  border-radius: 999px;
+  color: #dceaf2;
+  background: rgba(255, 255, 255, 0.08);
+  font-size: 9px;
+}
+
+.atow-compendium-browser button.atow-browser-category.active {
+  border-color: rgba(228, 139, 53, 0.55);
+  color: #fff4e9;
+  background: rgba(228, 139, 53, 0.16);
+}
+
+.atow-compendium-browser button.atow-browser-icon-button {
+  flex: 0 0 31px;
+  width: 31px;
+  height: 31px;
+  min-height: 31px;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--browser-border);
+  color: var(--browser-text);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.atow-compendium-browser .atow-browser-filterbar {
+  display: flex;
+  flex-flow: row nowrap;
+  gap: 8px;
+  align-items: end;
+  min-width: 0;
+  padding: 7px 11px 8px;
+  border-bottom: 1px solid var(--browser-border);
+  background: rgba(11, 19, 25, 0.9);
+}
+
+.atow-compendium-browser .atow-browser-filterbar label {
+  display: grid;
+  flex: 0 1 150px;
+  gap: 2px;
+  width: 150px;
+  min-width: 110px;
+  margin: 0;
+}
+
+.atow-compendium-browser .atow-browser-filterbar label.filter-compendium,
+.atow-compendium-browser .atow-browser-filterbar label.filter-era {
+  flex-basis: 185px;
+  width: 185px;
+}
+
+.atow-compendium-browser .atow-browser-filterbar label > span {
+  color: var(--browser-muted);
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.atow-compendium-browser .atow-browser-filterbar select {
+  width: 100%;
+  max-width: 185px;
+  height: 28px;
+  min-height: 28px;
+  margin: 0;
+  color: var(--browser-text);
+  background: var(--browser-panel);
+  font-size: 10px;
+}
+
+.atow-compendium-browser .atow-browser-filter-icon {
+  align-self: center;
+  color: var(--browser-accent);
+}
+
+.atow-compendium-browser .atow-browser-filter-spacer {
+  flex: 1 1 auto;
+}
+
+.atow-compendium-browser .atow-browser-filterbar strong {
+  align-self: center;
+  color: var(--browser-text);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.atow-compendium-browser button.atow-browser-clear {
+  flex: 0 0 auto;
+  width: auto;
+  height: 28px;
+  min-height: 28px;
+  margin: 0;
+  padding: 3px 8px;
+  border: 1px solid var(--browser-border);
+  color: var(--browser-blue);
+  background: rgba(255, 255, 255, 0.04);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.atow-compendium-browser .atow-browser-results {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  padding: 9px 11px 14px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
+.atow-compendium-browser .atow-browser-result-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  min-height: 16px;
+  margin-bottom: 5px;
+  color: var(--browser-muted);
+  font-size: 9px;
+}
+
+.atow-compendium-browser .atow-browser-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 8px;
+  align-items: stretch;
+  padding-bottom: 12px;
+}
+
+.atow-compendium-browser .atow-browser-card {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  min-width: 0;
+  min-height: 132px;
+  max-height: 158px;
+  overflow: hidden;
+  border: 1px solid var(--browser-border);
+  border-radius: 6px;
+  background: linear-gradient(160deg, rgba(35, 50, 61, 0.97), rgba(20, 30, 39, 0.97));
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.22);
+  cursor: grab;
+  transition: border-color 120ms ease, transform 120ms ease, box-shadow 120ms ease;
+}
+
+.atow-compendium-browser .atow-browser-card:hover {
+  border-color: rgba(112, 184, 223, 0.62);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.34);
+  transform: translateY(-1px);
+}
+
+.atow-compendium-browser .atow-browser-card[hidden] {
+  display: none;
+}
+
+.atow-compendium-browser .atow-browser-card-art {
+  position: relative;
+  width: 92px;
+  height: 100%;
+  min-height: 132px;
+  overflow: hidden;
+  background: #0b1117;
+}
+
+.atow-compendium-browser .atow-browser-card-art img,
+.atow-compendium-browser .atow-browser-card-art video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background:
+    linear-gradient(135deg, rgba(79, 104, 119, 0.12), rgba(0, 0, 0, 0.1)),
+    #0d151c;
+}
+
+.atow-compendium-browser .atow-browser-type {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  left: 4px;
+  overflow: hidden;
+  padding: 3px 4px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 3px;
+  color: white;
+  background: rgba(5, 10, 14, 0.8);
+  font-size: 7px;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  text-align: center;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+  backdrop-filter: blur(3px);
+}
+
+.atow-compendium-browser .atow-browser-card-content {
+  min-width: 0;
+  padding: 8px;
+  overflow: hidden;
+}
+
+.atow-compendium-browser .atow-browser-card-title {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 5px;
+}
+
+.atow-compendium-browser .atow-browser-card-title h2 {
+  margin: 0;
+  overflow: hidden;
+  color: var(--browser-text);
+  font-size: 12px;
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.atow-compendium-browser .atow-browser-card-title span {
+  display: block;
+  margin-top: 2px;
+  overflow: hidden;
+  color: var(--browser-muted);
+  font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.atow-compendium-browser .atow-browser-card-title button {
+  width: 24px;
+  height: 24px;
+  min-height: 24px;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--browser-border);
+  color: var(--browser-text);
+  background: rgba(255, 255, 255, 0.05);
+  font-size: 9px;
+}
+
+.atow-compendium-browser .atow-browser-stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 3px;
+  margin: 7px 0 0;
+}
+
+.atow-compendium-browser .atow-browser-stats > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 4px;
+  min-width: 0;
+  padding: 2px 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.atow-compendium-browser .atow-browser-stats dt {
+  color: var(--browser-muted);
+  font-size: 7px;
+  text-transform: uppercase;
+}
+
+.atow-compendium-browser .atow-browser-stats dd {
+  margin: 0;
+  overflow: hidden;
+  color: var(--browser-text);
+  font-size: 8px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.atow-compendium-browser .atow-browser-summary {
+  display: -webkit-box;
+  margin: 6px 0 0;
+  overflow: hidden;
+  color: var(--browser-muted);
+  font-size: 8px;
+  line-height: 1.25;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.atow-compendium-browser .atow-browser-empty {
+  position: absolute;
+  inset: 35px 20px auto;
+  padding: 45px 20px;
+  color: var(--browser-muted);
+  text-align: center;
+}
+
+.atow-compendium-browser .atow-browser-empty[hidden] {
+  display: none;
+}
+
+.atow-compendium-browser .atow-browser-empty i {
+  color: var(--browser-blue);
+  font-size: 30px;
+}
+
+.atow-compendium-browser .atow-browser-empty h2 {
+  margin: 9px 0 3px;
+  color: var(--browser-text);
+}
+
+.atow-open-compendium-browser {
+  flex: 1 1 100%;
+}
+
+@media (max-width: 880px) {
+  .atow-compendium-browser .atow-browser-heading p {
+    display: none;
+  }
+
+  .atow-compendium-browser .atow-browser-searchbar {
+    flex-basis: 210px;
+    width: 210px;
+  }
+
+  .atow-compendium-browser .atow-browser-filterbar label {
+    min-width: 95px;
+  }
+
+  .atow-compendium-browser .atow-browser-grid {
+    grid-template-columns: repeat(auto-fill, minmax(270px, 1fr));
+  }
+}

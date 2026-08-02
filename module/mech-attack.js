@@ -3,7 +3,7 @@
 // Centralized mech attack logic (to-hit, range bands, chat card).
 // UI-agnostic core, with an optional UI prompt helper at the bottom.
 
-import { enqueueActorAudioCues } from "./audio-helper.js";
+import { enqueueActorAudioCues, playActorMechExplosionEffect } from "./audio-helper.js";
 
 const SYSTEM_ID = "atow-battletech";// ------------------------------------------------------------
 const VEHICLE_ATTACK_TEMPLATE = `systems/${SYSTEM_ID}/templates/vehicle-attack.hbs`;
@@ -303,7 +303,18 @@ async function _resolveSceneFromUuid(sceneUuid) {
 async function _gmApplyDamageToTargetActor(actorUuid, hitLoc, damage, opts = {}) {
   const targetActor = await _resolveActorFromUuid(actorUuid);
   if (!targetActor) return { ok: false, reason: "No target actor" };
+  const previousGyroHits = Math.max(0, Number(targetActor.system?.critHits?.gyro ?? 0) || 0);
   const result = await applyDamageToTargetActor(targetActor, hitLoc, damage, opts);
+  const currentGyroHits = Math.max(0, Number(targetActor.system?.critHits?.gyro ?? 0) || 0);
+  if (result?.ok && currentGyroHits > previousGyroHits) {
+    result.gyroOutcome = await resolveGyroCriticalOutcome(targetActor, {
+      previousHits: previousGyroHits,
+      currentHits: currentGyroHits
+    }).catch(err => {
+      console.warn("AToW Battletech | Gyro critical outcome failed", err);
+      return null;
+    });
+  }
   await _triggerAmmoExplosionsForDamageResult(targetActor, result, { side: opts?.side });
   return result;
 }
@@ -373,6 +384,16 @@ function isAMSWeapon(item) {
 function isArrowIVSystemWeapon(item) {
   const name = String(item?.name ?? item?.system?.name ?? "").trim().toLowerCase();
   return name === "arrow iv system" || name === "arrow iv system (c)";
+}
+
+function isPlasmaCannonWeapon(item) {
+  const name = String(item?.name ?? item?.system?.name ?? "").trim();
+  return /\bplasma\s+cannon\b/i.test(name);
+}
+
+function isPlasmaRifleWeapon(item) {
+  const name = String(item?.name ?? item?.system?.name ?? "").trim();
+  return /\bplasma\s+rifle\b/i.test(name);
 }
 
 function getStatusDefinition(statusId) {
@@ -774,6 +795,12 @@ function countComponentCritSlots(actorSystem, labelRegex, { includeDestroyed = f
   return count;
 }
 
+const _FERRO_LAMELLOR_LABEL_RE = /^ferro\s*-?\s*lamellor(?:\s+armor)?$/i;
+
+function hasOperationalFerroLamellorArmor(actor) {
+  return countComponentCritSlots(actor?.system, _FERRO_LAMELLOR_LABEL_RE, { includeDestroyed: true }) >= 12;
+}
+
 function getUnventedHeat(actor) {
   const heat = actor?.system?.heat ?? {};
   const effects = heat.effects ?? {};
@@ -1153,11 +1180,20 @@ function getMissileAmmoVariant(typeText) {
   return MISSILE_AMMO_VARIANTS.STANDARD;
 }
 
+function getMMLAmmoMode(typeText) {
+  const t = String(typeText ?? "").trim().toLowerCase();
+  if (!/\bmml\b|^mml-\d+/i.test(t)) return null;
+  if (/\[\s*srm\s*\]/i.test(t) || /(?:^|[-\s])srm(?:$|[-\s])/i.test(t)) return "srm";
+  if (/\[\s*lrm\s*\]/i.test(t) || /(?:^|[-\s])lrm(?:$|[-\s])/i.test(t)) return "lrm";
+  return null;
+}
+
 function getMissileAmmoKey(typeText) {
   const rack = parseMissileRackLabel(typeText);
   const type = String(rack?.type ?? "").toUpperCase();
   if (!["LRM", "MML", "SRM"].includes(type) || !Number.isFinite(Number(rack?.size))) return null;
-  const base = `${type.toLowerCase()}-${Number(rack.size)}`;
+  const mmlMode = type === "MML" ? getMMLAmmoMode(typeText) : null;
+  const base = `${type.toLowerCase()}-${Number(rack.size)}${mmlMode ? `-${mmlMode}` : ""}`;
   const variant = getMissileAmmoVariant(typeText);
   return variant === MISSILE_AMMO_VARIANTS.STANDARD ? base : `${base}-${variant}`;
 }
@@ -1177,7 +1213,9 @@ function isMissileAmmoVariantCompatible(rackType, variant) {
 }
 
 function getBaseMissileAmmoKey(ammoKey) {
-  return String(ammoKey ?? "").replace(/-(?:artemis-iv|artemis-v|fragmentation|inferno|narc|semi-guided)$/i, "");
+  return String(ammoKey ?? "")
+    .replace(/-(?:artemis-iv|artemis-v|fragmentation|inferno|narc|semi-guided)$/i, "")
+    .replace(/^(mml-\d+)-(?:lrm|srm)$/i, "$1");
 }
 
 function getMissileAmmoVariantLabel(variant) {
@@ -1210,8 +1248,17 @@ function _ammoKeyFromType(typeText) {
   const missileAmmoKey = getMissileAmmoKey(t);
   if (missileAmmoKey) return missileAmmoKey;
 
+  if (/\bplasma\s+rifle\b/i.test(t) || t === "plasma-rifle") return "plasma-rifle";
+
+  // Hyper-Assault Gauss Rifle
+  let m = t.match(/\bhag\s*[-/]?\s*(20|30|40)\b/i)
+    ?? t.match(/\bhyper\s*[- ]?\s*assault\s+gauss\s+rifles?\b[^\d]*(20|30|40)\b/i);
+  if (m?.[1]) return `hag-${Number(m[1])}`;
+
+  if (/\blight\s+gauss(?:\s+rifle)?\b/i.test(t)) return "light-gauss";
+
   // AC/20, AC 20
-  let m = t.match(/\bac\s*\/\s*(\d+)\b/i) || t.match(/\bac\s*(\d+)\b/i);
+  m = t.match(/\bac\s*\/\s*(\d+)\b/i) || t.match(/\bac\s*(\d+)\b/i);
   if (m?.[1]) return `ac-${Number(m[1])}`;
 
   // LRM 20, LRM-20
@@ -1248,17 +1295,19 @@ function _ammoKeyFromType(typeText) {
 
 function _parseAmmoLabel(label) {
   const txt = String(label ?? "").trim();
-  // Expected: Ammo (LRM 20) 6
-  const m = txt.match(/^\s*Ammo\s*\(([^)]+)\)\s*(\d+)\s*$/i);
+  // Expected: Ammo (LRM 20) 6 or Ammo (MML 9) 13 [LRM]
+  const m = txt.match(/^\s*Ammo\s*\(([^)]+)\)\s*(\d+)\s*(?:\[\s*(LRM|SRM)\s*\])?\s*$/i);
   if (!m) return null;
 
-  const typeText = String(m[1] ?? "").trim();
+  const typeText = `${String(m[1] ?? "").trim()}${m[3] ? ` [${m[3]}]` : ""}`;
   const qty = Number(m[2] ?? 0) || 0;
   const key = _ammoKeyFromType(typeText);
   if (!key) return null;
 
   // Gauss ammo never explodes when hit
-  if (/\bgauss\b/i.test(typeText)) return { key, typeText, qty, gaussAmmo: true };
+  if (/\bgauss\b|\bhag\s*[-/]?\s*(?:20|30|40)\b/i.test(typeText)) {
+    return { key, typeText, qty, gaussAmmo: true };
+  }
 
   // Narc ammunition explodes for 2 points per remaining pod.
   const damage = key === "narc" ? (2 * qty) : AMMO_EXPLOSION_DAMAGE[getBaseMissileAmmoKey(key)];
@@ -1267,9 +1316,14 @@ function _parseAmmoLabel(label) {
   return { key, typeText, qty, damage, gaussAmmo: false };
 }
 
-function _isGaussRifleLabel(label) {
-  const t = String(label ?? "").toLowerCase();
-  return t.includes("gauss") && t.includes("rifle") && !t.includes("ammo");
+function _getGaussWeaponExplosionDamage(label) {
+  const t = String(label ?? "").trim().toLowerCase();
+  if (!t || t.includes("ammo")) return 0;
+  if (/\blight\s+gauss\s+rifle\b/i.test(t)) return 16;
+  let hag = t.match(/\bhag\s*[-/]?\s*(20|30|40)\b/i)
+    ?? t.match(/\bhyper\s*[- ]?\s*assault\s+gauss\s+rifles?\b[^\d]*(20|30|40)\b/i);
+  if (hag?.[1]) return Number(hag[1]) / 2;
+  return /\bgauss\s+rifle\b/i.test(t) ? 15 : 0;
 }
 
 async function _playAtowSfx(src, { volume = 1.0 } = {}) {
@@ -1391,7 +1445,10 @@ async function _maybeResolveAmmoExplosions(targetActor, trigger, { side = "front
     for (const c of (res?.newlyDestroyedCritSlots ?? [])) {
       const ammo = _parseAmmoLabel(c.label);
       if (ammo && !ammo.gaussAmmo) nextTriggers.push({ loc: c.loc, idx: c.idx, label: c.label, damage: ammo.damage, ammoKey: ammo.key });
-      else if (_isGaussRifleLabel(c.label)) nextTriggers.push({ loc: c.loc, idx: c.idx, label: c.label, damage: 15 });
+      else {
+        const gaussDamage = _getGaussWeaponExplosionDamage(c.label);
+        if (gaussDamage > 0) nextTriggers.push({ loc: c.loc, idx: c.idx, label: c.label, damage: gaussDamage });
+      }
     }
 
     // NOTE: Location destruction does not automatically detonate ammo bins.
@@ -1419,9 +1476,10 @@ async function _triggerAmmoExplosionsForDamageResult(targetActor, damageResult, 
       const ammo = _parseAmmoLabel(label);
       if (ammo && !ammo.gaussAmmo) {
         triggers.push({ loc: c.loc, idx: c.idx, label, damage: ammo.damage, ammoKey: ammo.key });
-      } else if (_isGaussRifleLabel(label)) {
+      } else {
+        const gaussDamage = _getGaussWeaponExplosionDamage(label);
         // Gauss rifle itself can explode when critted
-        triggers.push({ loc: c.loc, idx: c.idx, label, damage: 15 });
+        if (gaussDamage > 0) triggers.push({ loc: c.loc, idx: c.idx, label, damage: gaussDamage });
       }
     }
 
@@ -1470,13 +1528,14 @@ async function _resolveAmmoExplosionEventLocal(targetActor, event = {}) {
     return true;
   }
 
-  // Gauss rifle (weapon) explosion is always 15 internal
-  if (_isGaussRifleLabel(label)) {
+  // Gauss weapon explosion damage varies by weapon model.
+  const gaussDamage = _getGaussWeaponExplosionDamage(label);
+  if (gaussDamage > 0) {
     await _maybeResolveAmmoExplosions(targetActor, [{
       loc,
       idx: Number.isInteger(event.idx) ? event.idx : undefined,
       label,
-      damage: 15
+      damage: gaussDamage
     }], { side });
     return true;
   }
@@ -1580,6 +1639,26 @@ export function getRotaryACProfile(weaponItemOrName) {
   };
 }
 
+/**
+ * Light Autocannons use the matching standard AC ammunition and always fire as
+ * ordinary single-shot autocannons. All other statistics remain item-driven.
+ */
+export function getLightACProfile(weaponItemOrName) {
+  const name = typeof weaponItemOrName === "string"
+    ? weaponItemOrName
+    : String(weaponItemOrName?.name ?? "");
+  const match = name.trim().match(/^(?:lights+(?:auto\s*cannon|autocannon|ac)|lac)\s*\/?\s*([25])$/i);
+  if (!match) return null;
+
+  const caliber = Number(match[1]);
+  return {
+    caliber,
+    rapidFire: 1,
+    ammoKey: `ac-${caliber}`,
+    ammoLabel: `Ammo (AC/${caliber})`
+  };
+}
+
 
 /**
  * Rapid Fire rating (R#). Stored on weapons as a number (e.g. 2 or 6) but older sheets may store
@@ -1588,6 +1667,8 @@ export function getRotaryACProfile(weaponItemOrName) {
 function getRapidFireRating(weaponItem) {
   const rotaryProfile = getRotaryACProfile(weaponItem);
   if (rotaryProfile) return rotaryProfile.rapidFire;
+  const lightACProfile = getLightACProfile(weaponItem);
+  if (lightACProfile) return lightACProfile.rapidFire;
 
   const sys = weaponItem?.system ?? {};
   const raw = (sys.rapidFire ?? sys.rapidFireRating ?? sys.rapid ?? sys.rof ?? 1);
@@ -1641,9 +1722,14 @@ function isAbominationActor(actor) {
 
 function isVehicleActor(actor) {
   if (!actor) return false;
-  if (actor.type === "vehicle" || actor.type === "wheeledvehicle") return true;
+  if (actor.type === "vehicle" || actor.type === "wheeledvehicle" || actor.type === "vtol") return true;
   const v = actor?.system?.vehicle;
   return Boolean(v && typeof v === "object");
+}
+
+function vehicleHasTurret(actor) {
+  if (String(actor?.type ?? "").toLowerCase() === "vtol") return false;
+  return num(actor?.system?.armor?.turret?.max, 0) > 0;
 }
 
 function isDropshipActor(actor) {
@@ -1697,7 +1783,8 @@ async function applyDamageToAbominationActor(targetActor, damage) {
 function _normalizeVehicleLocation(loc) {
   const raw = String(loc ?? "").trim().toLowerCase();
   if (!raw) return null;
-  if (["front", "rear", "left", "right", "turret"].includes(raw)) return raw;
+  if (["front", "rear", "left", "right", "turret", "rotor"].includes(raw)) return raw;
+  if (raw === "rotors") return "rotor";
   if (raw === "back") return "rear";
   if (raw === "side") return "left";
   return null;
@@ -1745,10 +1832,30 @@ const VEHICLE_HIT_LOCATION_TABLES = {
   }
 };
 
-async function rollVehicleHitLocation(attackSide = "front", { hasTurret = true } = {}) {
+const VTOL_HIT_LOCATION_TABLES = {
+  front: {
+    2: "front", 3: "rotor", 4: "turret", 5: "right",
+    6: "front", 7: "front", 8: "front", 9: "left",
+    10: "rotor", 11: "rotor", 12: "rotor"
+  },
+  rear: {
+    2: "rear", 3: "rotor", 4: "turret", 5: "left",
+    6: "rear", 7: "rear", 8: "rear", 9: "right",
+    10: "rotor", 11: "rotor", 12: "rotor"
+  },
+  side: {
+    2: "side", 3: "rotor", 4: "turret", 5: "front",
+    6: "side", 7: "side", 8: "side", 9: "rear",
+    10: "rotor", 11: "rotor", 12: "rotor"
+  }
+};
+
+async function rollVehicleHitLocation(attackSide = "front", { hasTurret = true, targetActor = null } = {}) {
   const side = String(attackSide ?? "front").toLowerCase();
   const dir = (side === "left" || side === "right") ? "side" : (side === "rear" ? "rear" : "front");
-  const table = VEHICLE_HIT_LOCATION_TABLES[dir] ?? VEHICLE_HIT_LOCATION_TABLES.front;
+  const isVTOL = String(targetActor?.type ?? "").toLowerCase() === "vtol";
+  const hitTables = isVTOL ? VTOL_HIT_LOCATION_TABLES : VEHICLE_HIT_LOCATION_TABLES;
+  const table = hitTables[dir] ?? hitTables.front;
   const roll = await (new Roll("2d6")).evaluate();
   let loc = table[roll.total] ?? "front";
 
@@ -1757,7 +1864,10 @@ async function rollVehicleHitLocation(attackSide = "front", { hasTurret = true }
   }
 
   if (loc === "turret" && !hasTurret) {
-    if (side === "left" || side === "right") loc = side;
+    // VTOL table footnote: a turret strike against a turretless VTOL hits
+    // the rotors. Ground vehicles retain the normal facing fallback.
+    if (isVTOL) loc = "rotor";
+    else if (side === "left" || side === "right") loc = side;
     else loc = (dir === "rear") ? "rear" : "front";
   }
 
@@ -1816,6 +1926,31 @@ const VEHICLE_CRIT_TABLE = {
   }
 };
 
+const VTOL_CRIT_TABLE = {
+  front: {
+    2: "none", 3: "none", 4: "none", 5: "none",
+    6: "copilotHit", 7: "weaponMalfunction", 8: "stabilizer",
+    9: "sensors", 10: "pilotHit", 11: "weaponDestroyed", 12: "crewKilled"
+  },
+  side: {
+    2: "none", 3: "none", 4: "none", 5: "none",
+    6: "weaponMalfunction", 7: "cargoInfantry", 8: "stabilizer",
+    9: "weaponDestroyed", 10: "engineHit", 11: "ammunition", 12: "fuelTank"
+  },
+  rear: {
+    2: "none", 3: "none", 4: "none", 5: "none",
+    6: "cargoInfantry", 7: "weaponMalfunction", 8: "stabilizer",
+    9: "weaponDestroyed", 10: "sensors", 11: "engineHit", 12: "fuelTank"
+  },
+  rotor: {
+    2: "none", 3: "none", 4: "none", 5: "none",
+    6: "rotorDamage", 7: "rotorDamage", 8: "rotorDamage",
+    9: "flightStabilizerHit", 10: "flightStabilizerHit",
+    11: "rotorsDestroyed", 12: "rotorsDestroyed"
+  },
+  turret: VEHICLE_CRIT_TABLE.turret
+};
+
 function _vehicleHasAmmo(actor) {
   const items = actor?.items ?? [];
   return items.some(i => {
@@ -1830,6 +1965,90 @@ function _vehicleIsFusion(actor) {
   if (!t) return false;
   if (t.includes("ice")) return false;
   return t.includes("fusion");
+}
+
+function _vehicleIsICEOrFuelCell(actor) {
+  const t = String(actor?.system?.vehicle?.engine ?? "").toLowerCase();
+  return /\bice\b/.test(t) || t.includes("internal combustion") || t.includes("fuel cell") || t.includes("fuel-cell");
+}
+
+const VTOL_DEFEAT_IN_PROGRESS = new Set();
+
+export async function markVTOLDefeated(actor, { reason = "VTOL destroyed", killCrew = false, crashed = true } = {}) {
+  if (!actor || String(actor.type ?? "").toLowerCase() !== "vtol") return { ok: false, reason: "Not a VTOL" };
+  const defeatKey = String(actor.uuid ?? actor.id ?? "");
+  if (VTOL_DEFEAT_IN_PROGRESS.has(defeatKey)) {
+    return { ok: true, defeated: true, newlyDefeated: false, reason, killCrew, crashed };
+  }
+  VTOL_DEFEAT_IN_PROGRESS.add(defeatKey);
+
+  const alreadyDefeated = Boolean(actor.system?.crit?.defeated);
+  const updates = {
+    "system.crit.defeated": true,
+    "system.crit.defeatReason": String(reason ?? "VTOL destroyed")
+  };
+  if (crashed) updates["system.crit.crashed"] = true;
+  if (killCrew) {
+    updates["system.crew.driverHit"] = 2;
+    updates["system.crew.commanderHit"] = 2;
+    updates["system.crit.crewKilled"] = true;
+  }
+  await actor.update(updates, { atowVTOLDefeat: true }).catch(() => {});
+
+  await applyActorStatusAuto(actor, CONFIG?.specialStatusEffects?.DEFEATED ?? "defeated", true).catch(() => {});
+  if (killCrew) await applyActorStatusAuto(actor, "dead", true).catch(() => {});
+
+  try {
+    if (game.user?.isGM) {
+      for (const combat of game.combats?.contents ?? []) {
+        const combatUpdates = [];
+        for (const combatant of combat?.combatants ?? []) {
+          const combatantActorId = String(combatant?.actorId ?? combatant?.actor?.id ?? combatant?.token?.actor?.id ?? "");
+          if (combatantActorId !== String(actor.id) || combatant.defeated) continue;
+          combatUpdates.push({ _id: combatant.id, defeated: true });
+        }
+        if (combatUpdates.length) await combat.updateEmbeddedDocuments("Combatant", combatUpdates).catch(() => {});
+      }
+    }
+  } catch (err) {
+    console.warn("AToW Battletech | Failed to sync defeated VTOL combatant", err);
+  }
+
+  const tokens = actor.getActiveTokens?.(true, true) ?? actor.getActiveTokens?.() ?? [];
+  for (const token of tokens) {
+    const doc = token?.document ?? token;
+    const tintUpdate = doc?.texture !== undefined ? { "texture.tint": "#292929" } : { tint: "#292929" };
+    if (typeof doc?.update === "function") await doc.update(tintUpdate).catch(() => {});
+  }
+
+  if (!alreadyDefeated) {
+    await playActorMechExplosionEffect(actor, { volume: 1.0 }).catch(() => {});
+    try {
+      if (globalThis.Sequencer?.EffectManager && globalThis.Sequence) {
+        for (const token of tokens) {
+          new Sequence()
+            .effect()
+            .file("jb2a.explosion.08")
+            .atLocation(token)
+            .scaleToObject(2.0)
+            .aboveLighting()
+            .effect()
+            .file("jb2a.smoke.plumes")
+            .attachTo(token)
+            .persist()
+            .name(`atow-vtol-destroyed-${actor.id}-${token.id}`)
+            .scaleToObject(1.6)
+            .aboveLighting()
+            .play();
+        }
+      }
+    } catch (err) {
+      console.warn("AToW Battletech | VTOL destruction VFX failed", err);
+    }
+  }
+
+  VTOL_DEFEAT_IN_PROGRESS.delete(defeatKey);
+  return { ok: true, defeated: true, newlyDefeated: !alreadyDefeated, reason, killCrew, crashed };
 }
 
 function _vehicleTypeModifier(actor) {
@@ -1873,19 +2092,26 @@ async function _rollMotiveSystemDamage(actor, attackSide) {
 }
 
 async function applyVehicleCritical(targetActor, critTableLoc, { attackSide = "front", loc = null } = {}) {
-  const tableKey = ["front", "rear", "side", "turret"].includes(critTableLoc) ? critTableLoc : "front";
+  const isVTOL = String(targetActor?.type ?? "").toLowerCase() === "vtol";
+  const allowedTables = isVTOL ? ["front", "rear", "side", "rotor", "turret"] : ["front", "rear", "side", "turret"];
+  const tableKey = allowedTables.includes(critTableLoc) ? critTableLoc : "front";
   const roll = await (new Roll("2d6")).evaluate();
   const total = Number(roll.total ?? 0) || 0;
-  const resultKey = VEHICLE_CRIT_TABLE[tableKey]?.[total] ?? "none";
+  const critTable = isVTOL ? VTOL_CRIT_TABLE : VEHICLE_CRIT_TABLE;
+  const resultKey = critTable[tableKey]?.[total] ?? "none";
 
   const updates = {};
   const notes = [];
   let motive = null;
+  let fatalReason = "";
+  let fatalKillsCrew = false;
 
   const crew = targetActor.system?.crew ?? {};
   const crit = targetActor.system?.crit ?? {};
   const tonnage = Number(targetActor.system?.vehicle?.tonnage ?? 0) || 0;
-  const structMax = Math.max(0, Math.floor(tonnage / 10));
+  const structMax = isVTOL
+    ? Math.max(1, Math.ceil(tonnage / 10))
+    : Math.max(0, Math.floor(tonnage / 10));
 
   const bump = (path, cur, max) => {
     const next = clampInt(Number(cur ?? 0) + 1, 0, max, 0);
@@ -1893,9 +2119,11 @@ async function applyVehicleCritical(targetActor, critTableLoc, { attackSide = "f
   };
 
   switch (resultKey) {
+    case "pilotHit":
     case "driverHit":
       bump("system.crew.driverHit", crew.driverHit, 2);
       break;
+    case "copilotHit":
     case "commanderHit":
       bump("system.crew.commanderHit", crew.commanderHit, 2);
       break;
@@ -1903,14 +2131,52 @@ async function applyVehicleCritical(targetActor, critTableLoc, { attackSide = "f
       updates["system.crew.driverHit"] = 2;
       updates["system.crew.commanderHit"] = 2;
       notes.push("Crew killed");
+      if (isVTOL) {
+        fatalReason = "Pilot and co-pilot killed";
+        fatalKillsCrew = true;
+      }
       break;
     case "sensors":
       bump("system.crit.sensorHits", crit.sensorHits, 2);
       break;
     case "engineHit":
       updates["system.crit.engineHit"] = true;
+      if (isVTOL) bump("system.crit.engineHits", crit.engineHits, 3);
+      if (isVTOL) fatalReason = "Engine hit: lift lost";
       break;
+    case "rotorDamage":
+      bump("system.crit.rotorHits", crit.rotorHits, 100);
+      notes.push("Rotor damage: reduce Cruising MP by 1");
+      if (isVTOL) {
+        const baseCruise = Math.max(0, Number(targetActor.system?.vehicle?.movement?.cruise ?? 0) || 0);
+        const nextRotorHits = Math.max(0, Number(crit.rotorHits ?? 0) || 0) + 1;
+        if (baseCruise > 0 && nextRotorHits >= baseCruise) fatalReason = "Cruising MP reduced to 0 by rotor damage";
+      }
+      break;
+    case "flightStabilizerHit":
+      bump("system.crit.flightStabilizerHits", crit.flightStabilizerHits, 2);
+      notes.push("Flight stabilizer hit");
+      break;
+    case "rotorsDestroyed": {
+      updates["system.crit.rotorsDestroyed"] = true;
+      updates["system.crit.crashed"] = true;
+      const armorMax = Number(targetActor.system?.armor?.rotor?.max ?? 0) || 0;
+      updates["system.armor.rotor.dmg"] = clampInt(armorMax, 0, armorMax, 0);
+      updates["system.structure.rotor.dmg"] = clampInt(structMax, 0, structMax, 0);
+      notes.push("Rotors destroyed");
+      fatalReason = "Rotors destroyed: lift lost";
+      break;
+    }
     case "stabilizer": {
+      if (isVTOL) {
+        const stabilizerLoc = _normalizeVehicleLocation(loc)
+          ?? ((String(attackSide).toLowerCase() === "right") ? "right" : (String(attackSide).toLowerCase() === "left") ? "left" : tableKey);
+        if (["front", "rear", "left", "right", "rotor"].includes(stabilizerLoc)) {
+          updates[`system.crit.location.${stabilizerLoc}`] = true;
+        }
+        notes.push(`${String(stabilizerLoc ?? tableKey).toUpperCase()} weapon stabilizer hit`);
+        break;
+      }
       const left = Boolean(crit.stabilizerLeft);
       const right = Boolean(crit.stabilizerRight);
       if (!left) updates["system.crit.stabilizerLeft"] = true;
@@ -1943,7 +2209,16 @@ async function applyVehicleCritical(targetActor, critTableLoc, { attackSide = "f
     case "fuelTank":
       if (_vehicleIsFusion(targetActor)) {
         updates["system.crit.engineHit"] = true;
+        if (isVTOL) bump("system.crit.engineHits", crit.engineHits, 3);
         notes.push("Fuel Tank hit (fusion): treated as Engine Hit");
+        if (isVTOL) fatalReason = "Fusion engine hit: lift lost";
+      } else if (isVTOL && _vehicleIsICEOrFuelCell(targetActor)) {
+        updates["system.crit.fuelTankHit"] = true;
+        updates["system.crew.driverHit"] = 2;
+        updates["system.crew.commanderHit"] = 2;
+        notes.push("Fuel tank explosion: vehicle destroyed and crew killed");
+        fatalReason = "Fuel tank explosion";
+        fatalKillsCrew = true;
       } else {
         notes.push("Fuel Tank hit");
       }
@@ -1965,6 +2240,19 @@ async function applyVehicleCritical(targetActor, critTableLoc, { attackSide = "f
   }
 
   if (Object.keys(updates).length) await targetActor.update(updates);
+  if (isVTOL && !fatalReason) {
+    const pilotHits = Number(targetActor.system?.crew?.driverHit ?? 0) || 0;
+    const copilotHits = Number(targetActor.system?.crew?.commanderHit ?? 0) || 0;
+    if (pilotHits >= 2 && copilotHits >= 2) {
+      fatalReason = "Pilot and co-pilot incapacitated";
+      fatalKillsCrew = true;
+    }
+  }
+
+  let defeatResult = null;
+  if (isVTOL && fatalReason) {
+    defeatResult = await markVTOLDefeated(targetActor, { reason: fatalReason, killCrew: fatalKillsCrew, crashed: true });
+  }
 
   return {
     ok: true,
@@ -1972,7 +2260,9 @@ async function applyVehicleCritical(targetActor, critTableLoc, { attackSide = "f
     roll,
     resultKey,
     notes,
-    motive
+    motive,
+    crashed: Boolean(updates["system.crit.crashed"] || defeatResult?.defeated),
+    defeatResult
   };
 }
 
@@ -1983,14 +2273,24 @@ async function applyDamageToVehicleActor(targetActor, hitLoc, damage, { attackSi
   if (!loc) return { ok: false, reason: "No hit location" };
 
   const tonnage = Number(targetActor.system?.vehicle?.tonnage ?? 0) || 0;
-  const structMax = Math.max(0, Math.floor(tonnage / 10));
+  const isVTOL = String(targetActor?.type ?? "").toLowerCase() === "vtol";
+  const structMax = isVTOL
+    ? Math.max(1, Math.ceil(tonnage / 10))
+    : Math.max(0, Math.floor(tonnage / 10));
+
+  const incomingDamage = Math.max(0, num(damage, 0));
+  // VTOL rotor hits deliver Damage Value / 10, rounded up. This reduced
+  // value is what is applied to the shared rotor armor/structure track.
+  const effectiveDamage = (isVTOL && loc === "rotor")
+    ? Math.ceil(incomingDamage / 10)
+    : incomingDamage;
 
   const armorNode = targetActor.system?.armor?.[loc] ?? {};
   const armorMax = Number(armorNode.max ?? 0) || 0;
   const armorDmg = Number(armorNode.dmg ?? 0) || 0;
   const armorRemaining = Math.max(0, armorMax - armorDmg);
 
-  let remaining = num(damage, 0);
+  let remaining = effectiveDamage;
   const armorApplied = Math.min(remaining, armorRemaining);
   remaining -= armorApplied;
 
@@ -2004,22 +2304,79 @@ async function applyDamageToVehicleActor(targetActor, hitLoc, damage, { attackSi
   if (armorApplied > 0) updates[`system.armor.${loc}.dmg`] = clampInt(armorDmg + armorApplied, 0, armorMax, 0);
   if (structApplied > 0 || structMax > 0) updates[`system.structure.${loc}.dmg`] = clampInt(structDmg + structApplied, 0, structMax, 0);
 
+  let rotorMpLossApplied = 0;
+  let crashed = false;
+  let fatalReason = "";
+  const nextStructureDamage = clampInt(structDmg + structApplied, 0, structMax, 0);
+
+  if (isVTOL && ["front", "left", "right", "rear"].includes(loc) && nextStructureDamage >= structMax) {
+    fatalReason = `${loc.charAt(0).toUpperCase()}${loc.slice(1)} internal structure destroyed`;
+    crashed = true;
+  }
+
+  if (isVTOL && loc === "rotor" && effectiveDamage > 0) {
+    const currentRotorHits = Math.max(0, Number(targetActor.system?.crit?.rotorHits ?? 0) || 0);
+    rotorMpLossApplied = effectiveDamage;
+    const nextRotorHits = currentRotorHits + rotorMpLossApplied;
+    updates["system.crit.rotorHits"] = nextRotorHits;
+
+    if (nextStructureDamage >= structMax) {
+      crashed = true;
+      updates["system.crit.rotorsDestroyed"] = true;
+      updates["system.crit.crashed"] = true;
+      fatalReason = "Rotor internal structure destroyed";
+    } else {
+      const baseCruise = Math.max(0, Number(targetActor.system?.vehicle?.movement?.cruise ?? 0) || 0);
+      if (baseCruise > 0 && nextRotorHits >= baseCruise) {
+        crashed = true;
+        updates["system.crit.crashed"] = true;
+        fatalReason = "Cruising MP reduced to 0 by rotor damage";
+      }
+    }
+  }
+
   if (Object.keys(updates).length) {
     await targetActor.update(updates);
   }
+  let defeatResult = null;
+  if (isVTOL && fatalReason) {
+    defeatResult = await markVTOLDefeated(targetActor, { reason: fatalReason, crashed: true });
+  }
 
-  let vehicleCrit = null;
+  const vehicleCrits = [];
   if (crit?.trigger) {
-    vehicleCrit = await applyVehicleCritical(targetActor, crit.tableLoc, { attackSide, loc });
+    const throughArmorCrit = await applyVehicleCritical(targetActor, crit.tableLoc, { attackSide, loc });
+    vehicleCrits.push({ ...throughArmorCrit, source: "Through Armor" });
+  }
+
+  if (isVTOL && structApplied > 0) {
+    const internalTableLoc = (loc === "left" || loc === "right") ? "side" : loc;
+    const internalCrit = await applyVehicleCritical(targetActor, internalTableLoc, { attackSide, loc });
+    vehicleCrits.push({ ...internalCrit, source: "Internal Structure Damage" });
+  }
+
+  const vehicleCrit = vehicleCrits[0] ?? null;
+  const criticalDefeat = vehicleCrits.find(entry => entry?.defeatResult?.defeated)?.defeatResult ?? null;
+  if (criticalDefeat) {
+    defeatResult = criticalDefeat;
+    crashed = true;
   }
 
   return {
     ok: true,
     loc,
+    incomingDamage,
+    effectiveDamage,
+    rotorDamageReduced: isVTOL && loc === "rotor",
+    rotorMpLossApplied,
+    crashed,
+    defeated: Boolean(defeatResult?.defeated),
+    defeatReason: defeatResult?.reason ?? fatalReason,
     armorApplied,
     structureApplied: structApplied,
     overflow: remaining,
-    vehicleCrit
+    vehicleCrit,
+    vehicleCrits
   };
 }
 
@@ -2636,8 +2993,11 @@ function ammoKeyFromTypeLabel(typeText) {
   const raw = String(typeText ?? "").trim();
   // Accept both a bare ammo type ("NARC") and the complete crit-slot label
   // ("Ammo (NARC) 6"). Weapon items and mounted-slot fallbacks can supply either.
-  const installedAmmoLabel = raw.match(/^\s*ammo\s*\(([^)]+)\)\s*\d+\s*$/i);
-  const t = String(installedAmmoLabel?.[1] ?? raw).trim().toLowerCase();
+  const installedAmmoLabel = raw.match(/^\s*ammo\s*\(([^)]+)\)\s*\d+\s*(?:\[\s*(LRM|SRM)\s*\])?\s*$/i);
+  const installedAmmoType = installedAmmoLabel
+    ? `${String(installedAmmoLabel[1] ?? "").trim()}${installedAmmoLabel[2] ? ` [${installedAmmoLabel[2]}]` : ""}`
+    : raw;
+  const t = String(installedAmmoType).trim().toLowerCase();
 
   // Ammo-less weapons use labels like "None" or "N/A"; do not turn those into fake bins.
   if (!t || t === "none" || t === "n/a" || t === "na" || t === "n-a" || t === "no ammo" || t === "ammo none") {
@@ -2648,8 +3008,9 @@ function ammoKeyFromTypeLabel(typeText) {
   if (missileAmmoKey) return missileAmmoKey;
 
   // If already looks like our key, keep it stable
-  if (/^(ac|lrm|mrm|srm|atm)-\d+(?:-(?:er|he))?$/.test(t)) return t;
+  if (/^(ac|lrm|mrm|srm|atm|hag)-\d+(?:-(?:er|he))?$/.test(t)) return t;
   if (/^lbx-\d+(?:-cluster)?$/.test(t)) return t;
+  if (t === "plasma-rifle" || /\bplasma\s+rifle\b/i.test(t)) return "plasma-rifle";
 
   // LB-X autocannon ammo: accept labels like
   // - "LB 10-X AC"
@@ -2677,6 +3038,12 @@ function ammoKeyFromTypeLabel(typeText) {
   // Autocannons: "AC/20", "AC 20"
   m = t.match(/\bac\s*\/?\s*(\d+)\b/i);
   if (m?.[1]) return slugifyAmmoKey(`ac-${m[1]}`);
+
+  m = t.match(/\bhag\s*[-/]?\s*(20|30|40)\b/i)
+    ?? t.match(/\bhyper\s*[- ]?\s*assault\s+gauss\s+rifles?\b[^\d]*(20|30|40)\b/i);
+  if (m?.[1]) return slugifyAmmoKey(`hag-${m[1]}`);
+
+  if (/\blight\s+gauss(?:\s+rifle)?\b/i.test(t)) return "light-gauss";
 
   // LRMs / MRMs / SRMs
   m = t.match(/\b(lrm|mrm|srm)\s*-?\s*(\d+)\b/i) ?? t.match(/\b(lrm|mrm|srm)\b[^\d]*(\d+)\b/i);
@@ -2789,6 +3156,69 @@ function getATMProfile(weaponItem, ammoKey = null) {
   };
 }
 
+function getMMLProfile(weaponItem, ammoKey = null) {
+  const rack = getMissileRack(weaponItem);
+  if (String(rack?.type ?? "").toUpperCase() !== "MML") return null;
+
+  const mode = getMMLAmmoMode(ammoKey) ?? "lrm";
+  const canonical = mode === "srm"
+    ? {
+      mode,
+      label: "SRM",
+      rackType: "SRM",
+      damagePerMissile: 2,
+      groupSize: 1,
+      range: { min: 0, short: 3, medium: 6, long: 9 }
+    }
+    : {
+      mode: "lrm",
+      label: "LRM",
+      rackType: "LRM",
+      damagePerMissile: 1,
+      groupSize: 5,
+      range: { min: 6, short: 7, medium: 14, long: 21 }
+    };
+
+  const system = weaponItem?.system ?? {};
+  const alternate = system.alternateProfile ?? {};
+  const primaryMode = String(system.profileMode || "lrm").trim().toLowerCase();
+  const alternateMode = String(alternate.ammoMode || "srm").trim().toLowerCase();
+  const configured = primaryMode === mode
+    ? { label: system.profileLabel, damage: system.damage, range: system.range }
+    : (Boolean(system.useAlternateProfile) && alternateMode === mode
+        ? { label: alternate.label, damage: alternate.damage, range: alternate.range }
+        : null);
+
+  if (!configured) return canonical;
+
+  const positiveOrDefault = (value, fallback) => {
+    const n = Number(value);
+    return Number.isFinite(n) && n > 0 ? n : fallback;
+  };
+  const configuredRange = configured.range ?? {};
+  const min = mode === "srm"
+    ? Math.max(0, num(configuredRange.min, canonical.range.min))
+    : positiveOrDefault(configuredRange.min, canonical.range.min);
+
+  return {
+    ...canonical,
+    label: String(configured.label || canonical.label),
+    damagePerMissile: positiveOrDefault(configured.damage, canonical.damagePerMissile),
+    range: {
+      min,
+      short: positiveOrDefault(configuredRange.short, canonical.range.short),
+      medium: positiveOrDefault(configuredRange.medium, canonical.range.medium),
+      long: positiveOrDefault(configuredRange.long, canonical.range.long)
+    }
+  };
+}
+
+function isMMLAmmoModeVariantCompatible(mode, variant) {
+  if (variant === MISSILE_AMMO_VARIANTS.INFERNO) return mode === "srm";
+  if (variant === MISSILE_AMMO_VARIANTS.SEMI_GUIDED) return mode === "lrm";
+  return true;
+}
+
 function weaponSupportsAmmoSelection(weaponItem) {
   const rack = getMissileRack(weaponItem);
   const rackType = String(rack?.type ?? "").toUpperCase();
@@ -2801,6 +3231,8 @@ function getAmmoKeyForWeapon(weaponItem) {
 
   const rotaryProfile = getRotaryACProfile(weaponItem);
   if (rotaryProfile) return rotaryProfile.ammoKey;
+  const lightACProfile = getLightACProfile(weaponItem);
+  if (lightACProfile) return lightACProfile.ammoKey;
 
   // Allow explicit mapping on the weapon item (many possible schemas)
   const explicit =
@@ -2822,6 +3254,8 @@ function getAmmoKeyForWeapon(weaponItem) {
 
   const name = String(weaponItem?.name ?? "").toLowerCase();
 
+  if (isPlasmaRifleWeapon(weaponItem)) return "plasma-rifle";
+
   const lbxSize = getLBXWeaponSize(weaponItem);
   if (Number.isFinite(lbxSize)) {
     return slugifyAmmoKey(`lbx-${lbxSize}`);
@@ -2832,8 +3266,14 @@ function getAmmoKeyForWeapon(weaponItem) {
     return slugifyAmmoKey(`atm-${atmSize}`);
   }
 
+  let m = name.match(/\bhag\s*[-/]?\s*(20|30|40)\b/i)
+    ?? name.match(/\bhyper\s*[- ]?\s*assault\s+gauss\s+rifles?\b[^\d]*(20|30|40)\b/i);
+  if (m?.[1]) return slugifyAmmoKey(`hag-${m[1]}`);
+
+  if (/\blight\s+gauss\s+rifle\b/i.test(name)) return "light-gauss";
+
   // Autocannons: "AC/20", "AC 20"
-  let m = name.match(/\bac\s*\/?\s*(\d+)\b/i);
+  m = name.match(/\bac\s*\/?\s*(\d+)\b/i);
   if (m?.[1]) return slugifyAmmoKey(`ac-${m[1]}`);
 
   // LRMs / MMLs / MRMs / SRMs
@@ -2886,7 +3326,6 @@ async function getAmmoSelectionOptions(actor, weaponItem) {
   const missileRack = getMissileRack(weaponItem);
   const missileType = String(missileRack?.type ?? "").toUpperCase();
   if (["LRM", "MML", "SRM"].includes(missileType) && Number.isFinite(Number(missileRack?.size))) {
-    const baseKey = `${missileType.toLowerCase()}-${Number(missileRack.size)}`;
     const variants = [
       MISSILE_AMMO_VARIANTS.STANDARD,
       MISSILE_AMMO_VARIANTS.ARTEMIS_IV,
@@ -2896,10 +3335,17 @@ async function getAmmoSelectionOptions(actor, weaponItem) {
       MISSILE_AMMO_VARIANTS.NARC,
       MISSILE_AMMO_VARIANTS.SEMI_GUIDED
     ];
-    for (const variant of variants) {
-      if (!isMissileAmmoVariantCompatible(missileType, variant)) continue;
-      const key = variant === MISSILE_AMMO_VARIANTS.STANDARD ? baseKey : `${baseKey}-${variant}`;
-      addOption(key, `${getMissileAmmoVariantLabel(variant)} (${missileType}-${missileRack.size})`);
+
+    const modes = missileType === "MML" ? ["lrm", "srm"] : [null];
+    for (const mode of modes) {
+      const baseKey = `${missileType.toLowerCase()}-${Number(missileRack.size)}${mode ? `-${mode}` : ""}`;
+      for (const variant of variants) {
+        if (!isMissileAmmoVariantCompatible(missileType, variant)) continue;
+        if (mode && !isMMLAmmoModeVariantCompatible(mode, variant)) continue;
+        const key = variant === MISSILE_AMMO_VARIANTS.STANDARD ? baseKey : `${baseKey}-${variant}`;
+        const modeLabel = mode ? `${mode.toUpperCase()} ` : "";
+        addOption(key, `${modeLabel}${getMissileAmmoVariantLabel(variant)} (${missileType}-${missileRack.size})`);
+      }
     }
   }
 
@@ -2941,10 +3387,10 @@ function buildAmmoTotalsFromCritSlots(actorSystem) {
       const label = (typeof slot === "string") ? String(slot).trim() : String(slot?.label ?? "").trim();
       if (!label) continue;
 
-      const m = label.match(/^\s*Ammo\s*\(([^)]+)\)\s*(\d+)\s*$/i);
+      const m = label.match(/^\s*Ammo\s*\(([^)]+)\)\s*(\d+)\s*(?:\[\s*(LRM|SRM)\s*\])?\s*$/i);
       if (!m) continue;
 
-      const typeText = String(m[1] ?? "").trim();
+      const typeText = `${String(m[1] ?? "").trim()}${m[3] ? ` [${m[3]}]` : ""}`;
       const amt = Number(m[2] ?? 0);
       const key = ammoKeyFromTypeLabel(typeText);
 
@@ -3177,6 +3623,10 @@ async function spendAmmoIfApplicable(actor, weaponItem, amount = 1, { ammoKey = 
 function getWeaponRanges(item, { ammoKey = null } = {}) {
   const atmProfile = getATMProfile(item, ammoKey);
   if (atmProfile?.range) return { ...atmProfile.range };
+  const mmlProfile = getMMLProfile(item, ammoKey);
+  if (mmlProfile?.range) return { ...mmlProfile.range };
+  const snubNosePPCProfile = getSnubNosePPCProfile(item);
+  if (snubNosePPCProfile?.range) return { ...snubNosePPCProfile.range };
 
   const sys = item?.system ?? {};
   const r = sys.range ?? {};
@@ -3210,6 +3660,36 @@ function getWeaponRanges(item, { ammoKey = null } = {}) {
     short: num(r.short ?? sys.sht ?? sys.short, 0),
     medium: num(r.medium ?? sys.med ?? sys.medium, 0),
     long: num(r.long ?? sys.lng ?? sys.long, 0)
+  };
+}
+
+export function getSnubNosePPCProfile(itemOrName, distance = null) {
+  const name = typeof itemOrName === "string" ? itemOrName : String(itemOrName?.name ?? "");
+  if (!/\bsnub[\s-]*nose\s+ppc\b/i.test(name)) return null;
+
+  const d = Number(distance);
+  let damage = 10;
+  let damageBand = "1-9";
+  if (Number.isFinite(d)) {
+    if (d <= 9) {
+      damage = 10;
+      damageBand = "1-9";
+    } else if (d <= 13) {
+      damage = 8;
+      damageBand = "10-13";
+    } else if (d <= 15) {
+      damage = 5;
+      damageBand = "14-15";
+    } else {
+      damage = 0;
+      damageBand = "Out of Range";
+    }
+  }
+
+  return {
+    damage,
+    damageBand,
+    range: { min: 0, short: 9, medium: 13, long: 15 }
   };
 }
 
@@ -3541,6 +4021,166 @@ function measurePointDistance(fromPoint, toPoint) {
   const ray = new Ray(fromPoint, toPoint);
   const distances = canvas.grid.measureDistances([{ ray }], { gridSpaces: true });
   return num(distances?.[0], null);
+}
+
+const ECM_RADIUS_HEXES = 6;
+
+function _getOperationalECMName(actor) {
+  if (!isMechActor(actor)) return null;
+  for (const slot of _iterCritStartSlots(actor)) {
+    if (slot.destroyed) continue;
+    const label = String(slot.label ?? "").trim();
+    if (/\bguardian\s+ecm\b/i.test(label)) return "Guardian ECM";
+    if (/\becm\s+suite\b/i.test(label)) return "ECM Suite";
+  }
+  return null;
+}
+
+function _tokensAreFriendly(a, b) {
+  const aActor = a?.actor ?? a?.document?.actor ?? null;
+  const bActor = b?.actor ?? b?.document?.actor ?? null;
+  if (aActor && bActor && aActor.id === bActor.id) return true;
+
+  const aDisposition = Number(a?.document?.disposition ?? a?.disposition);
+  const bDisposition = Number(b?.document?.disposition ?? b?.disposition);
+  return Number.isFinite(aDisposition) &&
+    Number.isFinite(bDisposition) &&
+    aDisposition === bDisposition;
+}
+
+function _distanceFromPointToAttackLineHexes(point, start, end) {
+  if (!point || !start || !end) return Infinity;
+  const dx = Number(end.x) - Number(start.x);
+  const dy = Number(end.y) - Number(start.y);
+  const lengthSquared = (dx * dx) + (dy * dy);
+  const t = lengthSquared > 0
+    ? clamp((((Number(point.x) - Number(start.x)) * dx) + ((Number(point.y) - Number(start.y)) * dy)) / lengthSquared, 0, 1)
+    : 0;
+  const closest = {
+    x: Number(start.x) + (dx * t),
+    y: Number(start.y) + (dy * t)
+  };
+  const measured = measurePointDistance(point, closest);
+  if (Number.isFinite(measured)) return measured;
+  const gridSize = Number(canvas?.grid?.size ?? canvas?.dimensions?.size ?? 100) || 100;
+  return Math.hypot(Number(point.x) - closest.x, Number(point.y) - closest.y) / gridSize;
+}
+
+function getEnemyECMInterference(attackerToken, targetToken) {
+  const start = getTokenCenter(attackerToken);
+  const end = getTokenCenter(targetToken);
+  if (!start || !end || !canvas?.tokens) {
+    return { artemisBlocked: false, narcBlocked: false, sources: [] };
+  }
+
+  const sources = [];
+  let artemisBlocked = false;
+  let narcBlocked = false;
+  for (const token of canvas.tokens.placeables ?? []) {
+    const ecmName = _getOperationalECMName(token?.actor);
+    if (!ecmName || _tokensAreFriendly(attackerToken, token)) continue;
+
+    const center = getTokenCenter(token);
+    if (!center) continue;
+    const lineDistance = _distanceFromPointToAttackLineHexes(center, start, end);
+    const targetDistance = measurePointDistance(center, end);
+    const blocksArtemis = Number.isFinite(lineDistance) && lineDistance <= ECM_RADIUS_HEXES;
+    const blocksNarc = Number.isFinite(targetDistance) && targetDistance <= ECM_RADIUS_HEXES;
+    if (!blocksArtemis && !blocksNarc) continue;
+
+    artemisBlocked ||= blocksArtemis;
+    narcBlocked ||= blocksNarc;
+    sources.push({
+      tokenName: String(token.name ?? token.document?.name ?? token.actor?.name ?? "ECM source"),
+      ecmName,
+      blocksArtemis,
+      blocksNarc,
+      lineDistance,
+      targetDistance
+    });
+  }
+
+  return { artemisBlocked, narcBlocked, sources };
+}
+
+let _ecmProtectionSyncActive = false;
+
+async function _setECMProtectedStatus(token, active) {
+  const tokenDoc = token?.document ?? token;
+  const actor = token?.actor ?? tokenDoc?.actor ?? null;
+  if (!tokenDoc || !actor) return false;
+
+  const statusId = "ecm-protected";
+  const desired = Boolean(active);
+  const matches = Array.from(actor.effects ?? []).filter(effect => {
+    const coreId = effect.getFlag?.("core", "statusId") ?? effect.flags?.core?.statusId ?? null;
+    if (coreId === statusId) return true;
+    if (effect.statuses?.has?.(statusId)) return true;
+    return Array.isArray(effect.statuses) && effect.statuses.includes(statusId);
+  });
+  const enabled = matches.find(effect => !effect.disabled) ?? null;
+
+  if (desired) {
+    if (enabled) return false;
+    if (matches.length) {
+      await matches[0].update({ disabled: false });
+      return true;
+    }
+
+    const def = (CONFIG.statusEffects ?? []).find(effect => effect?.id === statusId) ?? null;
+    const statusIcon = def?.img ?? def?.icon ?? `systems/${SYSTEM_ID}/assets/status/ecm-protected.svg`;
+    await actor.createEmbeddedDocuments("ActiveEffect", [{
+      name: def?.name ?? def?.label ?? "ECM Protected",
+      img: statusIcon,
+      icon: statusIcon,
+      disabled: false,
+      statuses: [statusId],
+      flags: { core: { statusId } }
+    }]);
+    return true;
+  }
+
+  if (!enabled) return false;
+  for (const effect of matches) {
+    if (!effect.disabled) await effect.update({ disabled: true });
+  }
+  return true;
+}
+
+/**
+ * Refresh the visible ECM-protection marker for every BattleMech on the active
+ * scene. Token disposition defines sides, including Neutral as its own side.
+ */
+export async function syncECMProtectionStatuses() {
+  if (!game.user?.isGM || !canvas?.ready || _ecmProtectionSyncActive) return false;
+  _ecmProtectionSyncActive = true;
+  try {
+    const mechTokens = (canvas.tokens?.placeables ?? []).filter(token => isMechActor(token?.actor));
+    const sources = mechTokens.filter(token => Boolean(_getOperationalECMName(token?.actor)));
+
+    for (const token of mechTokens) {
+      const protectedByECM = sources.some(source => {
+        if (!_tokensAreFriendly(token, source)) return false;
+
+        // An operational ECM installation always protects its own carrier.
+        // Do not depend on Foundry's measurement of a zero-length ray, which
+        // can return no distance on some grid implementations.
+        const tokenId = String(token?.document?.id ?? token?.id ?? "");
+        const sourceId = String(source?.document?.id ?? source?.id ?? "");
+        if (source === token || (tokenId && sourceId && tokenId === sourceId)) return true;
+
+        const distance = measureTokenDistance(source, token);
+        return Number.isFinite(distance) && distance <= ECM_RADIUS_HEXES;
+      });
+      await _setECMProtectedStatus(token, protectedByECM);
+    }
+    return true;
+  } catch (err) {
+    console.warn("AToW Battletech | ECM protection status sync failed", err);
+    return false;
+  } finally {
+    _ecmProtectionSyncActive = false;
+  }
 }
 
 function getGridOffsetForPoint(point) {
@@ -3970,8 +4610,12 @@ function parseMissileRackLabel(label) {
   const name = String(label ?? "").trim();
   if (!name) return null;
 
-  let m = name.match(/\b(LRM|SRM|MRM|MML|ATM)\s*[-/]?\s*(\d+)\b/i);
-  if (!m) m = name.match(/\b(LRM|SRM|MRM|MML|ATM)\b[^\d]*(\d+)\b/i);
+  let m = name.match(/\b(LRM|SRM|MRM|MML|ATM|HAG)\s*[-/]?\s*(\d+)\b/i);
+  if (!m) m = name.match(/\b(LRM|SRM|MRM|MML|ATM|HAG)\b[^\d]*(\d+)\b/i);
+  if (!m) {
+    m = name.match(/\bhyper\s*[- ]?\s*assault\s+gauss\s+rifles?\b[^\d]*(20|30|40)\b/i);
+    if (m?.[1]) return { type: "HAG", size: Number(m[1]) };
+  }
   if (!m) {
     m = name.match(/\badvanced\s+tactical\s+missiles?\b[^\d]*(3|6|9|12)\b/i);
     if (m?.[1]) return { type: "ATM", size: Number(m[1]) };
@@ -4200,7 +4844,7 @@ function buildClusterDamagePackets(rackType, missilesHit, perHitDamage, groupSiz
   const damagePerMissile = Math.max(0, num(perHitDamage, 0));
   const clusterSize = Math.max(1, Math.floor(num(groupSize, 1)));
 
-  if (type === "ATM") {
+  if (type === "ATM" || type === "HAG") {
     return splitIntoNs(missileCount * damagePerMissile, clusterSize)
       .map(damage => ({
         hits: null,
@@ -4419,6 +5063,79 @@ function findWeaponMountInfoForFireKey(actor, weaponItem, weaponFireKey = "") {
   return { locKey: "", locLabel: "Unknown", index: null, mountId: "", rearMounted: false };
 }
 
+function getAccurateWeaponQuirkModifier(actor, weaponItem, opts = {}) {
+  if (!actor) return { mod: 0, applied: false, quirk: null };
+
+  const mount = findWeaponMountInfoForFireKey(actor, weaponItem, opts?.weaponFireKey ?? "");
+  const mountKey = mount.mountId ? `mount:${mount.mountId}` : "";
+  const critKey = (mount.locKey && Number.isInteger(mount.index))
+    ? `crit:${mount.locKey}:${mount.index}`
+    : "";
+
+  const quirk = actor.items?.find?.(item => {
+    if (item?.type !== "mechQuirk") return false;
+    if (String(item.name ?? "").trim().toLowerCase() !== "accurate weapon") return false;
+
+    const selected = String(item.system?.selectedWeaponKey ?? "").trim();
+    if (!selected) return false;
+    return selected === mountKey || selected === critKey;
+  }) ?? null;
+
+  return {
+    mod: quirk ? -1 : 0,
+    applied: Boolean(quirk),
+    quirk,
+    mount,
+    selectedWeaponKey: String(quirk?.system?.selectedWeaponKey ?? "")
+  };
+}
+
+function getImprovedTargetingQuirkModifier(actor, rangeBand) {
+  const normalizedBand = String(rangeBand ?? "").trim().toLowerCase();
+  if (!actor || !["short", "medium", "long"].includes(normalizedBand)) {
+    return { mod: 0, applied: false, quirk: null, band: normalizedBand };
+  }
+
+  const quirk = actor.items?.find?.(item => {
+    if (item?.type !== "mechQuirk") return false;
+    const match = String(item.name ?? "").trim().match(/^improved\s+targeting\s*\(\s*(short|medium|long)\s*\)$/i);
+    return String(match?.[1] ?? "").toLowerCase() === normalizedBand;
+  }) ?? null;
+
+  return {
+    mod: quirk ? -1 : 0,
+    applied: Boolean(quirk),
+    quirk,
+    band: normalizedBand
+  };
+}
+
+function getImprovedTargetingBands(actor) {
+  const bands = new Set();
+  for (const item of actor?.items ?? []) {
+    if (item?.type !== "mechQuirk") continue;
+    const match = String(item.name ?? "").trim().match(/^improved\s+targeting\s*\(\s*(short|medium|long)\s*\)$/i);
+    if (match?.[1]) bands.add(String(match[1]).toLowerCase());
+  }
+  return [...bands];
+}
+
+function hasNarrowLowProfileQuirk(actor) {
+  if (String(actor?.type ?? "").toLowerCase() !== "mech") return false;
+  return (actor?.items?.contents ?? actor?.items ?? []).some?.((item) => {
+    if (item?.type !== "mechQuirk") return false;
+    return /^narrow\s*\/\s*low\s+profile$/i.test(String(item.name ?? "").trim());
+  }) ?? false;
+}
+
+function getGlancingCriticalCheckModifier() {
+  try {
+    return game.settings.get(SYSTEM_ID, "advancedDeterminingCriticalHits") ? -4 : -2;
+  } catch (_) {
+    return -2;
+  }
+}
+
 function getAllowedFiringArcsForWeapon(actor, weaponItem, opts = {}) {
   const mount = findWeaponMountInfoForFireKey(actor, weaponItem, opts?.weaponFireKey ?? "");
   const explicitLoc = normalizeMechWeaponMountLoc(opts?.weaponMountLoc ?? "");
@@ -4539,6 +5256,121 @@ function getLegLossPSRTNMod(actor) {
   return legLoss >= 1 ? 5 : 0;
 }
 
+function getSmallCockpitPSRTNMod(actor) {
+  return actor?.system?.mech?.smallCockpit ? 1 : 0;
+}
+
+function hasInstalledAdvancedArmorCrits(actor) {
+  for (const loc of Object.values(actor?.system?.crit ?? {})) {
+    const rawSlots = loc?.slots;
+    if (!rawSlots) continue;
+    const slots = Array.isArray(rawSlots) ? rawSlots : Object.values(rawSlots);
+    for (const slot of slots) {
+      if (!slot || (slot.partOf !== undefined && slot.partOf !== null)) continue;
+      const label = String(typeof slot === "string" ? slot : slot.label ?? "")
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "");
+      if (/ferrofibrous|ferrolamellor|laserreflective|reactivearmor|^reactive$|vehicularstealth/.test(label)) return true;
+    }
+  }
+  return false;
+}
+
+function isHardenedArmorActor(actor) {
+  const armorType = String(actor?.system?.mech?.armorType ?? "").trim().toLowerCase();
+  return armorType === "hardened" && !hasInstalledAdvancedArmorCrits(actor);
+}
+
+function getHardenedArmorPSRTNMod(actor) {
+  return isHardenedArmorActor(actor) ? 1 : 0;
+}
+
+function isHeavyDutyGyroActor(actor) {
+  return Boolean(actor?.system?.mech?.heavyDutyGyro);
+}
+
+function getGyroPSRTNMod(actor) {
+  const hits = Math.max(0, Math.floor(Number(actor?.system?.critHits?.gyro ?? 0) || 0));
+  if (isHeavyDutyGyroActor(actor)) {
+    if (hits >= 2) return 3;
+    if (hits >= 1) return 1;
+    return 0;
+  }
+  return hits >= 1 ? 3 : 0;
+}
+
+async function resolveGyroCriticalOutcome(actor, { previousHits = 0, currentHits = 0 } = {}) {
+  if (!actor || !isMechActor(actor) || currentHits <= previousHits) return null;
+
+  const heavyDuty = isHeavyDutyGyroActor(actor);
+  const hitLimit = heavyDuty ? 3 : 2;
+  const destroyed = currentHits >= hitLimit;
+  const immediatePsr = !destroyed && (heavyDuty ? previousHits < 2 && currentHits >= 2 : previousHits < 1 && currentHits >= 1);
+  const rolls = [];
+  const lines = [
+    `<div class="atow-chat-card atow-mech-attack">`,
+    `<header><b>${heavyDuty ? "Heavy-Duty " : ""}Gyro Critical</b></header>`,
+    `<div><b>${htmlEscape(actor.name ?? "Mech")}</b>: Gyro hits ${currentHits}/${hitLimit}</div>`
+  ];
+  const result = { ok: true, previousHits, currentHits, hitLimit, destroyed, psrRequired: immediatePsr };
+
+  const resolveGyroFall = async (source) => {
+    const fallRoll = await (new Roll("1d6")).evaluate();
+    rolls.push(fallRoll);
+    const side = getFallSideFromRoll(Number(fallRoll?.total ?? 1));
+    const tonnage = getMechTonnage(actor);
+    const fallDamage = Math.max(1, Math.ceil(tonnage / 10));
+    const clusters = getFallDamageClusters(fallDamage);
+    const proneResult = await applyActorStatusAuto(actor, "prone", true);
+    const seatbelt = await resolvePilotSeatbeltCheck(actor, { source }).catch(() => null);
+    const fallResults = [];
+    const hitRows = [];
+
+    for (const cluster of clusters) {
+      const locResult = await rollHitLocation(side);
+      if (locResult?.roll) rolls.push(locResult.roll);
+      const loc = locResult?.loc ?? "ct";
+      const damageResult = await applyDamageToTargetActorAuto(actor, loc, cluster, { side, tac: false, tacLoc: loc });
+      fallResults.push({ cluster, locResult, damage: damageResult });
+      hitRows.push(`<li>${cluster} damage to <b>${htmlEscape(String(loc).toUpperCase())}</b> (location roll ${locResult?.roll?.total ?? "?"})</li>`);
+    }
+
+    lines.push(`<div><b>Fall:</b> ${fallRoll.total} — ${htmlEscape(side)} side; ${fallDamage} damage.</div>`);
+    if (hitRows.length) lines.push(`<ul>${hitRows.join("")}</ul>`);
+    Object.assign(result, { side, fallRoll, fallDamage, proneResult, seatbelt, fallResults });
+  };
+
+  if (destroyed) {
+    lines.push(`<div><b>Gyro destroyed:</b> The ’Mech automatically falls prone and cannot stand.</div>`);
+    await resolveGyroFall("Gyro destruction fall");
+  } else if (!immediatePsr) {
+    lines.push(`<div><b>First Heavy-Duty Gyro hit:</b> No immediate PSR; all future PSRs suffer +1 TN.</div>`);
+  } else {
+    const piloting = num(actor.system?.pilot?.piloting, 0);
+    const legLossMod = getLegLossPSRTNMod(actor);
+    const smallCockpitMod = getSmallCockpitPSRTNMod(actor);
+    const hardenedArmorMod = getHardenedArmorPSRTNMod(actor);
+    const gyroMod = getGyroPSRTNMod(actor);
+    const tn = 8 + legLossMod + smallCockpitMod + hardenedArmorMod + gyroMod;
+    const roll = await (new Roll(`2d6 + ${piloting}`)).evaluate();
+    rolls.push(roll);
+    const success = Number(roll?.total ?? 0) >= tn;
+    result.roll = roll;
+    result.success = success;
+    result.tn = tn;
+    lines.push(`<div><b>Immediate PSR:</b> ${roll.total} (2d6 + Piloting ${piloting}) vs <b>TN ${tn}</b> (Gyro +${gyroMod}) — <b>${success ? "PASS" : "FALL"}</b></div>`);
+    if (!success) await resolveGyroFall("Gyro critical PSR fall");
+  }
+
+  lines.push(`</div>`);
+  await ChatMessage.create({
+    speaker: ChatMessage.getSpeaker({ actor }),
+    rolls,
+    content: lines.join("")
+  }).catch(() => {});
+  return result;
+}
+
 function htmlEscape(value) {
   const div = document.createElement("div");
   div.textContent = String(value ?? "");
@@ -4643,7 +5475,10 @@ export async function resolvePilotSeatbeltCheck(actor, { source = "Fall", token 
 
   const piloting = num(actor.system?.pilot?.piloting, 0);
   const legLossMod = getLegLossPSRTNMod(actor);
-  const tn = 8 + legLossMod;
+  const smallCockpitMod = getSmallCockpitPSRTNMod(actor);
+  const hardenedArmorMod = getHardenedArmorPSRTNMod(actor);
+  const gyroMod = getGyroPSRTNMod(actor);
+  const tn = 8 + legLossMod + smallCockpitMod + hardenedArmorMod + gyroMod;
   const roll = await (new Roll(`2d6 + ${piloting}`)).evaluate();
   const success = Number(roll?.total ?? 0) >= tn;
   const rolls = [roll];
@@ -4651,7 +5486,7 @@ export async function resolvePilotSeatbeltCheck(actor, { source = "Fall", token 
     `<div class="atow-chat-card atow-mech-attack">`,
     `<header><b>Pilot Seatbelt Check</b></header>`,
     `<div><b>${htmlEscape(actor.name ?? "Mech")}</b>: ${htmlEscape(source)}</div>`,
-    `<div><b>Roll:</b> ${roll.total} (2d6 + Piloting ${piloting}) vs TN ${tn}${legLossMod ? ` (leg destroyed +${legLossMod})` : ""} - <b>${success ? "PASS" : "PILOT HIT"}</b></div>`
+    `<div><b>Roll:</b> ${roll.total} (2d6 + Piloting ${piloting}) vs TN ${tn}${legLossMod ? ` (leg destroyed +${legLossMod})` : ""}${smallCockpitMod ? ` (Small Cockpit +${smallCockpitMod})` : ""}${hardenedArmorMod ? ` (Hardened Armor +${hardenedArmorMod})` : ""}${gyroMod ? ` (Gyro +${gyroMod})` : ""} - <b>${success ? "PASS" : "PILOT HIT"}</b></div>`
   ];
 
   let pilotHit = null;
@@ -4676,7 +5511,10 @@ async function resolveMassiveDamagePSR(targetToken, attackDamage, { source = "Ma
 
   const piloting = num(targetActor.system?.pilot?.piloting, 0);
   const legLossMod = getLegLossPSRTNMod(targetActor);
-  const tn = 8 + legLossMod;
+  const smallCockpitMod = getSmallCockpitPSRTNMod(targetActor);
+  const hardenedArmorMod = getHardenedArmorPSRTNMod(targetActor);
+  const gyroMod = getGyroPSRTNMod(targetActor);
+  const tn = 8 + legLossMod + smallCockpitMod + hardenedArmorMod + gyroMod;
   const psr = await (new Roll(`2d6 + ${piloting}`)).evaluate();
   const success = Number(psr?.total ?? 0) >= tn;
   const rolls = [psr];
@@ -4685,7 +5523,7 @@ async function resolveMassiveDamagePSR(targetToken, attackDamage, { source = "Ma
     `<header><b>Massive Damage PSR</b></header>`,
     `<div><b>Target:</b> ${htmlEscape(targetToken.name ?? targetActor.name ?? "Mech")}</div>`,
     `<div><b>Trigger:</b> ${htmlEscape(source)} dealt ${Number(attackDamage ?? 0)} damage in a single attack.</div>`,
-    `<div><b>Roll:</b> ${psr.total} (2d6 + Piloting ${piloting}) vs <b>TN ${tn}</b>${legLossMod ? ` (leg destroyed +${legLossMod})` : ""} - <b>${success ? "PASS" : "FALL"}</b></div>`
+    `<div><b>Roll:</b> ${psr.total} (2d6 + Piloting ${piloting}) vs <b>TN ${tn}</b>${legLossMod ? ` (leg destroyed +${legLossMod})` : ""}${smallCockpitMod ? ` (Small Cockpit +${smallCockpitMod})` : ""}${hardenedArmorMod ? ` (Hardened Armor +${hardenedArmorMod})` : ""}${gyroMod ? ` (Gyro +${gyroMod})` : ""} - <b>${success ? "PASS" : "FALL"}</b></div>`
   ];
 
   const result = { ok: true, required: true, success, psr, fallDamage: 0, fallResults: [] };
@@ -4778,6 +5616,8 @@ export async function rollWeaponAttack(actor, weaponItem, opts = {}) {
   const isTagAttack = isTAGWeapon(weaponItem);
   const isNarcAttack = isNarcMissileBeaconWeapon(weaponItem);
   const isArrowIVHomingAttack = isArrowIVSystemWeapon(weaponItem);
+  const isPlasmaCannonAttack = isPlasmaCannonWeapon(weaponItem);
+  const isPlasmaRifleAttack = isPlasmaRifleWeapon(weaponItem);
 
   const pilot = actor.system?.pilot ?? {};
   const crew = actor.system?.crew ?? {};
@@ -4794,7 +5634,7 @@ export async function rollWeaponAttack(actor, weaponItem, opts = {}) {
   const isAbomTarget = isAbominationActor(targetActor);
   const isVehicleTarget = isVehicleActor(targetActor);
   const isDropshipTarget = isDropshipActor(targetActor);
-  const hasVehicleTurret = isVehicleTarget && (num(targetActor?.system?.armor?.turret?.max, 0) > 0);
+  const hasVehicleTurret = isVehicleTarget && vehicleHasTurret(targetActor);
 
   if (!targetToken) {
     ui?.notifications?.warn?.("Select exactly 1 target token before making an attack.");
@@ -4842,6 +5682,7 @@ export async function rollWeaponAttack(actor, weaponItem, opts = {}) {
   if (Number.isFinite(atmSize) && !ammoKey) ammoKey = slugifyAmmoKey(`atm-${atmSize}`);
   const weaponRack = getMissileRack(weaponItem);
   const weaponRackType = String(weaponRack?.type ?? "").toUpperCase();
+  const selectedMMLMode = weaponRackType === "MML" ? (getMMLAmmoMode(ammoKey) ?? "lrm") : null;
   const selectedMissileAmmoVariant = ["LRM", "MML", "SRM"].includes(weaponRackType)
     ? getMissileAmmoVariant(ammoKey)
     : MISSILE_AMMO_VARIANTS.STANDARD;
@@ -4849,6 +5690,11 @@ export async function rollWeaponAttack(actor, weaponItem, opts = {}) {
     const variantLabel = getMissileAmmoVariantLabel(selectedMissileAmmoVariant);
     ui?.notifications?.warn?.(`${variantLabel} ammunition is not compatible with ${weaponRackType || "this"} launchers.`);
     return { ok: false, blocked: true, reason: "incompatibleMissileAmmo", weaponRackType, selectedMissileAmmoVariant };
+  }
+  if (selectedMMLMode && !isMMLAmmoModeVariantCompatible(selectedMMLMode, selectedMissileAmmoVariant)) {
+    const variantLabel = getMissileAmmoVariantLabel(selectedMissileAmmoVariant);
+    ui?.notifications?.warn?.(`${variantLabel} MML ammunition cannot be fired in ${selectedMMLMode.toUpperCase()} mode.`);
+    return { ok: false, blocked: true, reason: "incompatibleMMLAmmoMode", selectedMMLMode, selectedMissileAmmoVariant };
   }
   const artemisIVCounts = Boolean(weaponRack) ? _countArtemisAndLaunchers(actor, "iv") : { byLoc: {}, totalLaunchers: 0, totalArtemis: 0 };
   const artemisVCounts = Boolean(weaponRack) ? _countArtemisAndLaunchers(actor, "v") : { byLoc: {}, totalLaunchers: 0, totalArtemis: 0 };
@@ -4865,8 +5711,10 @@ export async function rollWeaponAttack(actor, weaponItem, opts = {}) {
     return { ok: false, blocked: true, reason: "artemisVAmmoNotLinked" };
   }
   const mrmTNMod = weaponRackType === "MRM" ? 1 : 0;
+  const accurateWeaponQuirk = getAccurateWeaponQuirkModifier(actor, weaponItem, opts);
 
   const { band, mod: rangeMod, minPenalty } = calcRangeBandAndMod(weaponItem, distance, { ammoKey });
+  const improvedTargetingQuirk = getImprovedTargetingQuirkModifier(actor, band);
 
   // Heat-based fire modifier and shutdown (computed at turn start)
   const heatFireMod = isVehicleAttacker ? 0 : num(actor.system?.heat?.effects?.fireMod, 0);
@@ -4978,6 +5826,7 @@ export async function rollWeaponAttack(actor, weaponItem, opts = {}) {
   if (Number.isFinite(lbxSize) && !ammoKey) ammoKey = lbxSlugAmmoKey;
   const isLBXClusterFire = Boolean(lbxClusterAmmoKey && ammoKey === lbxClusterAmmoKey);
   const atmProfile = getATMProfile(weaponItem, ammoKey);
+  const mmlProfile = getMMLProfile(weaponItem, ammoKey);
   const ammoSelectionLabel = isLBXClusterFire
     ? `LB-X cluster ammo (${ammoKey})`
     : (Number.isFinite(lbxSize)
@@ -4985,7 +5834,7 @@ export async function rollWeaponAttack(actor, weaponItem, opts = {}) {
       : (atmProfile
           ? `ATM ${atmProfile.label} ammo (${ammoKey})`
           : (["LRM", "MML", "SRM"].includes(weaponRackType)
-              ? `${getMissileAmmoVariantLabel(selectedMissileAmmoVariant)} ${weaponRackType}-${weaponRack?.size} missiles (${ammoKey})`
+              ? `${mmlProfile ? `${mmlProfile.label} ` : ""}${getMissileAmmoVariantLabel(selectedMissileAmmoVariant)} ${weaponRackType}-${weaponRack?.size} missiles (${ammoKey})`
               : String(ammoKey ?? ""))));
 
   const targetImmobile = tokenHasStatus(targetToken, "atow-immobile") || tokenHasStatus(targetToken, "immobile");
@@ -5089,20 +5938,21 @@ export async function rollWeaponAttack(actor, weaponItem, opts = {}) {
   const aimedModStr = (aimedNetMod >= 0) ? `+${aimedNetMod}` : `${aimedNetMod}`;
 
   const totalTN = isArrowIVHomingAttack
-    ? 4
-    : num(baseTN, 8) + rangeMod + attackerMoveMod + targetMoveMod + heatFireMod + statusTNMods.total + envTNMods.mod + losWoodsMods.mod + terrainPartialCoverMod + terrainMod + otherMod + mrmTNMod + tcMod + aimedNetMod;
+    ? 4 + accurateWeaponQuirk.mod + improvedTargetingQuirk.mod
+    : num(baseTN, 8) + rangeMod + attackerMoveMod + targetMoveMod + heatFireMod + statusTNMods.total + envTNMods.mod + losWoodsMods.mod + terrainPartialCoverMod + terrainMod + otherMod + mrmTNMod + accurateWeaponQuirk.mod + improvedTargetingQuirk.mod + tcMod + aimedNetMod;
 
   const tn = isArrowIVHomingAttack
-    ? 4
-    : num(baseTN, 8) + rangeMod + attackerMoveMod + targetMoveMod + heatFireMod + statusTNMods.total + envTNMods.mod + losWoodsMods.mod + terrainPartialCoverMod + terrainMod + otherMod + mrmTNMod + tcMod + aimedNetMod;
+    ? 4 + accurateWeaponQuirk.mod + improvedTargetingQuirk.mod
+    : num(baseTN, 8) + rangeMod + attackerMoveMod + targetMoveMod + heatFireMod + statusTNMods.total + envTNMods.mod + losWoodsMods.mod + terrainPartialCoverMod + terrainMod + otherMod + mrmTNMod + accurateWeaponQuirk.mod + improvedTargetingQuirk.mod + tcMod + aimedNetMod;
 
   const toHit = await (new Roll(isArrowIVHomingAttack ? "2d6" : `2d6 + ${gunnery}`)).evaluate();
   // Missile rack size (LRM/SRM/MRM etc). Used to distinguish missile cluster weapons vs rapid-fire cluster.
-  const rack = (isTagAttack || isNarcAttack || isArrowIVHomingAttack) ? null : (isLBXClusterFire ? { type: "LBX", size: lbxSize } : weaponRack);
+  const effectiveMMLRack = mmlProfile ? { type: mmlProfile.rackType, size: weaponRack?.size, launcherType: "MML" } : weaponRack;
+  const rack = (isTagAttack || isNarcAttack || isArrowIVHomingAttack) ? null : (isLBXClusterFire ? { type: "LBX", size: lbxSize } : effectiveMMLRack);
   const rackType = String(rack?.type ?? "").toUpperCase();
   const rackATMProfile = (rackType === "ATM") ? (atmProfile ?? getATMProfile(weaponItem, ammoKey)) : null;
-  const rackPerHitDamage = rackATMProfile?.damagePerMissile ?? ((rackType === "SRM") ? 2 : (rackType === "LBX" ? 1 : 1));
-  const rackGroupSize = rackATMProfile?.groupSize ?? ((rackType === "SRM") ? 1 : (rackType === "LBX" ? 1 : 5));
+  const rackPerHitDamage = rackATMProfile?.damagePerMissile ?? mmlProfile?.damagePerMissile ?? ((rackType === "SRM") ? 2 : (rackType === "LBX" ? 1 : 1));
+  const rackGroupSize = rackATMProfile?.groupSize ?? mmlProfile?.groupSize ?? ((rackType === "SRM") ? 1 : (rackType === "LBX" ? 1 : 5));
   // Streak missile launchers: if the attack misses, the launcher does not fire (no ammo/heat).
   // If the attack hits, the Cluster Hits Table result is treated as 12 (i.e., all missiles in the rack hit).
   const isStreakLauncher = Boolean(rack) && ["LRM", "SRM"].includes(rackType) && /streak/i.test(String(weaponItem.name ?? ""));
@@ -5153,14 +6003,20 @@ if (!isAbomChat && rapidShots > 1 && !rack) {
 }
 
 const hit = (toHit.total ?? 0) >= tn;
+const marginOfSuccess = Number(toHit.total ?? 0) - Number(tn ?? 0);
+const narrowLowProfileTarget = hasNarrowLowProfileQuirk(targetActor);
+// Streak launchers are all-or-nothing attacks and explicitly ignore this quirk.
+const glancingBlow = hit && narrowLowProfileTarget && marginOfSuccess >= 0 && marginOfSuccess <= 1 && !isStreakLauncher;
+const glancingCriticalModifier = glancingBlow ? getGlancingCriticalCheckModifier() : 0;
 
   const rawHeat = rotaryProfile?.heat ?? num(weaponItem.system?.heat, 0);
-  const rawBaseDamage = rotaryProfile?.damage ?? num(weaponItem.system?.damage, 0);
+  const snubNosePPCProfile = getSnubNosePPCProfile(weaponItem, distance);
+  const rawBaseDamage = rotaryProfile?.damage ?? snubNosePPCProfile?.damage ?? num(weaponItem.system?.damage, 0);
   const dazzleMode = isActorDazzleModeActive(actor) && isLaserWeapon(weaponItem);
   const dazzleHalvesDamage = dazzleMode && !isAbomTarget;
 
   let heat = isVehicleAttacker ? 0 : rawHeat;
-  let baseDamage = (isTagAttack || isNarcAttack) ? 0 : rawBaseDamage;
+  let baseDamage = (isTagAttack || isNarcAttack || isPlasmaCannonAttack) ? 0 : rawBaseDamage;
 
   if (dazzleMode) {
     if (!isVehicleAttacker) heat = Math.max(0, Math.floor(rawHeat / 2));
@@ -5182,6 +6038,11 @@ const hit = (toHit.total ?? 0) >= tn;
 
   // Cluster handling (LRM/SRM/MRM)
   const isRapidFireCluster = (!rack && rapidShots > 1 && (hasClusterShotsOverride || rapidFireRating > 1));
+  const glancingUsesClusterTable = glancingBlow && (Boolean(rack) || isRapidFireCluster);
+  const glancingClusterMod = glancingUsesClusterTable ? -4 : 0;
+  if (glancingBlow && !glancingUsesClusterTable) {
+    baseDamage = Math.max(0, Math.floor(baseDamage / 2));
+  }
   let cluster = null;
   let damage = baseDamage;
 
@@ -5194,11 +6055,34 @@ const hit = (toHit.total ?? 0) >= tn;
 
   const artemisInstalled = num(artemisIVCounts.totalArtemis, 0) > 0;
   const artemisVInstalled = num(artemisVCounts.totalArtemis, 0) > 0;
-  const artemisLinked = selectedMissileAmmoVariant === MISSILE_AMMO_VARIANTS.ARTEMIS_IV && artemisIVLinked;
-  const artemisVActive = selectedMissileAmmoVariant === MISSILE_AMMO_VARIANTS.ARTEMIS_V && artemisVLinked;
+  const ecmInterference = getEnemyECMInterference(attackerToken, targetToken);
+  const ecmBlocksSelectedArtemis =
+    ecmInterference.artemisBlocked &&
+    (
+      (selectedMissileAmmoVariant === MISSILE_AMMO_VARIANTS.ARTEMIS_IV && artemisIVLinked) ||
+      (selectedMissileAmmoVariant === MISSILE_AMMO_VARIANTS.ARTEMIS_V && artemisVLinked) ||
+      String(weaponRack?.type ?? "").toUpperCase() === "ATM"
+    );
+  const artemisLinked =
+    selectedMissileAmmoVariant === MISSILE_AMMO_VARIANTS.ARTEMIS_IV &&
+    artemisIVLinked &&
+    !ecmInterference.artemisBlocked;
+  const artemisVActive =
+    selectedMissileAmmoVariant === MISSILE_AMMO_VARIANTS.ARTEMIS_V &&
+    artemisVLinked &&
+    !ecmInterference.artemisBlocked;
   const targetNarced = Boolean(rack) && tokenHasStatus(targetToken, NARC_STATUS_ID);
   const narcAmmoSelected = selectedMissileAmmoVariant === MISSILE_AMMO_VARIANTS.NARC;
-  const narcActive = narcAmmoSelected && targetNarced && !isStreakLauncher;
+  const narcActive =
+    narcAmmoSelected &&
+    targetNarced &&
+    !isStreakLauncher &&
+    !ecmInterference.narcBlocked;
+  const ecmBlocksSelectedNarc =
+    ecmInterference.narcBlocked &&
+    narcAmmoSelected &&
+    targetNarced &&
+    !isStreakLauncher;
   const amsEligible = hit && isMechActor(targetActor) && Boolean(rack) && ["LRM", "MML", "MRM", "SRM"].includes(String(rack.type ?? "").toUpperCase());
   const amsDefense = amsEligible
     ? await resolveAMSDefense(targetActor, {
@@ -5210,14 +6094,23 @@ const hit = (toHit.total ?? 0) >= tn;
         return { active: false, reason: "error" };
       })
     : { active: false };
-  const atmBuiltInArtemis = rackType === "ATM";
+  const atmBuiltInArtemis = rackType === "ATM" && !ecmInterference.artemisBlocked;
   const guidanceBonus = !isStreakLauncher
     ? (artemisVActive ? 3 : ((narcActive || artemisLinked || atmBuiltInArtemis) ? 2 : 0))
     : 0;
-  const clusterBonus = guidanceBonus + ((amsDefense?.active && !isStreakLauncher) ? -4 : 0);
+  const hagRangeClusterMod = rackType === "HAG"
+    ? (String(band).toLowerCase() === "short"
+      ? 2
+      : (String(band).toLowerCase() === "long" ? -2 : 0))
+    : 0;
+  const clusterBonus =
+    guidanceBonus +
+    hagRangeClusterMod +
+    glancingClusterMod +
+    ((amsDefense?.active && !isStreakLauncher) ? -4 : 0);
 
   if (hit && rack && hasClusterShotsOverride) {
-    const volleyRoll = await rollClusterHits(rapidShots, 0);
+    const volleyRoll = await rollClusterHits(rapidShots, glancingClusterMod);
     const volleyHits = clamp(Math.min(rapidShots, num(volleyRoll.hits, 0)), 0, rapidShots);
 
     const perHitDamage = rackPerHitDamage;
@@ -5261,7 +6154,7 @@ const hit = (toHit.total ?? 0) >= tn;
           continue;
         }
         if (isVehicleTarget) {
-          const locRes = await rollVehicleHitLocation(side, { hasTurret: hasVehicleTurret });
+          const locRes = await rollVehicleHitLocation(side, { hasTurret: hasVehicleTurret, targetActor });
           packets.push({
             hits: packet.hits,
             loc: locRes.loc,
@@ -5364,7 +6257,7 @@ const hit = (toHit.total ?? 0) >= tn;
           continue;
         }
         if (isVehicleTarget) {
-          const locRes = await rollVehicleHitLocation(side, { hasTurret: hasVehicleTurret });
+          const locRes = await rollVehicleHitLocation(side, { hasTurret: hasVehicleTurret, targetActor });
           packets.push({
             hits: packet.hits,
             loc: locRes.loc,
@@ -5449,7 +6342,7 @@ const hit = (toHit.total ?? 0) >= tn;
   // Rapid-fire cluster handling: resolve how many shells hit via the Cluster Hits Table,
   // then apply each hit as its own packet (group size 1).
   if (hit && isRapidFireCluster) {
-    const clusterRoll = await rollClusterHits(rapidShots, 0);
+    const clusterRoll = await rollClusterHits(rapidShots, glancingClusterMod);
     const shotsHit = clamp(Math.min(rapidShots, num(clusterRoll.hits, 0)), 0, rapidShots);
 
     const packets = [];
@@ -5466,7 +6359,7 @@ const hit = (toHit.total ?? 0) >= tn;
         continue;
       }
       if (isVehicleTarget) {
-        const locRes = await rollVehicleHitLocation(side, { hasTurret: hasVehicleTurret });
+          const locRes = await rollVehicleHitLocation(side, { hasTurret: hasVehicleTurret, targetActor });
         packets.push({
           hits: 1,
           loc: locRes.loc,
@@ -5518,7 +6411,7 @@ const hit = (toHit.total ?? 0) >= tn;
       label: (opts?.clusterLabel ? String(opts.clusterLabel) : "Rapid Fire"),
       clusterRoll: clusterRoll.roll,
       clusterRollBaseTotal: clusterRoll.baseTotal,
-      clusterRollMod: 0,
+      clusterRollMod: clusterRoll.mod,
       clusterRollModifiedTotal: clusterRoll.modifiedTotal,
       artemisLinked: false,
       missilesHit: shotsHit,
@@ -5537,7 +6430,7 @@ const hit = (toHit.total ?? 0) >= tn;
   const shouldResolveHitLocation = (hit || isArrowIVHomingAttack) && (opts.showLocation || opts.applyDamage || isNarcAttack) && !cluster && !isAbomTarget && !isTagAttack;
   if (shouldResolveHitLocation) {
     if (isVehicleTarget) {
-      locResult = await rollVehicleHitLocation(side, { hasTurret: hasVehicleTurret });
+      locResult = await rollVehicleHitLocation(side, { hasTurret: hasVehicleTurret, targetActor });
     } else if (isDropshipTarget) {
       locResult = await rollDropshipHitLocation(side);
     } else if (aimedEnabled) {
@@ -5649,6 +6542,27 @@ if (weaponFired && hit && infernoHeat > 0) {
   }
 }
 
+let plasmaHeatRoll = null;
+let plasmaHeat = 0;
+let plasmaHeatApplied = null;
+const plasmaHeatFormula = isPlasmaCannonAttack ? "2d6" : (isPlasmaRifleAttack ? "1d6" : null);
+if (
+  weaponFired &&
+  hit &&
+  plasmaHeatFormula &&
+  isMechActor(targetActor) &&
+  !locResult?.partialCoverBlocked
+) {
+  plasmaHeatRoll = await (new Roll(plasmaHeatFormula)).evaluate();
+  plasmaHeat = Math.max(0, num(plasmaHeatRoll?.total, 0));
+  plasmaHeatApplied = await addHeatToActorAuto(targetActor, plasmaHeat);
+  if (plasmaHeatApplied?.ok === false) {
+    ui?.notifications?.warn?.(
+      `${weaponItem.name} hit, but target heat was not applied: ${plasmaHeatApplied.reason ?? "unknown reason"}`
+    );
+  }
+}
+
 if (weaponFired) {
   try {
     await markWeaponFiredThisTurn(actor, weaponItem, opts);
@@ -5691,7 +6605,13 @@ if (isNarcAttack && hit && locResult?.loc && !locResult.partialCoverBlocked) {
 // If enabled, apply damage to the targeted mech immediately after resolving the hit location.
   let damageApplied = null;
   let massiveDamagePsr = null;
-  const shouldApplyAttackDamage = (hit || isArrowIVHomingAttack) && opts.applyDamage && !isTagAttack && !isNarcAttack && infernoHeat <= 0;
+  const shouldApplyAttackDamage =
+    (hit || isArrowIVHomingAttack) &&
+    opts.applyDamage &&
+    !isTagAttack &&
+    !isNarcAttack &&
+    !isPlasmaCannonAttack &&
+    infernoHeat <= 0;
   if (shouldApplyAttackDamage) {
     if (!targetActor) {
       ui?.notifications?.warn?.("No target actor found to apply damage.");
@@ -5711,7 +6631,12 @@ if (isNarcAttack && hit && locResult?.loc && !locResult.partialCoverBlocked) {
             } else if (isDropshipTarget) {
               r = await applyDamageToDropshipActorAuto(targetActor, p.loc, p.damage);
             } else {
-              r = await applyDamageToTargetActorAuto(targetActor, p.loc, p.damage, { side, tac: Boolean(p.tacFrom2), tacLoc: p.loc });
+              r = await applyDamageToTargetActorAuto(targetActor, p.loc, p.damage, {
+                side,
+                tac: Boolean(p.tacFrom2),
+                tacLoc: p.loc,
+                criticalCheckModifier: glancingCriticalModifier
+              });
             }
             results.push({ packet: p, result: r });
             // If we lack permissions, stop spamming updates
@@ -5720,7 +6645,19 @@ if (isNarcAttack && hit && locResult?.loc && !locResult.partialCoverBlocked) {
           damageApplied = { type: "cluster", results };
         } else {
           let r;
-          if (locResult?.partialCoverBlocked) {
+          if (glancingBlow && !cluster && damage <= 0) {
+            r = {
+              ok: true,
+              damage: 0,
+              incomingDamage: 0,
+              reducedDamage: 0,
+              armorApplied: 0,
+              structureApplied: 0,
+              overflow: 0,
+              hitLoc: locResult?.loc ?? "unknown",
+              critEvents: []
+            };
+          } else if (locResult?.partialCoverBlocked) {
             r = { ok: true, partialCoverBlocked: true, reason: "Partial cover blocked leg hit", damage: 0, hitLoc: locResult.loc };
           } else if (isAbomTarget) {
             r = await applyDamageToAbominationActorAuto(targetActor, damage);
@@ -5728,7 +6665,7 @@ if (isNarcAttack && hit && locResult?.loc && !locResult.partialCoverBlocked) {
             let loc = locResult?.loc ?? null;
             let crit = locResult?.critTrigger ? { trigger: true, tableLoc: locResult.critTableLoc } : null;
             if (!loc) {
-              const fallback = await rollVehicleHitLocation(side, { hasTurret: hasVehicleTurret });
+              const fallback = await rollVehicleHitLocation(side, { hasTurret: hasVehicleTurret, targetActor });
               loc = fallback.loc;
               if (fallback.critTrigger) crit = { trigger: true, tableLoc: fallback.critTableLoc };
             }
@@ -5739,7 +6676,12 @@ if (isNarcAttack && hit && locResult?.loc && !locResult.partialCoverBlocked) {
             r = await applyDamageToDropshipActorAuto(targetActor, loc, damage);
           } else {
             const loc = locResult?.loc ?? (await rollHitLocation(side))?.loc;
-            r = await applyDamageToTargetActorAuto(targetActor, loc, damage, { side, tac: tacSingle, tacLoc: loc });
+            r = await applyDamageToTargetActorAuto(targetActor, loc, damage, {
+              side,
+              tac: tacSingle,
+              tacLoc: loc,
+              criticalCheckModifier: glancingCriticalModifier
+            });
           }
           damageApplied = { type: "single", result: r };
         }
@@ -5790,13 +6732,15 @@ const clusterNote = cluster
           ? "SRM damage is 2 per missile; each missile rolls its own location (group size 1)."
           : (cluster.type === "LBX"
               ? "LB-X cluster ammo deals 1 damage per pellet; each pellet rolls its own location."
+              : (cluster.type === "HAG"
+                  ? `HAG damage uses the ${cluster.rackSize}-point Cluster Hits column and is resolved in 5-point damage clusters.${hagRangeClusterMod ? ` Range modifies the Cluster Hits roll by ${hagRangeClusterMod > 0 ? "+" : ""}${hagRangeClusterMod}.` : ""}`
               : (cluster.type === "ATM"
                   ? `ATM ${rackATMProfile?.label ?? "Standard"} ammo deals ${cluster.perHitDamage} damage per missile; total damage is grouped into 5-point clusters.`
                   : (cluster.type === "MRM"
                       ? "MRM damage is 1 per missile; packets are grouped in 5s."
                       : (cluster.type === "MML"
                           ? "MML damage is resolved from the selected missile ammunition; packets are grouped in 5s."
-                          : "LRM damage is 1 per missile; packets are grouped in 5s.")))))
+                          : "LRM damage is 1 per missile; packets are grouped in 5s."))))))
       : (cluster.mode === "volley"
           ? `${cluster.label ?? "Volley"}: roll to see how many attackers hit, then resolve missile clusters per hit.`
           : `${cluster.label ?? "Rapid Fire"} damage is applied per hit; each hit is resolved as its own packet.`)))
@@ -5816,18 +6760,26 @@ const clusterNote = cluster
     ? `<div><b>Artemis IV FCS:</b> Artemis IV missiles linked (+2 to cluster roll)</div>`
     : (artemisVActive
         ? `<div><b>Artemis V FCS:</b> Artemis V missiles linked (+3 to cluster roll)</div>`
+        : (ecmBlocksSelectedArtemis
+          ? `<div><b>ECM:</b> Enemy ECM blocks the Artemis guidance bonus.</div>`
         : (rackType === "ATM"
             ? `<div><b>Artemis IV:</b> Built into ATM launcher (+2 to cluster roll)</div>`
             : ((artemisInstalled || artemisVInstalled) && selectedMissileAmmoVariant === MISSILE_AMMO_VARIANTS.STANDARD
                 ? `<div><b>Artemis FCS:</b> Standard ammunition selected (no Artemis bonus)</div>`
-                : "")));
+                : ""))));
 
   const narcInfoLine = rack
     ? (narcActive
         ? `<div><b>Narc Guidance:</b> Narc-equipped missiles tracking Narc'd target (+2 to cluster roll)</div>`
+        : (ecmBlocksSelectedNarc
+            ? `<div><b>ECM:</b> The Narc pod lies inside an enemy ECM bubble; its guidance bonus is blocked.</div>`
         : (narcAmmoSelected
             ? `<div><b>Narc Guidance:</b> Narc-equipped missiles selected, but target is not Narc'd (no bonus)</div>`
-            : (targetNarced ? `<div><b>Narc Guidance:</b> Target is Narc'd, but Narc-equipped ammunition was not selected (no bonus)</div>` : "")))
+            : (targetNarced ? `<div><b>Narc Guidance:</b> Target is Narc'd, but Narc-equipped ammunition was not selected (no bonus)</div>` : ""))))
+    : "";
+
+  const ecmSourcesLine = (ecmBlocksSelectedArtemis || ecmBlocksSelectedNarc) && ecmInterference.sources.length
+    ? `<div><b>Enemy ECM:</b> ${ecmInterference.sources.map(source => `${htmlEscape(source.tokenName)} (${htmlEscape(source.ecmName)})`).join(", ")}; 6-hex bubble.</div>`
     : "";
 
   const specialMissileAmmoInfoLine = selectedMissileAmmoVariant === MISSILE_AMMO_VARIANTS.INFERNO
@@ -5837,6 +6789,16 @@ const clusterNote = cluster
         : (selectedMissileAmmoVariant === MISSILE_AMMO_VARIANTS.SEMI_GUIDED
             ? `<div><b>Semi-guided LRMs:</b> Selected. Indirect-fire/TAG modifier automation is not yet implemented.</div>`
             : ""));
+
+  const plasmaInfoLine = plasmaHeatFormula
+    ? (!hit
+        ? `<div><b>Plasma:</b> Missed; no target heat applied.</div>`
+        : locResult?.partialCoverBlocked
+          ? `<div><b>Plasma:</b> The hit was blocked by partial cover; no target heat applied.</div>`
+          : !isMechActor(targetActor)
+            ? `<div><b>Plasma:</b> Target heat applies only to BattleMechs.</div>`
+            : `<div><b>Plasma:</b> ${plasmaHeatFormula} rolled <b>${plasmaHeat}</b>; ${plasmaHeatApplied?.ok === false ? "target heat was not applied" : `${plasmaHeat} heat applied to target`}.</div>`)
+    : "";
 
   const streakInfoLine = isStreakLauncher
     ? (hit
@@ -5871,7 +6833,9 @@ const jamInfoLine = (jam && !isAbomChat && !rack && rapidShots > 1)
     : isArrowIVHomingAttack
       ? `Arrow IV Homing (${hit ? "guided hit" : "ground impact"}), Damage ${damage}`
     : cluster
-      ? (cluster.mode === "missile"
+      ? (cluster.mode === "missile" && cluster.type === "HAG"
+        ? `HAG ${cluster.rackSize} (cluster) - Damage Points Hit ${cluster.missilesHit}, Total Damage ${damage}`
+        : cluster.mode === "missile"
         ? `${cluster.type}-${cluster.rackSize} (cluster) — Missiles Hit ${cluster.missilesHit}, Total Damage ${damage}`
         : (cluster.mode === "volley"
             ? `${cluster.label ?? "Volley"} (${cluster.type}-${cluster.rackSize}) — Hits ${cluster.volleyHits}/${cluster.volleySize}, Total Damage ${damage}`
@@ -5882,11 +6846,16 @@ const jamInfoLine = (jam && !isAbomChat && !rack && rapidShots > 1)
   const dazzleInfoLine = dazzleMode
     ? `<div><b>Dazzle Mode:</b> Active${(!isVehicleAttacker && rawHeat !== heat) ? ` | Heat ${rawHeat} → ${heat}` : ""}${dazzleHalvesDamage ? ` | Damage ${rawBaseDamage} → ${baseDamage}` : ` | Full damage vs abominations`}</div>`
     : "";
+  const snubNosePPCInfoLine = snubNosePPCProfile
+    ? `<div><b>Snub-Nose PPC:</b> ${snubNosePPCProfile.damage} damage at ${distance} hexes (${snubNosePPCProfile.damageBand}).</div>`
+    : "";
 
   const clusterPacketsHtml = cluster ? (() => {
     const isMissile = cluster.mode === "missile";
     const isVolley = cluster.mode === "volley";
-    const projWord = (isMissile || isVolley) ? "missiles" : "shots";
+    const projWord = cluster.type === "HAG"
+      ? "damage points"
+      : ((isMissile || isVolley) ? "missiles" : "shots");
     const formatClusterModTag = (mod, modifiedTotal) => {
       const n = Number(mod);
       if (!Number.isFinite(n) || n === 0) return "";
@@ -5947,6 +6916,9 @@ const jamInfoLine = (jam && !isAbomChat && !rack && rapidShots > 1)
       `<div><i>${clusterNote}</i></div>`;
   })() : "";
   const ammoModeLine = ammoKey ? `<div><b>Ammo Mode:</b> ${htmlEscape(ammoSelectionLabel)}</div>` : "";
+  const glancingInfoLine = glancingBlow
+    ? `<div><b>Narrow/Low Profile:</b> Margin of Success ${marginOfSuccess} — <b>GLANCING BLOW</b>. ${glancingUsesClusterTable ? "Cluster Hits roll −4 (minimum result 2)." : `Damage reduced to ${damage}.`} Critical checks ${glancingCriticalModifier}.</div>`
+    : "";
 
   let parts = [
     `<div class="atow-chat-card atow-mech-attack">`,
@@ -5954,6 +6926,7 @@ const jamInfoLine = (jam && !isAbomChat && !rack && rapidShots > 1)
     (weaponMeta.rawName && weaponMeta.rawName !== weaponMeta.name) ? `<div><small>Mounted as: ${weaponMeta.rawName}</small></div>` : "",
     buildAttackResultBanner({
       hit,
+      label: glancingBlow ? "GLANCING BLOW" : null,
       detail: `Roll ${toHit.total} vs TN ${tn}`
     }),
     `<div><b>Attacker:</b> ${attackerName} | <b>Target:</b> ${targetName}</div>`,
@@ -5978,18 +6951,24 @@ const jamInfoLine = (jam && !isAbomChat && !rack && rapidShots > 1)
     `<li>Partial Cover: +${terrainPartialCoverMod}${losCoverMods.details?.length ? ` (${losCoverMods.details.join('; ')})` : ''}</li>`,
     `<li>Terrain: +${terrainMod}</li>`,
     `<li>Weapon Accuracy: +${mrmTNMod}${mrmTNMod ? " (MRM unguided)" : ""}</li>`,
+    `<li>Accurate Weapon Quirk: ${accurateWeaponQuirk.mod >= 0 ? "+" : ""}${accurateWeaponQuirk.mod}${accurateWeaponQuirk.applied ? " (applied)" : ""}</li>`,
+    `<li>Improved Targeting (${band}): ${improvedTargetingQuirk.mod >= 0 ? "+" : ""}${improvedTargetingQuirk.mod}${improvedTargetingQuirk.applied ? " (applied)" : ""}</li>`,
     `<li>Other: +${otherMod}</li>`,
     `</ul>`,
     `${weaponLine}`,
+    `${snubNosePPCInfoLine}`,
     `${dazzleInfoLine}`,
     `${rapidFireInfoLine}`,
     `${jamInfoLine}`,
     `${artemisInfoLine}`,
     `${narcInfoLine}`,
+    `${ecmSourcesLine}`,
     `${specialMissileAmmoInfoLine}`,
+    `${plasmaInfoLine}`,
     `${amsInfoLine}`,
     `${streakInfoLine}`,
     `${arrowIVInfoLine}`,
+    `${glancingInfoLine}`,
     `${ammoModeLine}`,
     `${ammoSpend?.key ? `<div><b>Ammo</b>: ${ammoSpend.after}/${ammoSpend.total} (${ammoSpend.key.toUpperCase()})</div>` : ""}`,
     `${isTagAttack ? `<div><b>TAG:</b> ${hit ? (tagApplied?.ok ? "Target marked with Tagged status until the TAG user's next turn." : `Hit, but status was not applied (${tagApplied?.reason ?? "unknown reason"}).`) : "No mark applied on miss."}</div>` : ""}`,
@@ -6045,7 +7024,9 @@ const jamInfoLine = (jam && !isAbomChat && !rack && rapidShots > 1)
       const tag = e.tac ? "TAC" : "Crit";
       if (e.blownOff) return `<li><b>${tag}</b>: ${loc} — Roll ${e.checkTotal} → <b>BLOWN OFF</b></li>`;
       const count = Number(e.critCount ?? 0);
-      const picks = (e.crits ?? []).filter(c => c?.ok).map(c => `${String(c.label ?? "?")}`);
+      const picks = (e.crits ?? []).filter(c => c?.ok).map(c =>
+        `${String(c.label ?? "?")}${c?.armorAbsorbed ? " (armor absorbed)" : ""}`
+      );
       const pickStr = picks.length ? ` — ${picks.join(", ")}` : "";
       return `<li><b>${tag}</b>: ${loc} — Roll ${e.checkTotal} → ${count} crit(s)${pickStr}</li>`;
     });
@@ -6059,6 +7040,8 @@ const jamInfoLine = (jam && !isAbomChat && !rack && rapidShots > 1)
       none: "No Critical Hit",
       driverHit: "Driver Hit",
       commanderHit: "Commander Hit",
+      pilotHit: "Pilot Hit",
+      copilotHit: "Co-Pilot Hit",
       crewKilled: "Crew Killed",
       sensors: "Sensor Hits",
       engineHit: "Engine Hit",
@@ -6071,13 +7054,18 @@ const jamInfoLine = (jam && !isAbomChat && !rack && rapidShots > 1)
       weaponMalfunction: "Weapon Malfunction",
       weaponDestroyed: "Weapon Destroyed",
       cargoInfantry: "Cargo/Infantry Hit",
-      crewStunned: "Crew Stunned"
+      crewStunned: "Crew Stunned",
+      rotorDamage: "Rotor Damage",
+      flightStabilizerHit: "Flight Stabilizer Hit",
+      rotorsDestroyed: "Rotors Destroyed"
     };
     const label = labels[crit.resultKey] ?? String(crit.resultKey ?? "Critical");
+    const source = crit.source ? ` (${crit.source})` : "";
     const lines = [
-      `<li><b>Table:</b> ${String(crit.table ?? "?").toUpperCase()} — Roll ${crit.roll?.total ?? "?"} — ${label}</li>`
+      `<li><b>Table:</b> ${String(crit.table ?? "?").toUpperCase()}${source} — Roll ${crit.roll?.total ?? "?"} — ${label}</li>`
     ];
     if (crit.notes?.length) lines.push(`<li><b>Notes:</b> ${crit.notes.join(", ")}</li>`);
+    if (crit.defeatResult?.defeated) lines.push(`<li><b>VTOL Defeated:</b> ${crit.defeatResult.reason}</li>`);
     if (crit.motive) {
       const m = crit.motive;
       lines.push(`<li><b>Motive Damage:</b> Roll ${m.baseTotal} + ${m.mod} = ${m.total} — ${m.effect}</li>`);
@@ -6104,12 +7092,22 @@ const jamInfoLine = (jam && !isAbomChat && !rack && rapidShots > 1)
           const hitIdx = Number.isFinite(r.hitAbomination) ? r.hitAbomination : "?";
           parts.push(`<div><b>Damage Applied:</b> ${r.damage} to Abomination ${hitIdx}</div>`);
         } else if (isVehicleTarget) {
-          parts.push(`<div><b>Damage Applied:</b> ${damage} to ${String(r.loc).toUpperCase()} — Armor ${r.armorApplied}, Structure ${r.structureApplied}${r.overflow ? ` (Overflow ${r.overflow})` : ""}</div>`);
-          const vehicleCritHtml = renderVehicleCrit(r.vehicleCrit);
+          if (r.rotorDamageReduced) {
+            parts.push(`<div><b>VTOL Rotor Damage:</b> ${r.incomingDamage} / 10, rounded up = ${r.effectiveDamage}</div>`);
+          }
+          parts.push(`<div><b>Damage Applied:</b> ${r.effectiveDamage ?? damage} to ${String(r.loc).toUpperCase()} — Armor ${r.armorApplied}, Structure ${r.structureApplied}${r.overflow ? ` (Overflow ${r.overflow})` : ""}</div>`);
+          if (r.rotorMpLossApplied) {
+            parts.push(`<div><b>Rotor Movement Damage:</b> -${r.rotorMpLossApplied} Cruising MP; Flank MP recalculates from remaining Cruise MP.</div>`);
+          }
+          if (r.crashed) parts.push(`<div><b>VTOL DEFEATED:</b> ${r.defeatReason || "Lift lost; vehicle crashed."}</div>`);
+          const vehicleCritHtml = renderVehicleCrits(r.vehicleCrits ?? (r.vehicleCrit ? [r.vehicleCrit] : []));
           if (vehicleCritHtml) parts.push(vehicleCritHtml);
         } else if (isDropshipTarget) {
           parts.push(`<div><b>Damage Applied:</b> ${damage} to ${String(r.loc).toUpperCase()} — Armor ${r.armorApplied}, SI ${r.structureApplied}${r.overflow ? ` (Overflow ${r.overflow})` : ""}</div>`);
         } else {
+          if (r.ferroLamellorApplied) {
+            parts.push(`<div><b>Ferro-Lamellor:</b> ${r.incomingDamage} damage reduced to ${r.reducedDamage}.</div>`);
+          }
           parts.push(`<div><b>Damage Applied:</b> ${r.damage} to ${String(r.hitLoc).toUpperCase()} → Armor ${r.armorApplied}, Structure ${r.structureApplied}${r.overflow ? ` (Overflow ${r.overflow})` : ""}</div>`);
           const critHtml = renderCritEvents(r.critEvents);
           if (critHtml) parts.push(critHtml);
@@ -6123,8 +7121,25 @@ const jamInfoLine = (jam && !isAbomChat && !rack && rapidShots > 1)
         parts.push(`<div style="color:#c00"><b>Damage NOT Fully Applied:</b> ${failures[0].result?.reason ?? "Unknown reason"}</div>`);
       } else {
         parts.push(`<div><b>Damage Applied:</b> ${damageApplied.results.length} packet(s) applied to target.</div>`);
+        const ferroReduction = (damageApplied.results ?? []).reduce(
+          (sum, packet) => sum + Number(packet?.result?.damageReduction ?? 0),
+          0
+        );
+        if (ferroReduction > 0) {
+          parts.push(`<div><b>Ferro-Lamellor:</b> Reduced the attack by ${ferroReduction} total damage across its hit packets.</div>`);
+        }
         if (isVehicleTarget) {
-          const vehicleCrits = (damageApplied.results ?? []).map(p => p?.result?.vehicleCrit).filter(Boolean);
+          const rotorPackets = (damageApplied.results ?? []).map(p => p?.result).filter(r => r?.rotorDamageReduced);
+          if (rotorPackets.length) {
+            const incoming = rotorPackets.reduce((sum, r) => sum + Number(r?.incomingDamage ?? 0), 0);
+            const effective = rotorPackets.reduce((sum, r) => sum + Number(r?.effectiveDamage ?? 0), 0);
+            parts.push(`<div><b>VTOL Rotor Damage:</b> ${rotorPackets.length} packet(s), ${incoming} incoming damage reduced to ${effective} rotor damage.</div>`);
+            const mpLoss = rotorPackets.reduce((sum, r) => sum + Number(r?.rotorMpLossApplied ?? 0), 0);
+            if (mpLoss) parts.push(`<div><b>Rotor Movement Damage:</b> -${mpLoss} Cruising MP; Flank MP recalculates from remaining Cruise MP.</div>`);
+            const defeatedPacket = rotorPackets.find(r => r?.defeated || r?.crashed);
+            if (defeatedPacket) parts.push(`<div><b>VTOL DEFEATED:</b> ${defeatedPacket.defeatReason || "Lift lost; vehicle crashed."}</div>`);
+          }
+          const vehicleCrits = (damageApplied.results ?? []).flatMap(p => p?.result?.vehicleCrits ?? (p?.result?.vehicleCrit ? [p.result.vehicleCrit] : []));
           const vehicleCritHtml = renderVehicleCrits(vehicleCrits);
           if (vehicleCritHtml) parts.push(vehicleCritHtml);
         } else if (!isDropshipTarget) {
@@ -6165,6 +7180,11 @@ const jamInfoLine = (jam && !isAbomChat && !rack && rapidShots > 1)
     tn,
     toHit,
     hit,
+    marginOfSuccess,
+    narrowLowProfileTarget,
+    glancingBlow,
+    glancingUsesClusterTable,
+    glancingCriticalModifier,
     distance,
     band,
     rangeMod,
@@ -6177,12 +7197,19 @@ const jamInfoLine = (jam && !isAbomChat && !rack && rapidShots > 1)
     losCoverMods,
     terrainMod,
     otherMod,
+    accurateWeaponQuirk,
+    improvedTargetingQuirk,
     gunnery,
     heat,
     damage,
     baseDamage,
     isTagAttack,
     isArrowIVHomingAttack,
+    isPlasmaCannonAttack,
+    isPlasmaRifleAttack,
+    plasmaHeat,
+    plasmaHeatRoll,
+    plasmaHeatApplied,
     tagApplied,
     side,
     arc,
@@ -6386,6 +7413,11 @@ function isCanonicalSword(itemOrName) {
   return String(name).trim().toLowerCase() === "sword";
 }
 
+function isCanonicalRetractableBlade(itemOrName) {
+  const name = typeof itemOrName === "string" ? itemOrName : (itemOrName?.name ?? "");
+  return String(name).trim().toLowerCase() === "retractable blade";
+}
+
 /** Derive the canonical Hatchet statistics from its carrier's BattleMech tonnage. */
 export function getHatchetProfile(actor) {
   const mechTonnage = Math.max(0, Number(getMechTonnage(actor) ?? 0) || 0);
@@ -6409,6 +7441,20 @@ export function getSwordProfile(actor) {
   };
 }
 
+/** Derive Retractable Blade construction statistics from carrier tonnage. */
+export function getRetractableBladeProfile(actor) {
+  const mechTonnage = Math.max(0, Number(getMechTonnage(actor) ?? 0) || 0);
+  const bladeWeight = mechTonnage > 0
+    ? (Math.ceil((mechTonnage / 20) * 2) / 2)
+    : 0;
+  return {
+    mechTonnage,
+    damage: mechTonnage > 0 ? Math.ceil(mechTonnage / 10) : 0,
+    tonnage: mechTonnage > 0 ? bladeWeight + 0.5 : 0,
+    critSlots: mechTonnage > 0 ? Math.ceil(mechTonnage / 20) + 1 : 0
+  };
+}
+
 function isMeleeWeaponItem(weaponItem) {
   const name = String(weaponItem?.name ?? "").toLowerCase();
   const sys = weaponItem?.system ?? {};
@@ -6420,7 +7466,7 @@ function isMeleeWeaponItem(weaponItem) {
 
   // Heuristics: explicit melee/physical category, or common melee names.
   if (kind.includes("melee") || kind.includes("physical") || kind.includes("hand to hand")) return true;
-  if (name.includes("hatchet") || name.includes("sword")) return true;
+  if (name.includes("hatchet") || name.includes("sword") || name.includes("retractable blade")) return true;
 
   // Some item packs store "Melee" in a dedicated field.
   const mode = String(sys.mode ?? sys.attackMode ?? "").toLowerCase();
@@ -6436,6 +7482,7 @@ function getMeleeWeaponTNMod(weaponItem) {
   // AToW physical weapon modifiers
   if (name.includes("hatchet")) return -1;
   if (name.includes("sword")) return -2;
+  if (name.includes("retractable blade")) return -2;
 
   // Optional generic per-weapon modifier fields (if you ever add them)
   return num(sys.tnMod ?? sys.toHitMod ?? sys.attackMod ?? 0, 0);
@@ -6444,7 +7491,7 @@ function getMeleeWeaponTNMod(weaponItem) {
 /**
  * Core melee-weapon roll: 2d6 + Piloting vs TN (>= TN hits)
  * - Base TN: 8 + modifiers (AToW)
- * - Hatchet: -1 TN, Sword: -2 TN
+ * - Hatchet: -1 TN, Sword/Retractable Blade: -2 TN
  * - Adjacent only (range 1)
  * - Hit location: normal shooting table (2d6) by default OR punch table (1d6) with +4 TN
  */
@@ -6468,7 +7515,7 @@ export async function rollMeleeWeaponAttack(actor, weaponItem, opts = {}) {
 
   const targetActor = targetToken?.actor;
   const isVehicleTarget = isVehicleActor(targetActor);
-  const hasVehicleTurret = isVehicleTarget && (num(targetActor?.system?.armor?.turret?.max, 0) > 0);
+  const hasVehicleTurret = isVehicleTarget && vehicleHasTurret(targetActor);
 
   // Heat shutdown prevents all attacks
   const isShutdown = Boolean(actor.system?.heat?.shutdown) || Boolean(attackerToken?.document?.getFlag?.(SYSTEM_ID, "shutdown"));
@@ -6519,6 +7566,7 @@ export async function rollMeleeWeaponAttack(actor, weaponItem, opts = {}) {
   const baseTN = 8;
 
   const weaponTNMod = getMeleeWeaponTNMod(weaponItem);
+  const accurateWeaponQuirk = getAccurateWeaponQuirkModifier(actor, weaponItem, opts);
   const usePunchTable = Boolean(opts.usePunchTable) && !isVehicleTarget;
 
   // Determine arc side from target facing unless explicitly provided
@@ -6532,14 +7580,15 @@ export async function rollMeleeWeaponAttack(actor, weaponItem, opts = {}) {
 
   const punchTableMod = usePunchTable ? 4 : 0;
 
-  const tn = baseTN + attackerMoveMod + targetMoveMod + statusTNMods.total + terrainMod + otherMod + weaponTNMod + punchTableMod;
+  const tn = baseTN + attackerMoveMod + targetMoveMod + statusTNMods.total + terrainMod + otherMod + weaponTNMod + accurateWeaponQuirk.mod + punchTableMod;
 
   const toHit = await (new Roll(`2d6 + ${piloting}`)).evaluate();
   const hit = (toHit.total ?? 0) >= tn;
 
   const hatchetProfile = isCanonicalHatchet(weaponItem) ? getHatchetProfile(actor) : null;
   const swordProfile = isCanonicalSword(weaponItem) ? getSwordProfile(actor) : null;
-  const derivedMeleeProfile = hatchetProfile ?? swordProfile;
+  const retractableBladeProfile = isCanonicalRetractableBlade(weaponItem) ? getRetractableBladeProfile(actor) : null;
+  const derivedMeleeProfile = hatchetProfile ?? swordProfile ?? retractableBladeProfile;
   let damage = derivedMeleeProfile ? derivedMeleeProfile.damage : num(weaponItem.system?.damage, 0);
   if (isTSMActive(actor)) damage = damage * 2;
 
@@ -6550,7 +7599,7 @@ export async function rollMeleeWeaponAttack(actor, weaponItem, opts = {}) {
 
   if (hit && (opts.showLocation || opts.applyDamage)) {
     if (isVehicleTarget) {
-      locResult = await rollVehicleHitLocation(side, { hasTurret: hasVehicleTurret });
+      locResult = await rollVehicleHitLocation(side, { hasTurret: hasVehicleTurret, targetActor });
     } else if (usePunchTable) {
       locResult = await rollPunchHitLocation({ targetActor, side, targetType });
     } else {
@@ -6620,6 +7669,7 @@ export async function rollMeleeWeaponAttack(actor, weaponItem, opts = {}) {
       `<div><b>Distance:</b> ${distance} (adjacent)</div>`,
       `${hatchetProfile ? `<div><b>Hatchet Profile:</b> ${hatchetProfile.mechTonnage}-ton carrier; Damage ${hatchetProfile.damage}, Weight ${hatchetProfile.tonnage} tons, ${hatchetProfile.critSlots} critical slots</div>` : ""}`,
       `${swordProfile ? `<div><b>Sword Profile:</b> ${swordProfile.mechTonnage}-ton carrier; Damage ${swordProfile.damage}, Weight ${swordProfile.tonnage} tons, ${swordProfile.critSlots} critical slots</div>` : ""}`,
+      `${retractableBladeProfile ? `<div><b>Retractable Blade Profile:</b> ${retractableBladeProfile.mechTonnage}-ton carrier; Damage ${retractableBladeProfile.damage}, Weight ${retractableBladeProfile.tonnage} tons, ${retractableBladeProfile.critSlots} critical slots</div>` : ""}`,
       `<div><b>Hit Location:</b> ${isVehicleTarget ? "Vehicle Hit Location Table" : (usePunchTable ? `Punch Table (+${punchTableMod} TN)` : "Normal (Shooting) Table")}</div>`,
       `<div><b>Roll:</b> ${toHit.total} (2d6 + Piloting ${piloting}) vs <b>TN:</b> ${tn} → <b>${hit ? "HIT" : "MISS"}</b></div>`,
       buildAttackDetailsOpen(),
@@ -6627,7 +7677,8 @@ export async function rollMeleeWeaponAttack(actor, weaponItem, opts = {}) {
       `<div><b>Breakdown</b></div>`,
       `<ul>`,
       `<li>Base TN: ${baseTN}</li>`,
-      `<li>Weapon Mod: ${weaponTNMod >= 0 ? "+" : ""}${weaponTNMod} (${String(weaponItem.name).toLowerCase().includes("hatchet") ? "Hatchet" : String(weaponItem.name).toLowerCase().includes("sword") ? "Sword" : "Melee"})</li>`,
+      `<li>Weapon Mod: ${weaponTNMod >= 0 ? "+" : ""}${weaponTNMod} (${String(weaponItem.name).toLowerCase().includes("hatchet") ? "Hatchet" : String(weaponItem.name).toLowerCase().includes("sword") ? "Sword" : String(weaponItem.name).toLowerCase().includes("retractable blade") ? "Retractable Blade" : "Melee"})</li>`,
+      `<li>Accurate Weapon Quirk: ${accurateWeaponQuirk.mod >= 0 ? "+" : ""}${accurateWeaponQuirk.mod}${accurateWeaponQuirk.applied ? " (applied)" : ""}</li>`,
       `${usePunchTable ? `<li>Punch-table called shot: +${punchTableMod}</li>` : ""}`,
       `<li>Attacker movement: +${attackerMoveMod}${(String(opts.attackerMoveMode ?? 'auto').toLowerCase() === 'auto') ? ` (auto: ${autoMove.mode.toUpperCase()}, moved ${autoMove.moved})` : ''}</li>`,
       `<li>Target movement: +${targetMoveMod}${Number.isFinite(opts.targetHexes) ? ` (entered: ${opts.targetHexes})` : ` (auto: moved ${autoTargetMove.moved})`}</li>`,
@@ -6678,6 +7729,7 @@ export async function rollMeleeWeaponAttack(actor, weaponItem, opts = {}) {
     terrainMod,
     otherMod,
     weaponTNMod,
+    accurateWeaponQuirk,
     usePunchTable,
     punchTableMod,
     targetType,
@@ -6690,7 +7742,7 @@ export async function rollMeleeWeaponAttack(actor, weaponItem, opts = {}) {
   };
 }
 
-export async function promptAndRollMeleeWeaponAttack(actor, weaponItem, { defaultSide = "front" } = {}) {
+export async function promptAndRollMeleeWeaponAttack(actor, weaponItem, { defaultSide = "front", weaponFireKey = "" } = {}) {
   const attackerToken = getAttackerToken(actor);
   const targetToken = getSingleTargetToken();
 
@@ -6719,6 +7771,7 @@ export async function promptAndRollMeleeWeaponAttack(actor, weaponItem, { defaul
   const autoTargetMove = getAutoTargetMoveData(targetToken);
   const statusTNMods = getStatusTNMods(attackerToken, targetToken);
   const weaponTNMod = getMeleeWeaponTNMod(weaponItem);
+  const accurateWeaponQuirk = getAccurateWeaponQuirkModifier(actor, weaponItem, { weaponFireKey });
 
   const dialogHtml = `
   <form class="atow-attack-dialog">
@@ -6736,7 +7789,13 @@ export async function promptAndRollMeleeWeaponAttack(actor, weaponItem, { defaul
     <div class="form-group">
       <label>Weapon TN Modifier</label>
       <div><b>${weaponTNMod >= 0 ? "+" : ""}${weaponTNMod}</b></div>
-      <small>Hatchet −1 TN, Sword −2 TN.</small>
+      <small>Hatchet −1 TN; Sword and Retractable Blade −2 TN.</small>
+    </div>
+
+    <div class="form-group">
+      <label>Accurate Weapon Quirk</label>
+      <div><b>${accurateWeaponQuirk.mod >= 0 ? "+" : ""}${accurateWeaponQuirk.mod}</b></div>
+      <small>${accurateWeaponQuirk.applied ? "Applied to this weapon mount." : "Not assigned to this weapon mount."}</small>
     </div>
 
     <div class="form-group">
@@ -6834,7 +7893,8 @@ export async function promptAndRollMeleeWeaponAttack(actor, weaponItem, { defaul
               targetType: String(fd.get("targetType") ?? "biped"),
               usePunchTable: String(fd.get("locTable") ?? "normal") === "punch",
               applyDamage: fd.get("applyDamage") === "on",
-              showLocation: fd.get("showLocation") === "on"
+              showLocation: fd.get("showLocation") === "on",
+              weaponFireKey
             };
 
             const result = await rollMeleeWeaponAttack(actor, weaponItem, opts);
@@ -6896,14 +7956,17 @@ function buildAttackDialogMods({ statusMods, envMods, losWoodsMods, losCoverMods
   return { mods, blockedNotes };
 }
 
-function enrichAmmoSelectionOptionsForDialog(options, weaponItem, distance, baseTNWithoutRange) {
+function enrichAmmoSelectionOptionsForDialog(options, weaponItem, distance, baseTNWithoutRange, improvedTargetingBands = []) {
+  const improvedBands = new Set((improvedTargetingBands ?? []).map(band => String(band).toLowerCase()));
   return (Array.isArray(options) ? options : []).map(opt => {
     const range = calcRangeBandAndMod(weaponItem, distance, { ammoKey: opt?.key });
+    const improvedTargetingMod = improvedBands.has(String(range.band ?? "").toLowerCase()) ? -1 : 0;
     return {
       ...opt,
       rangeBand: range.band,
       rangeMod: num(range.mod, 0),
-      totalTN: num(baseTNWithoutRange, 0) + num(range.mod, 0)
+      improvedTargetingMod,
+      totalTN: num(baseTNWithoutRange, 0) + num(range.mod, 0) + improvedTargetingMod
     };
   });
 }
@@ -6939,11 +8002,13 @@ function bindAttackDialogTNUpdater(html) {
   const updateTN = () => {
     const selected = ammoSelect?.selectedOptions?.[0] ?? null;
     const rangeMod = num(selected?.dataset?.rangeMod ?? form.dataset.rangeMod, 0);
-    const rangeBand = selected?.dataset?.rangeBand ?? null;
+    const rangeBand = selected?.dataset?.rangeBand ?? form.dataset.rangeBand ?? null;
+    const improvedBands = new Set(String(form.dataset.improvedTargetingBands ?? "").split(",").filter(Boolean));
+    const improvedTargetingMod = improvedBands.has(String(rangeBand ?? "").toLowerCase()) ? -1 : 0;
     const base = num(form.dataset.baseTnWithoutRange, 8);
     const targetMoveMod = targetMoveModForHexes(targetHexesInput?.value ?? 0);
     const otherMod = num(otherModInput?.value, 0);
-    const total = base + rangeMod + attackerMoveMod() + targetMoveMod + otherMod;
+    const total = base + rangeMod + improvedTargetingMod + attackerMoveMod() + targetMoveMod + otherMod;
     if (totalEl) totalEl.textContent = String(total);
     if (bandEl && rangeBand) bandEl.textContent = rangeBand;
   };
@@ -6958,7 +8023,7 @@ function bindAttackDialogTNUpdater(html) {
 export async function promptAndRollWeaponAttack(actor, weaponItem, { defaultSide = "front", attackerToken = null, weaponFireKey = "", weaponMountLoc = "", weaponRearMounted = false } = {}) {
   // If this weapon is a melee weapon (hatchet/sword/etc.), use the melee weapon workflow.
   if (isMeleeWeaponItem(weaponItem)) {
-    return promptAndRollMeleeWeaponAttack(actor, weaponItem, { defaultSide });
+    return promptAndRollMeleeWeaponAttack(actor, weaponItem, { defaultSide, weaponFireKey });
   }
 
   if (isAMSWeapon(weaponItem)) {
@@ -7001,10 +8066,13 @@ export async function promptAndRollWeaponAttack(actor, weaponItem, { defaultSide
   const firingArcInfo = targetToken
     ? getWeaponFiringArcInfo(actor, weaponItem, { weaponFireKey, weaponMountLoc, weaponRearMounted }, attackerTok, targetToken)
     : { applies: false, legal: true };
+  const dialogAccurateWeapon = getAccurateWeaponQuirkModifier(actor, weaponItem, { weaponFireKey });
+  const improvedTargetingBands = getImprovedTargetingBands(actor);
 
   const ammoSelection = weaponSupportsAmmoSelection(weaponItem) ? await getAmmoSelectionOptions(actor, weaponItem) : { options: [], defaultKey: null, hasMultiple: false };
   const selectedAmmoKey = ammoSelection.defaultKey ?? getAmmoKeyForWeapon(weaponItem);
   const { band } = targetToken ? calcRangeBandAndMod(weaponItem, distance, { ammoKey: selectedAmmoKey }) : { band: "Indirect" };
+  const dialogImprovedTargeting = getImprovedTargetingQuirkModifier(actor, band);
 
   const autoTargetMove = targetToken ? getAutoTargetMoveData(targetToken) : { moved: 0, mod: 0 };
   const dialogStatusMods = targetToken ? getStatusTNMods(attackerTok, targetToken) : { total: 0, details: [] };
@@ -7029,9 +8097,10 @@ export async function promptAndRollWeaponAttack(actor, weaponItem, { defaultSide
     + dialogMRMTNMod
     + dialogAttackerMoveMod
     + dialogTargetMoveMod
-    + dialogHeatFireMod;
+    + dialogHeatFireMod
+    + dialogAccurateWeapon.mod;
   const dialogRangeMod = num(calcRangeBandAndMod(weaponItem, distance, { ammoKey: selectedAmmoKey }).mod, 0);
-  const dialogTN = dialogBaseWithoutRange + dialogRangeMod;
+  const dialogTN = dialogBaseWithoutRange + dialogRangeMod + dialogImprovedTargeting.mod;
 
   const isSpecialDesignationAttack = isTAGWeapon(weaponItem) || isArrowIVSystemWeapon(weaponItem);
   const rapidFireRating = isSpecialDesignationAttack ? 1 : getRapidFireRating(weaponItem);
@@ -7043,6 +8112,8 @@ export async function promptAndRollWeaponAttack(actor, weaponItem, { defaultSide
     terrainCoverMod: dialogTerrainCoverMod
   });
   if (dialogMRMTNMod) mods.push({ label: "MRM Unguided", value: dialogMRMTNMod });
+  if (dialogAccurateWeapon.applied) mods.push({ label: "Accurate Weapon Quirk", value: dialogAccurateWeapon.mod });
+  if (dialogImprovedTargeting.applied) mods.push({ label: `Improved Targeting (${band})`, value: dialogImprovedTargeting.mod });
   if (firingArcInfo.applies && !firingArcInfo.legal) {
     const mountLabel = firingArcInfo.rearMounted ? "Rear-mounted" : `${firingArcInfo.mount?.locLabel ?? "Unknown"} mounted`;
     blockedNotes.push(`${mountLabel} weapon cannot fire into the ${String(firingArcInfo.side ?? "unknown").toUpperCase()} arc. Allowed: ${firingArcInfo.allowedLabel}.`);
@@ -7052,8 +8123,15 @@ export async function promptAndRollWeaponAttack(actor, weaponItem, { defaultSide
     ? ` Weapon arc: ${String(firingArcInfo.side ?? "front").toUpperCase()} target arc; ${firingArcInfo.rearMounted ? "rear-mounted" : `${firingArcInfo.mount?.locLabel ?? "Unknown"} mounted`}; allowed ${firingArcInfo.allowedLabel}.`
     : "";
 
-  const ammoSelectionOptions = enrichAmmoSelectionOptionsForDialog(ammoSelection.options, weaponItem, distance, dialogBaseWithoutRange);
+  const ammoSelectionOptions = enrichAmmoSelectionOptionsForDialog(
+    ammoSelection.options,
+    weaponItem,
+    distance,
+    dialogBaseWithoutRange,
+    improvedTargetingBands
+  );
   const selectedAmmoRange = targetToken ? calcRangeBandAndMod(weaponItem, distance, { ammoKey: selectedAmmoKey }) : { band: "Indirect", mod: 0 };
+  const dialogSnubNosePPCProfile = targetToken ? getSnubNosePPCProfile(weaponItem, distance) : null;
 
   ensureAttackDialogHandlebarsHelpers();
   const dialogHtml = await renderTemplate(VEHICLE_ATTACK_TEMPLATE, {
@@ -7067,6 +8145,9 @@ export async function promptAndRollWeaponAttack(actor, weaponItem, { defaultSide
     blockedNotes,
     hasBlockedNotes: blockedNotes.length > 0,
     autoTargetMove: autoTargetMove.moved,
+    rangeDamageNote: dialogSnubNosePPCProfile
+      ? `Snub-Nose PPC damage at ${distance} hexes: ${dialogSnubNosePPCProfile.damage}`
+      : "",
     computedSide,
     arcNote: arc
       ? `Target facing ${Math.round(arc.facingDeg)} degrees; hit arc ${computedSide.toUpperCase()}.${firingArcNote}`
@@ -7080,7 +8161,9 @@ export async function promptAndRollWeaponAttack(actor, weaponItem, { defaultSide
     ammoSelectionOptions,
     selectedAmmoKey,
     selectedRangeMod: num(selectedAmmoRange.mod, 0),
-    baseTNWithoutRange: dialogBaseTN + dialogEnvMods.mod + dialogLosWoodsMods.mod + dialogTerrainCoverMod + dialogStatusMods.total + dialogHeatFireMod + dialogMRMTNMod,
+    selectedRangeBand: selectedAmmoRange.band ?? band,
+    improvedTargetingBands: improvedTargetingBands.join(","),
+    baseTNWithoutRange: dialogBaseTN + dialogEnvMods.mod + dialogLosWoodsMods.mod + dialogTerrainCoverMod + dialogStatusMods.total + dialogHeatFireMod + dialogMRMTNMod + dialogAccurateWeapon.mod,
     autoAttackerMoveMod: dialogAttackerMoveMod
   });
 
@@ -7291,6 +8374,34 @@ function calcPunchTNModsForArm(actuatorState) {
 }
 
 /**
+ * Battlefists grants -1 TN to Punch attacks made with an operational Hand
+ * Actuator. A plain "Battlefists" quirk applies to either qualifying hand.
+ * Optional "Battlefists (Left)" / "Battlefists (Right)" names can restrict
+ * the benefit to one hand without requiring another item data field.
+ */
+function getBattlefistsQuirkModifier(actor, armLoc, actuatorState) {
+  const arm = String(armLoc ?? "").toLowerCase() === "la" ? "left" : "right";
+  const operationalHand = Boolean(actuatorState?.sawHand) && !actuatorState?.handDamagedOrMissing;
+  const quirks = actor?.items?.contents ?? actor?.items ?? [];
+
+  const quirk = Array.from(quirks).find((item) => {
+    if (item?.type !== "mechQuirk") return false;
+    const match = String(item.name ?? "").trim().match(/^battlefists(?:\s*\(\s*(left|right)(?:\s+arm)?\s*\))?$/i);
+    if (!match) return false;
+    const restrictedArm = String(match[1] ?? "").toLowerCase();
+    return !restrictedArm || restrictedArm === arm;
+  }) ?? null;
+
+  return {
+    mod: quirk && operationalHand ? -1 : 0,
+    applied: Boolean(quirk && operationalHand),
+    quirk,
+    operationalHand,
+    arm
+  };
+}
+
+/**
  * Roll a punch attack. Supports left/right/both arms (each arm is a separate attack roll).
  *
  * opts:
@@ -7385,7 +8496,7 @@ export async function rollPunchAttack(actor, opts = {}) {
   const results = [];
   const targetActor = targetToken?.actor;
   const isVehicleTarget = isVehicleActor(targetActor);
-  const hasVehicleTurret = isVehicleTarget && (num(targetActor?.system?.armor?.turret?.max, 0) > 0);
+  const hasVehicleTurret = isVehicleTarget && vehicleHasTurret(targetActor);
 
   for (const armLoc of armList) {
     const { damage, actuator } = calcPunchDamageForArm(actor, armLoc);
@@ -7400,9 +8511,10 @@ export async function rollPunchAttack(actor, opts = {}) {
     }
 
     const armTNMod = calcPunchTNModsForArm(actuator);
+    const battlefists = getBattlefistsQuirkModifier(actor, armLoc, actuator);
 
     // Base TN is piloting skill, plus mods
-    const tn = baseTN + attackerMoveMod + targetMoveMod + statusTNMods.total + terrainMod + otherMod + armTNMod;
+    const tn = baseTN + attackerMoveMod + targetMoveMod + statusTNMods.total + terrainMod + otherMod + armTNMod + battlefists.mod;
 
     const toHit = await (new Roll(`2d6 + ${piloting}`)).evaluate();
     const hit = (toHit.total ?? 0) >= tn;
@@ -7412,7 +8524,7 @@ export async function rollPunchAttack(actor, opts = {}) {
 
     if (hit && (opts.showLocation || opts.applyDamage)) {
       locResult = isVehicleTarget
-        ? await rollVehicleHitLocation(side, { hasTurret: hasVehicleTurret })
+        ? await rollVehicleHitLocation(side, { hasTurret: hasVehicleTurret, targetActor })
         : await rollPunchHitLocation({ targetActor, side, targetType });
     }
 
@@ -7442,16 +8554,17 @@ export async function rollPunchAttack(actor, opts = {}) {
       targetType,
       actuator,
       armTNMod,
+      battlefists,
       locResult,
       damageApplied
     });
   }
 
+	  const anyHit = (results ?? []).some(r => r?.hit);
 	  // Chat card
 	  try {
 	    const attackerName = attackerToken?.name ?? actor.name;
 	    const targetName = targetToken?.name ?? "Target";
-      const anyHit = (results ?? []).some(r => r?.hit);
 
 	    const header = `<header><b>${weaponMeta.name}</b> — Physical Attack</header>`;
     const facingLine = arc
@@ -7495,9 +8608,13 @@ export async function rollPunchAttack(actor, opts = {}) {
       if (r.actuator?.lowerDamagedOrMissing) armNote.push("Lower Arm +2 TN");
       if (r.actuator?.upperDamagedOrMissing) armNote.push("Upper Arm: half dmg");
       if (r.actuator?.lowerDamagedOrMissing) armNote.push("Lower Arm: half dmg");
+      if (r.battlefists?.applied) armNote.push("Battlefists -1 TN");
+      else if (r.battlefists?.quirk && !r.battlefists?.operationalHand) armNote.push("Battlefists unavailable: no operational Hand Actuator");
+
+      const armMods = r.armTNMod + Number(r.battlefists?.mod ?? 0);
 
       lines.push(
-        `<li><b>${armName}:</b> Roll ${r.toHit.total} (2d6 + Piloting ${piloting}) vs <b>TN ${r.tn}</b>${r.armTNMod ? ` (arm mods +${r.armTNMod})` : ""} → <b>${r.hit ? "HIT" : "MISS"}</b>` +
+        `<li><b>${armName}:</b> Roll ${r.toHit.total} (2d6 + Piloting ${piloting}) vs <b>TN ${r.tn}</b>${armMods ? ` (arm mods ${armMods >= 0 ? "+" : ""}${armMods})` : ""} → <b>${r.hit ? "HIT" : "MISS"}</b>` +
         `${r.hit ? ` | Damage <b>${r.damage}</b>` : ""}` +
         `${r.locResult?.loc ? ` | Loc ${String(r.locResult.loc).toUpperCase()} (roll ${r.locResult.roll.total})` : ""}` +
         `${(opts.applyDamage && r.damageApplied) ? (r.damageApplied.ok ? ` | Applied: Armor ${r.damageApplied.armorApplied}, Structure ${r.damageApplied.structureApplied}` : ` | <span style="color:#c00">NOT applied: ${r.damageApplied.reason}</span>`) : ""}` +
@@ -7727,7 +8844,7 @@ export async function rollKickAttack(actor, opts = {}) {
 
   const targetActor = targetToken?.actor;
   const isVehicleTarget = isVehicleActor(targetActor);
-  const hasVehicleTurret = isVehicleTarget && (num(targetActor?.system?.armor?.turret?.max, 0) > 0);
+  const hasVehicleTurret = isVehicleTarget && vehicleHasTurret(targetActor);
 
   const { damage, actuator, base } = calcKickDamageForLeg(actor, kickLegLoc);
 
@@ -7751,7 +8868,7 @@ export async function rollKickAttack(actor, opts = {}) {
 
     if (hit && (opts.showLocation || opts.applyDamage)) {
       locResult = isVehicleTarget
-        ? await rollVehicleHitLocation(side, { hasTurret: hasVehicleTurret })
+        ? await rollVehicleHitLocation(side, { hasTurret: hasVehicleTurret, targetActor })
         : await rollKickHitLocation({ targetActor, side, targetType });
     }
 
@@ -8431,16 +9548,16 @@ const _CRIT_HIT_LIMITS = { engine: 3, gyro: 2, sensor: 2, lifeSupport: 1 };
 function _isFerroFibrousCritSlot(slot) {
   const label = (typeof slot === "string") ? slot : (slot?.label ?? slot?.name ?? "");
   const compact = String(label ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
-  return compact.includes("ferrofibrous");
+  return compact.includes("ferrofibrous") || compact.includes("ferrolamellor");
 }
 
 function _isCritRerollSlot(slot) {
   const label = (typeof slot === "string") ? slot : (slot?.label ?? slot?.name ?? "");
   const compact = String(label ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
-  return compact.includes("ferrofibrous") || compact.includes("endosteel");
+  return compact.includes("ferrofibrous") || compact.includes("ferrolamellor") || compact.includes("endosteel");
 }
 
-async function _rollCritSlotIndex(targetActor, structLoc) {
+async function _rollCritSlotIndex(targetActor, structLoc, { excludedSlotKeys = null } = {}) {
   const rawSlots = targetActor.system?.crit?.[structLoc]?.slots;
   const maxSlots = Array.isArray(rawSlots) ? rawSlots.length : Number(targetActor.system?.crit?.[structLoc]?.maxSlots ?? 0) || 0;
 
@@ -8472,6 +9589,7 @@ async function _rollCritSlotIndex(targetActor, structLoc) {
   const slotCount = Math.min(slots.length, size);
   for (let i = 0; i < slotCount; i++) {
     const slot = slots?.[i];
+    if (excludedSlotKeys?.has?.(`${structLoc}:${i}`)) continue;
     if (!_isOccupiedCritSlot(slot)) continue;
     if (_isCritRerollSlot(slot)) continue;
     if (Boolean(slot?.destroyed)) continue;
@@ -8490,7 +9608,7 @@ async function _rollCritSlotIndex(targetActor, structLoc) {
       const r = await (new Roll("1d6")).evaluate();
       const idx = (r.total ?? 1) - 1;
       const slot = slots?.[idx];
-      if (_isOccupiedCritSlot(slot) && !_isCritRerollSlot(slot) && !Boolean(slot?.destroyed)) {
+      if (!excludedSlotKeys?.has?.(`${structLoc}:${idx}`) && _isOccupiedCritSlot(slot) && !_isCritRerollSlot(slot) && !Boolean(slot?.destroyed)) {
         return { ok: true, idx, rolls: { slot: r.total }, label: slot?.label ?? slot };
       }
       continue;
@@ -8505,7 +9623,7 @@ async function _rollCritSlotIndex(targetActor, structLoc) {
     const idx = offset + ((slotRoll.total ?? 1) - 1);
 
     const slot = slots?.[idx];
-    if (_isOccupiedCritSlot(slot) && !_isCritRerollSlot(slot) && !Boolean(slot?.destroyed)) {
+    if (!excludedSlotKeys?.has?.(`${structLoc}:${idx}`) && _isOccupiedCritSlot(slot) && !_isCritRerollSlot(slot) && !Boolean(slot?.destroyed)) {
       return {
         ok: true,
         idx,
@@ -8520,18 +9638,29 @@ async function _rollCritSlotIndex(targetActor, structLoc) {
 }
 
 
-async function applyDamageToTargetActor(targetActor, hitLoc, damage, { side = "front", internalFirstStartLoc = false, tac = false, tacLoc = null, preventTransfer = false } = {}) {
+async function applyDamageToTargetActor(targetActor, hitLoc, damage, {
+  side = "front",
+  internalFirstStartLoc = false,
+  tac = false,
+  tacLoc = null,
+  preventTransfer = false,
+  criticalCheckModifier = 0
+} = {}) {
   if (!targetActor) return { ok: false, reason: "No target actor" };
 
   let loc = _normalizeDamageLocation(targetActor, String(hitLoc ?? "").toLowerCase());
   let remaining = Number(damage ?? 0);
-  const initialDamage = remaining;
+  const incomingDamage = remaining;
+  let initialDamage = remaining;
+  let ferroLamellorReduction = 0;
   let transferBlocked = false;
 
   if (!loc) return { ok: false, reason: "No hit location" };
   if (!Number.isFinite(remaining) || remaining <= 0) return { ok: false, reason: "No damage" };
 
   const s = String(side ?? "front").toLowerCase();
+  const hardenedArmor = isHardenedArmorActor(targetActor);
+  const armorDamagePerPip = hardenedArmor ? 2 : 1;
 
   // Structure transfer mapping (inward)
   // Limbs -> adjacent torso -> center torso
@@ -8581,6 +9710,10 @@ const critEvents = [];
 const critHitDelta = { engine: 0, gyro: 0, sensor: 0, lifeSupport: 0 };
 // Extra staged crit-slot destruction (e.g., limb/head blown off)
 const forcedCritSlotUpdates = {};
+// Tracks gyro armor consumed earlier in this same damage resolution, before
+// the staged actor update is committed.
+const spentArmoredGyroSlots = new Set();
+const stagedDestroyedCritSlots = new Set();
 
 
   const readArmor = (armorLoc) => {
@@ -8605,6 +9738,26 @@ const forcedCritSlotUpdates = {};
     return structState[structLoc];
   };
 
+  // Ferro-Lamellor reduces each individual hit once, before armor and any
+  // subsequent internal/transfer damage. It only protects a location while
+  // that facing still has armor remaining; internal-first damage bypasses it.
+  if (!internalFirstStartLoc && hasOperationalFerroLamellorArmor(targetActor)) {
+    let protectedArmorLoc = armorKeyFor(loc);
+    let protectedArmor = readArmor(protectedArmorLoc);
+    if (s === "rear" && isTorso(loc) && !protectedArmor.exists) {
+      protectedArmorLoc = loc;
+      protectedArmor = readArmor(protectedArmorLoc);
+    }
+
+    const protectedCapacity = Math.max(0, Number(protectedArmor?.max ?? 0) * armorDamagePerPip);
+    const protectedDamage = Math.max(0, Number(protectedArmor?.dmg ?? 0));
+    if (protectedArmor.exists && protectedDamage < protectedCapacity) {
+      ferroLamellorReduction = Math.min(remaining, Math.ceil(remaining / 5));
+      remaining = Math.max(0, remaining - ferroLamellorReduction);
+      initialDamage = remaining;
+    }
+  }
+
   const steps = [];
   const startLoc = loc;
   const newlyDestroyedCritSlots = [];
@@ -8622,8 +9775,9 @@ const forcedCritSlotUpdates = {};
     const armor = readArmor(armorLoc);
     if (armor?.exists) {
       const armorMax = Number.isFinite(armor.max) ? armor.max : 0;
+      const armorCapacity = armorMax * armorDamagePerPip;
       const armorDmg = Number.isFinite(armor.dmg) ? armor.dmg : 0;
-      armor.dmg = clamp(armorMax, 0, armorMax);
+      armor.dmg = clamp(armorCapacity, 0, armorCapacity);
       if (armorDmg !== armor.dmg) touched.armor.add(armorLoc);
     }
 
@@ -8654,6 +9808,38 @@ const forcedCritSlotUpdates = {};
       const hitType = _critHitTypeFromLabel(label);
       if (hitType) critHitDelta[hitType] = (critHitDelta[hitType] ?? 0) + 1;
     }
+  };
+
+  const stageCriticalSlotHit = (critEntry, pick, critLoc) => {
+    const slotKey = `${critLoc}:${pick.idx}`;
+    const storedSlot = targetActor.system?.crit?.[critLoc]?.slots?.[pick.idx] ?? {};
+    const hitType = _critHitTypeFromLabel(pick.label);
+    const gyroArmorAvailable = Boolean(targetActor.system?.mech?.armoredGyro)
+      && hitType === "gyro"
+      && !Boolean(storedSlot?.armorDestroyed)
+      && !spentArmoredGyroSlots.has(slotKey);
+
+    const critResult = {
+      ok: true,
+      idx: pick.idx,
+      rolls: pick.rolls,
+      label: pick.label,
+      wasDestroyed: Boolean(pick.wasDestroyed),
+      armorAbsorbed: gyroArmorAvailable
+    };
+    critEntry.crits.push(critResult);
+
+    if (gyroArmorAvailable) {
+      spentArmoredGyroSlots.add(slotKey);
+      forcedCritSlotUpdates[`system.crit.${critLoc}.slots.${pick.idx}.armorDestroyed`] = true;
+      return;
+    }
+
+    // Stage ordinary component destruction only after any slot armor is gone.
+    critResult.updateKey = `system.crit.${critLoc}.slots.${pick.idx}.destroyed`;
+    stagedDestroyedCritSlots.add(slotKey);
+    if (!pick.wasDestroyed) newlyDestroyedCritSlots.push({ loc: critLoc, idx: pick.idx, label: pick.label });
+    if (hitType && !pick.wasDestroyed) critHitDelta[hitType] = (critHitDelta[hitType] ?? 0) + 1;
   };
 
   while (remaining > 0) {
@@ -8688,13 +9874,14 @@ const forcedCritSlotUpdates = {};
     let armorApplied = 0;
     if (!internalFirstHere) {
       const armorMax = Number.isFinite(armor.max) ? armor.max : 0;
+      const armorCapacity = armorMax * armorDamagePerPip;
       const armorDmg = Number.isFinite(armor.dmg) ? armor.dmg : 0;
-      const armorRemaining = Math.max(0, armorMax - armorDmg);
+      const armorRemaining = Math.max(0, armorCapacity - armorDmg);
       armorApplied = armor.exists ? Math.min(remaining, armorRemaining) : 0;
       remaining -= armorApplied;
 
       if (armorApplied > 0) {
-        armor.dmg = clamp(armorDmg + armorApplied, 0, armorMax);
+        armor.dmg = clamp(armorDmg + armorApplied, 0, armorCapacity);
         touched.armor.add(armorLoc);
       }
     }
@@ -8718,11 +9905,25 @@ const forcedCritSlotUpdates = {};
       // Roll critical check once whenever internal structure damage is dealt to a location
       try {
         const check = await (new Roll("2d6")).evaluate();
-        const checkTotal = check.total ?? 0;
+        const rawCheckTotal = Number(check.total ?? 0) || 0;
+        const armorForCrit = readArmor(armorLoc);
+        const armorCapacityForCrit = Math.max(0, Number(armorForCrit?.max ?? 0) * armorDamagePerPip);
+        const hardenedCritModifier = hardenedArmor
+          && armorCapacityForCrit > 0
+          && Number(armorForCrit?.dmg ?? 0) < armorCapacityForCrit
+          ? -2
+          : 0;
+        const attackCritModifier = Number(criticalCheckModifier ?? 0) || 0;
+        const combinedCritModifier = hardenedCritModifier + attackCritModifier;
+        const checkTotal = rawCheckTotal + combinedCritModifier;
         const outcome = _critOutcomeFromCheckTotal(checkTotal, loc);
         const critEntry = {
           loc,
           checkTotal,
+          rawCheckTotal,
+          critModifier: combinedCritModifier,
+          hardenedCritModifier,
+          attackCritModifier,
           critCount: outcome.critCount,
           blownOff: Boolean(outcome.blownOff),
           tac: false,
@@ -8735,24 +9936,13 @@ const forcedCritSlotUpdates = {};
           critEvents.push(critEntry);
         } else {
           for (let c = 0; c < outcome.critCount; c++) {
-            const pick = await _rollCritSlotIndex(targetActor, loc);
+            const pick = await _rollCritSlotIndex(targetActor, loc, { excludedSlotKeys: stagedDestroyedCritSlots });
             if (!pick.ok) {
               critEntry.crits.push({ ok: false, reason: pick.reason });
               continue;
             }
 
-            // Mark that specific crit slot as destroyed/damaged
-            // Note: crit slots remain valid targets even if already destroyed
-            critEntry.crits.push({ ok: true, idx: pick.idx, rolls: pick.rolls, label: pick.label, wasDestroyed: Boolean(pick.wasDestroyed) });
-
-            // Stage the update; we apply it with the main damage update below
-            const updateKey = `system.crit.${loc}.slots.${pick.idx}.destroyed`;
-            critEntry.crits[critEntry.crits.length - 1].updateKey = updateKey;
-
-            if (!pick.wasDestroyed) newlyDestroyedCritSlots.push({ loc, idx: pick.idx, label: pick.label });
-
-            const hitType = _critHitTypeFromLabel(pick.label);
-            if (hitType && !pick.wasDestroyed) critHitDelta[hitType] = (critHitDelta[hitType] ?? 0) + 1;
+            stageCriticalSlotHit(critEntry, pick, loc);
           }
 
           critEvents.push(critEntry);
@@ -8809,11 +9999,30 @@ const forcedCritSlotUpdates = {};
       }
 
       const check = await (new Roll("2d6")).evaluate();
-      const checkTotal = check.total ?? 0;
+      const rawCheckTotal = Number(check.total ?? 0) || 0;
+      let tacArmorLoc = armorKeyFor(tacLocKey);
+      let tacArmor = readArmor(tacArmorLoc);
+      if (s === "rear" && isTorso(tacLocKey) && !tacArmor.exists) {
+        tacArmorLoc = tacLocKey;
+        tacArmor = readArmor(tacArmorLoc);
+      }
+      const tacArmorCapacity = Math.max(0, Number(tacArmor?.max ?? 0) * armorDamagePerPip);
+      const hardenedCritModifier = hardenedArmor
+        && tacArmorCapacity > 0
+        && Number(tacArmor?.dmg ?? 0) < tacArmorCapacity
+        ? -2
+        : 0;
+      const attackCritModifier = Number(criticalCheckModifier ?? 0) || 0;
+      const combinedCritModifier = hardenedCritModifier + attackCritModifier;
+      const checkTotal = rawCheckTotal + combinedCritModifier;
       const outcome = _critOutcomeFromCheckTotal(checkTotal, tacLocKey);
       const critEntry = {
         loc: tacLocKey,
         checkTotal,
+        rawCheckTotal,
+        critModifier: combinedCritModifier,
+        hardenedCritModifier,
+        attackCritModifier,
         critCount: outcome.critCount,
         blownOff: Boolean(outcome.blownOff),
         tac: true,
@@ -8826,21 +10035,13 @@ const forcedCritSlotUpdates = {};
         critEvents.push(critEntry);
       } else {
         for (let c = 0; c < outcome.critCount; c++) {
-          const pick = await _rollCritSlotIndex(targetActor, tacLocKey);
+          const pick = await _rollCritSlotIndex(targetActor, tacLocKey, { excludedSlotKeys: stagedDestroyedCritSlots });
           if (!pick.ok) {
             critEntry.crits.push({ ok: false, reason: pick.reason });
             continue;
           }
 
-          critEntry.crits.push({ ok: true, idx: pick.idx, rolls: pick.rolls, label: pick.label, wasDestroyed: Boolean(pick.wasDestroyed) });
-
-          const updateKey = `system.crit.${tacLocKey}.slots.${pick.idx}.destroyed`;
-          critEntry.crits[critEntry.crits.length - 1].updateKey = updateKey;
-
-          if (!pick.wasDestroyed) newlyDestroyedCritSlots.push({ loc: tacLocKey, idx: pick.idx, label: pick.label });
-
-          const hitType = _critHitTypeFromLabel(pick.label);
-          if (hitType && !pick.wasDestroyed) critHitDelta[hitType] = (critHitDelta[hitType] ?? 0) + 1;
+          stageCriticalSlotHit(critEntry, pick, tacLocKey);
         }
 
         critEvents.push(critEntry);
@@ -8875,7 +10076,7 @@ for (const [k, v] of Object.entries(forcedCritSlotUpdates)) {
 // Increment crit hit trackers (engine/gyro/sensor/life support), clamped to known limits
 const currentCritHits = targetActor.system?.critHits ?? {};
 for (const [k, delta] of Object.entries(critHitDelta)) {
-  const lim = _CRIT_HIT_LIMITS[k] ?? 99;
+  const lim = k === "gyro" && isHeavyDutyGyroActor(targetActor) ? 3 : (_CRIT_HIT_LIMITS[k] ?? 99);
   const cur = Number(currentCritHits?.[k] ?? 0);
   const next = clamp(cur + Number(delta ?? 0), 0, lim);
   if (next !== cur) updates[`system.critHits.${k}`] = next;
@@ -8903,8 +10104,11 @@ for (const [k, delta] of Object.entries(critHitDelta)) {
     const floatingEnabled = Boolean(game?.settings?.get?.(SYSTEM_ID, "floatingCrits"));
     const floatingUsed = floatingEnabled && Boolean(tac);
 
-    const importantCrits = (critEvents ?? []).filter(ev => Number(ev?.critCount ?? 0) > 0 || Boolean(ev?.blownOff));
+    const importantCrits = (critEvents ?? []).filter(ev =>
+      Number(ev?.critCount ?? 0) > 0 || Boolean(ev?.blownOff) || Number(ev?.critModifier ?? 0) !== 0
+    );
     if (importantCrits.length) {
+      const hasActualCritical = importantCrits.some(ev => Number(ev?.critCount ?? 0) > 0 || Boolean(ev?.blownOff));
       const locName = (k) => {
         const key = String(k ?? "").toLowerCase();
         switch (key) {
@@ -8922,7 +10126,7 @@ for (const [k, delta] of Object.entries(critHitDelta)) {
 
       const lines = [];
       lines.push(`<div style="border:1px solid #a00; padding:0.5rem; border-radius:6px; background:rgba(140,0,0,0.08);">`);
-      lines.push(`<div style="font-weight:800; color:#b00; letter-spacing:0.02em;">CRITICAL HIT${importantCrits.length > 1 ? "S" : ""}</div>`);
+      lines.push(`<div style="font-weight:800; color:#b00; letter-spacing:0.02em;">${hasActualCritical ? `CRITICAL HIT${importantCrits.length > 1 ? "S" : ""}` : "CRITICAL CHECK"}</div>`);
       lines.push(`<div style="margin-top:0.25rem;"><b>${targetActor?.name ?? "Target"}</b> — Floating Criticals: <b>${floatingEnabled ? "ON" : "OFF"}</b>${floatingUsed ? " (used)" : ""}</div>`);
       if (floatingEnabled) {
         lines.push(`<div style="font-size:0.9em; opacity:0.9;">${floatingUsed ? "TAC trigger present — floating location reroll applied." : "No TAC trigger — floating location reroll not used."}</div>`);
@@ -8932,13 +10136,23 @@ for (const [k, delta] of Object.entries(critHitDelta)) {
       for (const ev of importantCrits) {
         const isTac = Boolean(ev?.tac);
         const checkTotal = Number(ev?.checkTotal ?? 0);
+        const rawCheckTotal = Number(ev?.rawCheckTotal ?? checkTotal);
+        const critModifier = Number(ev?.critModifier ?? 0);
+        const hardenedCritModifier = Number(ev?.hardenedCritModifier ?? 0);
+        const attackCritModifier = Number(ev?.attackCritModifier ?? 0);
         const critCount = Number(ev?.critCount ?? 0);
         const blownOff = Boolean(ev?.blownOff);
 
         const typeLabel = isTac ? "TAC Critical Check" : "Critical Check";
         const outcomeLabel = blownOff ? "Blown Off" : `${critCount} Critical${critCount === 1 ? "" : "s"}`;
 
-        lines.push(`<div><b>${typeLabel}</b> — <b>${locName(ev?.loc)}</b> (2d6=${checkTotal}) → <b>${outcomeLabel}</b></div>`);
+        const modifierParts = [];
+        if (hardenedCritModifier) modifierParts.push(`Hardened Armor ${hardenedCritModifier}`);
+        if (attackCritModifier) modifierParts.push(`Glancing Blow ${attackCritModifier}`);
+        const rollText = critModifier
+          ? `2d6=${rawCheckTotal}, ${modifierParts.join(", ") || `modifier ${critModifier}`}, total ${checkTotal}`
+          : `2d6=${checkTotal}`;
+        lines.push(`<div><b>${typeLabel}</b> — <b>${locName(ev?.loc)}</b> (${rollText}) → <b>${outcomeLabel}</b></div>`);
 
         if (!blownOff) {
           const crits = Array.isArray(ev?.crits) ? ev.crits : [];
@@ -8954,7 +10168,8 @@ for (const [k, delta] of Object.entries(critHitDelta)) {
               const idx = Number(c?.idx);
               const label = String(c?.label ?? "").trim() || `Slot ${Number.isFinite(idx) ? idx + 1 : "?"}`;
               const already = c?.wasDestroyed ? " (already destroyed)" : "";
-              lines.push(`<li>Slot ${Number.isFinite(idx) ? idx + 1 : "?"}: <b>${label}</b>${already}</li>`);
+              const armorResult = c?.armorAbsorbed ? " — <b>ARMORED: critical negated</b>" : "";
+              lines.push(`<li>Slot ${Number.isFinite(idx) ? idx + 1 : "?"}: <b>${label}</b>${already}${armorResult}</li>`);
             }
             lines.push(`</ul>`);
           }
@@ -8976,6 +10191,12 @@ for (const [k, delta] of Object.entries(critHitDelta)) {
     startLoc,
     hitLoc: startLoc,
     damage: Number(damage ?? 0),
+    incomingDamage,
+    reducedDamage: initialDamage,
+    damageReduction: ferroLamellorReduction,
+    ferroLamellorApplied: ferroLamellorReduction > 0,
+    armorApplied: steps.reduce((sum, step) => sum + Number(step?.armorApplied ?? 0), 0),
+    structureApplied: steps.reduce((sum, step) => sum + Number(step?.structureApplied ?? 0), 0),
     steps,
     overflow: remaining,
     transferBlocked,
@@ -8986,6 +10207,10 @@ for (const [k, delta] of Object.entries(critHitDelta)) {
     critEvents: (critEvents ?? []).map(ev => ({
       loc: ev.loc,
       checkTotal: ev.checkTotal,
+      rawCheckTotal: ev.rawCheckTotal ?? ev.checkTotal,
+      critModifier: Number(ev.critModifier ?? 0),
+      hardenedCritModifier: Number(ev.hardenedCritModifier ?? 0),
+      attackCritModifier: Number(ev.attackCritModifier ?? 0),
       critCount: ev.critCount,
       tac: Boolean(ev.tac),
       blownOff: Boolean(ev.blownOff),
@@ -8995,6 +10220,7 @@ for (const [k, delta] of Object.entries(critHitDelta)) {
         rolls: c.rolls,
         label: c.label,
         wasDestroyed: Boolean(c.wasDestroyed),
+        armorAbsorbed: Boolean(c.armorAbsorbed),
         reason: c.reason
       }))
     }))

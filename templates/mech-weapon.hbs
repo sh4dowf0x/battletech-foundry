@@ -34,7 +34,44 @@
     </div>
   </section>
 
+  <section class="atow-card">
+    <div class="atow-card-header" style="margin-bottom:{{#if system.useAlternateProfile}}8px{{else}}0{{/if}};">
+      <div>
+        <h2 class="atow-card-title">Weapon Profiles</h2>
+        <span class="atow-card-hint">Use a second damage and range profile for multi-mode weapons.</span>
+      </div>
+      <label class="atow-profile-toggle" style="display:flex; align-items:center; gap:6px; white-space:nowrap;">
+        <input
+          name="system.useAlternateProfile"
+          type="checkbox"
+          {{checked system.useAlternateProfile}} />
+        Two Profiles
+      </label>
+    </div>
+
+    {{#if system.useAlternateProfile}}
+      <div class="atow-field-grid compact-2">
+        <div class="atow-field">
+          <label>Profile 1 Label</label>
+          <input name="system.profileLabel" type="text" value="{{system.profileLabel}}" placeholder="LRM" />
+        </div>
+        <div class="atow-field">
+          <label>Profile 1 Ammo Mode</label>
+          <select name="system.profileMode">
+            {{selectOptions profileModeOptions selected=system.profileMode localize=false}}
+          </select>
+        </div>
+      </div>
+    {{/if}}
+  </section>
+
   <section class="atow-card atow-stat-card">
+    {{#if system.useAlternateProfile}}
+      <div class="atow-card-header" style="margin-bottom:6px;">
+        <h2 class="atow-card-title">Profile 1 - {{system.profileLabel}}</h2>
+        <span class="atow-card-hint">Shared heat, weight, and critical slots</span>
+      </div>
+    {{/if}}
     <div class="atow-stat-table-wrap">
       <table class="atow-stat-table">
         <tr>
@@ -62,6 +99,51 @@
       </table>
     </div>
   </section>
+
+  {{#if system.useAlternateProfile}}
+    <section class="atow-card atow-stat-card">
+      <div class="atow-card-header" style="margin-bottom:6px;">
+        <h2 class="atow-card-title">Profile 2 - {{system.alternateProfile.label}}</h2>
+        <span class="atow-card-hint">Alternate damage and range</span>
+      </div>
+
+      <div class="atow-field-grid compact-2" style="margin-bottom:8px;">
+        <div class="atow-field">
+          <label>Profile 2 Label</label>
+          <input
+            name="system.alternateProfile.label"
+            type="text"
+            value="{{system.alternateProfile.label}}"
+            placeholder="SRM" />
+        </div>
+        <div class="atow-field">
+          <label>Profile 2 Ammo Mode</label>
+          <select name="system.alternateProfile.ammoMode">
+            {{selectOptions profileModeOptions selected=system.alternateProfile.ammoMode localize=false}}
+          </select>
+        </div>
+      </div>
+
+      <div class="atow-stat-table-wrap">
+        <table class="atow-stat-table">
+          <tr>
+            <th>Dmg</th>
+            <th>Min</th>
+            <th>Short</th>
+            <th>Med</th>
+            <th>Long</th>
+          </tr>
+          <tr>
+            <td><input name="system.alternateProfile.damage" type="number" value="{{system.alternateProfile.damage}}" min="0" /></td>
+            <td><input name="system.alternateProfile.range.min" type="number" value="{{system.alternateProfile.range.min}}" min="0" /></td>
+            <td><input name="system.alternateProfile.range.short" type="number" value="{{system.alternateProfile.range.short}}" min="0" /></td>
+            <td><input name="system.alternateProfile.range.medium" type="number" value="{{system.alternateProfile.range.medium}}" min="0" /></td>
+            <td><input name="system.alternateProfile.range.long" type="number" value="{{system.alternateProfile.range.long}}" min="0" /></td>
+          </tr>
+        </table>
+      </div>
+    </section>
+  {{/if}}
 
   <section class="atow-item-layout compact">
     <div class="atow-stack">

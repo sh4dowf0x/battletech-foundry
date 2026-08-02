@@ -44,13 +44,39 @@ export class AToWMechEquipmentSheet extends HandlebarsApplicationMixin(ItemSheet
     system.notes ??= "";
     system.specialRules ??= "";
     system.ammoType ??= "";
-    system.critSlots = Math.max(1, Math.floor(toNumber(system.critSlots, 1)));
+    const isPartialWing = /^partial\s*[-]?\s*wing(?:\s*\((?:clan|inner\s+sphere)\))?$/i.test(String(item.name ?? "").trim());
+    const isMASC = /(?:\bmasc\b|\bmyomer\s+acceleration\s+signal\s+circuitry\b)/i.test(String(item.name ?? "").trim());
+    const isSupercharger = /\bsuper\s*[-]?\s*charger\b/i.test(String(item.name ?? "").trim());
+    const isImprovedJumpJet = /\bimproved\s+jump\s*jets?\b/i.test(String(item.name ?? "").trim());
+    const isECMSuite = /^(?:ecm\s+suite(?:\s*\(clan\))?|guardian\s+ecm)$/i.test(String(item.name ?? "").trim());
+    const isFerroLamellor = /^ferro\s*-?\s*lamellor(?:\s+armor)?$/i.test(String(item.name ?? "").trim());
+    const isCarrierDerived = isPartialWing || isMASC || isSupercharger || isImprovedJumpJet;
+    system.critSlots = Math.max(isCarrierDerived ? 0 : 1, Math.floor(toNumber(system.critSlots, isCarrierDerived ? 0 : 1)));
     system.ammoAmount = Math.max(0, toNumber(system.ammoAmount, 0));
     system.heatDissipation = Math.max(0, toNumber(system.heatDissipation, 0));
     system.tonnage = Math.max(0, toNumber(system.tonnage ?? system.tons ?? system.weight, 0));
+    if (isCarrierDerived) {
+      system.critSlots = 0;
+      system.heatDissipation = 0;
+      system.tonnage = 0;
+    } else if (isECMSuite) {
+      system.critSlots = 2;
+      system.tonnage = 1.5;
+    } else if (isFerroLamellor) {
+      // Distributed armor construction component: install one zero-ton slot at a time.
+      system.critSlots = 1;
+      system.tonnage = 0;
+    }
 
     context.item = item;
     context.system = system;
+    context.isPartialWing = isPartialWing;
+    context.isMASC = isMASC;
+    context.isSupercharger = isSupercharger;
+    context.isImprovedJumpJet = isImprovedJumpJet;
+    context.isECMSuite = isECMSuite;
+    context.isFerroLamellor = isFerroLamellor;
+    context.isCarrierDerived = isCarrierDerived;
 
     return context;
   }

@@ -27,11 +27,47 @@
 
         <div class="atow-field">
           <label>Heat Dissipation</label>
-          <input name="system.heatDissipation" type="number" value="{{system.heatDissipation}}" min="0" />
+          <input name="system.heatDissipation" type="number" value="{{system.heatDissipation}}" min="0" {{#if isCarrierDerived}}disabled{{/if}} />
         </div>
       </div>
     </div>
   </section>
+
+  {{#if isPartialWing}}
+    <section class="atow-card">
+      <div class="atow-card-header" style="margin-bottom:0;">
+        <h2 class="atow-card-title">Carrier-Derived Profile</h2>
+        <span class="atow-card-hint">Install one section in each side torso. The system derives critical slots, tonnage, +3 cooling, and Jump MP from the carrier.</span>
+      </div>
+    </section>
+  {{/if}}
+
+  {{#if isMASC}}
+    <section class="atow-card">
+      <div class="atow-card-header" style="margin-bottom:0;">
+        <h2 class="atow-card-title">Carrier-Derived Profile</h2>
+        <span class="atow-card-hint">MASC mass and critical slots are derived from carrier tonnage and tech base, then installed as one contiguous component.</span>
+      </div>
+    </section>
+  {{/if}}
+
+  {{#if isSupercharger}}
+    <section class="atow-card">
+      <div class="atow-card-header" style="margin-bottom:0;">
+        <h2 class="atow-card-title">Carrier-Derived Profile</h2>
+        <span class="atow-card-hint">The Supercharger occupies 1 critical slot in an engine location and weighs 10% of the installed engine, rounded up to the nearest half-ton.</span>
+      </div>
+    </section>
+  {{/if}}
+
+  {{#if isImprovedJumpJet}}
+    <section class="atow-card">
+      <div class="atow-card-header" style="margin-bottom:0;">
+        <h2 class="atow-card-title">Carrier-Derived Profile</h2>
+        <span class="atow-card-hint">Each Improved Jump Jet occupies 2 critical slots. Per-jet mass is 1 ton at 10–55 tons, 2 tons at 60–85 tons, and 4 tons at 90–100 tons. Maximum Jump MP equals standard Running MP.</span>
+      </div>
+    </section>
+  {{/if}}
 
   <section class="atow-card atow-stat-card">
     <div class="atow-stat-table-wrap">
@@ -43,10 +79,10 @@
           <th>Heat Diss</th>
         </tr>
         <tr>
-          <td><input name="system.critSlots" type="number" value="{{system.critSlots}}" min="1" /></td>
-          <td><input name="system.tonnage" type="number" value="{{system.tonnage}}" min="0" step="0.5" /></td>
+          <td><input name="system.critSlots" type="number" value="{{system.critSlots}}" min="0" {{#if isCarrierDerived}}disabled{{/if}} /></td>
+          <td><input name="system.tonnage" type="number" value="{{system.tonnage}}" min="0" step="0.5" {{#if isCarrierDerived}}disabled{{/if}} /></td>
           <td><input name="system.ammoAmount" type="number" value="{{system.ammoAmount}}" min="0" /></td>
-          <td><input name="system.heatDissipation" type="number" value="{{system.heatDissipation}}" min="0" /></td>
+          <td><input name="system.heatDissipation" type="number" value="{{system.heatDissipation}}" min="0" {{#if isCarrierDerived}}disabled{{/if}} /></td>
         </tr>
       </table>
     </div>

@@ -1,0 +1,745 @@
+POSITIVE DESIGN QUIRKS
+The following positive design quirks each enhance how the
+design performs during a game.
+
+ACCURATE WEAPON (VARIES)
+A weapon is more accurate than normal: all Target Numbers for
+that weapon receive a –1 modifier. The cost is 1 point per 5 points (or
+fraction thereof) of maximum damage the weapon can inflict in a
+single Damage Value grouping. If the “weapon” deals 0 damage (such
+as TAG), the cost is 2 points. More than one weapon can receive this
+quirk, but the cost for each must be paid.
+
+ANTI-AIRCRAFT TARGETING (VARIES)
+Some ’Mechs, like the Rifleman, have an advanced targeting
+system that can accurately target airborne units. This includes ’Mechs
+performing a combat drop (see p. 79), but not jumping ’Mechs. All
+attacks against such units while airborne (not grounded) receive a
+–2 Target Number modifier.
+The cost is 1 point per 7 points (or fraction thereof) of maximum
+damage that all the weapons mounted on the ’Mech can inflict
+(excluding physical attack weapons). This bonus is only available
+when the ’Mech itself is on the ground.
+
+BARREL FIST (1 POINT)
+The cost for this quirk must be paid for each arm it applies to,
+and it can only be applied to arms with a lower arm actuator but no
+hand actuator. An arm with this quirk does not apply the +1 Target
+Number modifier for punching if it lacks a hand actuator.
+
+BATTLE COMPUTER (5 POINTS)
+The ’Mech is an advanced command unit equipped with a
+powerful tactical battle computer that allows for more effective
+command of a battle force; the Cyclops is a prime example. Each turn
+one or more such ’Mechs are on the battlefield with a conscious
+MechWarrior, their force receives a +2 modifier to all Initiative rolls.
+This modifier is not cumulative with that of a Command
+’Mech.
+
+BATTLEFISTS (2 POINTS)
+The Battlefists quirk applies only to ’Mechs that are equipped
+with hand actuators. This quirk reflects ’Mechs that feature hands
+which are better designed for melee combat as a consequence of
+their unique configuration (such as the Awesome’s mace-like fist, or
+the Pillager’s sharpened “knuckles”). This quirk is only paid for once,
+even if the ’Mech has two fists. If the ’Mech has two hands, and this
+quirk is only meant to apply to one of those hands, this must be
+specified (the cost remains the same).
+A ’Mech with Battlefists receives a –1 Target Number modifier
+when making Punch attacks.
+
+COMBAT COMPUTER (3 POINTS)
+The ’Mech possesses an advanced combat computer, such
+as those installed in the Stalker and Juliano. The computer aids
+the MechWarrior in managing heat levels; each turn the ’Mech
+will generate four points of heat less than normal (but never less
+than zero).
+
+COMMAND ’MECH (2 POINTS)
+Some BattleMechs, such as the Atlas, BattleMaster, Black Knight,
+King Crab, Marauder, Mongoose, and Wolverine are designed as
+command ’Mechs. Each turn one or more such ’Mechs are on the
+battlefield with a conscious MechWarrior, their force receives a +1
+modifier to all Initiative rolls.
+This modifier is not cumulative with a Battle Computer.
+
+COMPACT ’MECH (1 POINT)
+This Quirk describes a ’Mech that is particularly slim in stature,
+such as the Jackalope. It enables the ’Mech to share a BattleMech
+cubicle with another Compact ’Mech. It also allows a ’Mech
+recovery vehicle to transport two Compact ’Mechs. In both cases,
+the combined tonnage of the two ’Mechs cannot exceed relevant
+tonnage limits.
+The Compact ’Mech quirk only provides this bonus for
+transportation purposes; Compact ’Mechs cannot share the same
+space at the same time when undergoing maintenance or repairs.
+This quirk can only be applied to ’Mechs that also possess
+the Narrow/Low Profile quirk, and is further limited to ’Mechs of
+medium weight (55 tons) or less.
+
+COWL (4 POINTS)
+BattleMechs such as the Cyclops have been outfitted with a
+protective cowl that provides an additional 3 points of head armor.
+However, attacks that originate along the row of hexes directly in
+front of the cowled ’Mech ignore this additional armor.
+
+DIRECTIONAL TORSO MOUNT
+(2 OR 3 POINTS)
+A well-known feature of the original Goliath, a Directional Torso
+Mount acts as a somewhat more restrictive BattleMech shoulder
+turret, allowing any weapons in the mount to shoot in either the
+front arc or the rear arc, depending on the mount’s current facing.
+The mount’s facing is set at the start of the game, and can be
+changed at the same time torso twists are made. However, unlike
+a torso twist, it does not reset at each End Phase: the arc chosen
+remains until deliberately changed. The mount rotates with any
+torso twist as normal. Each time a location with a Directional Torso Mount takes a
+hit (Front or Rear), the player must roll 2D6. A result of 9+ means
+the mount is destroyed and its weapon locked in its current arc, in
+addition to the normal effects of the attack.
+The 3-point version of this quirk is available only to quad
+’Mechs. In this case, the mount operates as a full turret, capable of
+rotating a full 360 degrees.
+No weapon with location placement restrictions (such as a
+heavy Gauss rifle) can be placed in a Directional Torso Mount.
+
+DISTRACTING (1 POINT)
+A ’Mech with the Distracting quirk is physically designed to
+intimidate (or confuse) its opponent with its appearance. This
+includes the fearsome visage of the Atlas BattleMech, but can also
+include ’Mechs cosmetically designed to appear more heavily
+armed or deadly than they truly are, such as the Arbiter.
+A ’Mech with the Distracting quirk applies a +1 Special Source
+modifier to any Morale Checks its opponents must make when using
+the Morale rules (see pp. 179-180, TO:AR). If using the Demoralizer
+Special Piloting Ability from Campaign Operations (see p. 74, CO),
+the Distracting quirk reduces the Demoralizer’s psychological attack
+Target Number modifier from +4 to +3.
+This quirk may apply to a ’Mech in some periods but not others:
+for example, the Mackie would almost certainly be Distracting upon
+its debut, but would lose the quirk once the novelty wore off and
+newer designs were introduced.
+
+EASY TO MAINTAIN (1 POINT)
+Some ’Mechs, such as the Thorn, are easier to maintain and
+repair. All maintenance, repair, and replacement rolls made for a
+’Mech with this quirk receive a –1 Target Number modifier.
+This is an innate quality to the ’Mech, regardless of whether
+enough spare parts are available to actually fix it. As such, the
+Vindicator doesn’t gain this quirk just because its spare parts are
+plentiful (and the Assassin has it despite the fact that its custom
+spare parts are rare).
+
+EASY TO PILOT (2 POINTS)
+Training ’Mechs such as the Chameleon and Crockett are
+designed to be easier for a rookie MechWarrior or pilot to operate.
+A MechWarrior with a Piloting Skill higher than 3 will receive a
+–1 Target Number modifier for Piloting Skill Rolls required as a result
+of damage or terrain. More skilled MechWarriors receive no benefit.
+
+EXTENDED TORSO TWIST (3 POINTS)
+Unlike most ’Mechs, one with this quirk can twist its torso
+much further. When torso twisting, the ’Mech can change its facing
+by one or two hexsides. Quad ’Mechs normally cannot torso twist
+at all. However, a quad ’Mech with this quirk can perform a normal
+(not extended) torso twist.
+
+FAST RELOAD (1 POINT)
+BattleMechs such as the Hatchetman and Enforcer have weapons
+that use large removable ammunition magazines, allowing them
+to reload much faster than normal. This quirk can be assigned to
+individual weapons, locations on a ’Mech (such as the right torso), or
+the entire ’Mech. Affected weapons can reload in half the normal time.
+Regardless of the option chosen, the cost for this quirk is the same.
+
+FINE MANIPULATORS (0 POINTS)
+Though ’Mechs generally rely on hand actuators for any manual
+work, some units, such as the Jupiter, feature manipulators otherwise
+more commonly found on vehicles for delicate work.
+A ’Mech with this quirk may mount up to one Manipulator (see
+p. 245, TM) in each side torso and/or arm location. These do not
+follow the normal construction rules and are weight free; the exact
+number must be specified.
+
+GOOD REPUTATION (0 POINTS)
+Whether due to clever marketing, use by an iconic MechWarrior,
+or proven capabilities, some ’Mechs are extremely popular. Such
+’Mechs are worth a premium on the open market, as buyer demand
+means that acquiring one at its base price is almost impossible. For
+each level of this quirk, the ’Mech is worth 10% more C-bills than
+normal. This quirk is not worth points because it is not, strictly
+speaking, a bonus to the ’Mech.
+Note that in some eras and/or locations, such as during the
+late Third Succession War period, ’Mechs as a whole are so rare
+that all may be considered to have the 1 point version of this quirk.
+Furthermore, this quirk is not applicable to Clan machines, as the
+Clans do not really have a secondary ’Mech market and Inner Sphere
+customers will gladly pay inflated prices to acquire Clan ’Mechs
+regardless of their reputation.
+
+HYPER-EXTENDING ACTUATORS
+(1 POINT)
+The arm actuators of ’Mechs like the Quickdraw can bend much
+further than normal. Even if it has lower arm and/or hand actuators,
+it can still flip arms to fire all arm-mounted weapons into its rear arc.
+
+IMPROVED COMMUNICATIONS
+(1 POINT)
+The ’Mech has an exceptionally powerful communications suite.
+The ’Mech automatically ignores the first level of ghost targets (see
+p. 100, TO:AR) used against it. Additionally, it can always attempt a
+BattleMech Satellite uplink (see p. 162, TO:AR) without being forced
+to give up its movement and combat actions.
+
+IMPROVED COOLING JACKET (1 POINT)
+One weapon’s design incorporates a highly effective cooling
+jacket. When fired, this weapon generates 1 point less heat (never
+less than 1 point). More than one weapon can have this positive
+quirk, but the cost for each must be paid.
+
+IMPROVED LIFE SUPPORT (1 POINT)
+When determining damage to the MechWarrior or pilot as a
+result of heat following a life support critical hit, treat the ’Mech’s
+heat level as being 5 points lower (an example of this is the Shadow
+Hawk). This quirk also doubles the cockpit’s standard life support
+time, from four days to eight.
+
+IMPROVED SENSORS (3 POINTS)
+A ’Mech with this quirk is treated as if it has an active probe
+(range 4 for Inner Sphere ’Mechs, range 5 for Clan ’Mechs). If it is
+equipped with an actual active probe, instead add 2 to that active
+probe’s range.
+
+IMPROVED TARGETING
+(3:SHORT, 4:MEDIUM, OR 5:LONG
+POINTS)
+The ’Mech has advanced targeting capabilities in one range
+bracket. The quirk can be applied up to three times, but can be
+taken only once per range bracket. The cost of the quirk varies with
+the range bracket chosen. All ranged attack Target Numbers at the
+selected range bracket receive a –1 modifier.
+A ’Mech with this quirk cannot take Improved Targeting for
+the Extreme range bracket, nor can this quirk be combined with
+Variable Range Targeting.
+
+JETTISON-CAPABLE WEAPON
+(1 POINT)
+A ’Mech can be equipped with mounted weapons that can
+be jettisoned in combat and—if recovered—remounted on that
+’Mech with ease. This feature can be seen in early Star League-era
+attempts to develop handheld weapon mounts, such as on the
+BattleMaster, Griffin, Wolverine, and Phoenix Hawk.
+The quirk is bought for a single weapon; a ’Mech can carry a
+maximum of two jettison-capable weapons, paying the quirk cost
+each time. It is assumed that any official variant replacing a jettisoncapable weapon with another weapon in the same location also
+uses a jettison-capable weapon, though a gamemaster may rule
+that variants based on field refits or low-tech conditions do not
+benefit. No Handheld Weapon (see pp. 127-128, TO:AUE) or item
+using pod technology may benefit from this quirk, though fixed
+weapons on an OmniMech may be jettison-capable.
+A jettison-capable weapon may be dropped using the
+Dumping Ammunition rules (see p. 58), except no risk of hull
+breaches is created, and no risk of an explosion if a ’Mech jettisoning
+its weapons is struck from the rear. Jettisoning an ammunitiondependent weapon does not also jettison its ammunition. Treat any
+critical slots for a jettison-capable weapon as a Roll Again result if
+they are struck after the weapon is jettisoned.
+In campaign play the location of a jettisoned weapon should
+be tracked, as it can be remounted on the ’Mech later using the
+same rules and time spent as an ammunition reload. A jettisoned
+weapon may be used by any ’Mech that is a variant of the ’Mech the
+weapon was originally designed for, as long as the variant features
+that exact weapon and in the exact same location.
+
+MODULAR WEAPONS (1 POINT)
+Though lacking the flexibility of an OmniMech, a ’Mech with
+Modular Weapons such as the O-Bakemono or Mercury can be
+repaired or customized more easily. Equipment can be replaced in
+half the normal time (though repairs in-place take the usual amount
+of time). When using the Customization rules (see p. 188, CO), half
+the time is required.
+On some ’Mechs, only certain weapons or equipment are
+modular. In this case, the specific gear with the modular quality
+must be noted, but this does not reduce the quirk’s cost.
+
+MULTI-TRAC (2 POINTS)
+A ’Mech with this quirk can track multiple targets and may
+attack any number of targets in its front and arm firing arcs in the
+same turn without adding the secondary-target modifier. Secondary
+targets in the rear arc are treated as normal.
+
+NARROW/LOW PROFILE (3 POINTS)
+Designs such as the UrbanMech, Vulcan, and Lancelot have a
+narrow or low profile that makes them harder to hit at range.
+If the Margin of Success for a weapon attack made against a
+narrow/low profile ’Mech is 0 or 1, the hit is considered a glancing
+blow. For example, if you need to roll a 9 or better to hit the target,
+a result of 10 would be a glancing blow.
+A glancing blow inflicts half the normal damage (rounded
+down); for weapons that roll on the Cluster Hits Table, instead apply
+a –4 modifier to the Cluster roll result (with a minimum result of 2).
+Additionally, apply a –2 modifier when rolling on the Determining
+Critical Hits Table any time a glancing blow yields the possibility of
+a critical hit; if using the Advanced Determining Critical Hits rule (see
+p. 83, TO:AR), apply a –4 modifier instead.
+This quirk has no effect versus non-weapon attacks, such as
+falls or physical attacks. It also has no effect versus all-or-nothing
+weapon attacks, such as Streak missile launchers.
+If using the Linking Weapons rule (see p. 83, TO:AR), the entire
+linked group is considered a glancing blow.
+Damage Reduction: If also using the Glancing Blow rule (see
+p. 78, TO:AR), the effects stack (1/4 damage is dealt). Any subtractive
+damage reduction effects (such as ferro-lamellor armor) are applied
+after all other damage reduction effects.
+
+NIMBLE JUMPER (3 POINTS)
+Jump jets are brute-force thrusters designed only to transport
+a ’Mech directly from point A to point B. Some ’Mechs, however,
+such as the Spider, are especially nimble when jumping. When a
+’Mech with this quirk jumps, it need not follow the most direct
+path to its target hex. Instead, it may deviate from that path by
+up to one hex of its controller’s choice (assuming the ’Mech has
+the Jumping MP required, of course; additional heat for such a
+jump is generated as normal for the jump jet type in use). For
+example, a jump that would normally cover six hexes can instead
+cover up to seven.
+If a ’Mech deviates with its jump in this fashion, attacks against
+it that turn receive an additional +1 target movement modifier (a
+total of +2 for jumping, instead of the normal +1; the extra hex
+travelled is also factored into its TMM). However, the deviating
+’Mech's attacker movement modifier also increases, from +3 to +4.
+This quirk can only be taken by light or medium ’Mechs, and
+only for those that have at least as many Jumping MP as they do
+Walking MP.
+
+OVERHEAD ARMS (2 POINTS)
+If it is standing and has line of sight to its target, a ’Mech with
+Overhead Arms treats its arm-mounted weapons as one level higher
+when determining the effects of terrain.
+For example, a standing Dasher on Level 0 terrain would be
+Level 2 for LOS purposes as normal, but would treat attacks from
+its arm-mounted weapons as coming from Level 3. This does not
+allow the ’Mech to fire over Level 2 hexes directly in front of it (since
+the ’Mech must already have line of sight for the Overhead Arms to
+function), but it would ignore partial cover for targets at the same
+level (Level 2, in our example) unless the target was receiving it
+from water.
+A ’Mech with Overhead Arms receives a +2 Target Number
+modifier to its punch and arm-mounted physical weapon attacks.
+This quirk cannot be combined with the Low-Mounted Arms
+quirk, or taken by any ’Mech that either does not have arms, or lacks
+any form of direct-fire ranged weaponry in said arms (excepting
+OmniMechs).
+
+PROTECTED ACTUATORS (1 POINT)
+Armor protection around the actuators is more effective,
+making a ’Mech with this quirk more resistant to Leg and Swarm
+attacks by infantry. The Target Numbers for such attacks receive a
++1 modifier.
+
+REINFORCED LEGS (1 POINT)
+Designed for executing the dreaded “Death From Above”
+attack, some ’Mechs (the Highlander, for example) suffer half the
+normal damage to the legs when performing Death From Above
+successfully.
+
+RUGGED (1 OR 2 POINTS)
+Some ’Mechs are extremely reliable, reducing the frequency
+with which they require maintenance. The cost is 1 point if the
+’Mech can go for two times as long between maintenance periods
+as normal, and 2 points if it can go up to three times as long. See
+Campaign Operations, page 191, for details on maintenance
+
+SEARCHLIGHT (0 POINTS)
+’Mechs such as the Warhammer, Loki, Guillotine, Defiance and
+Rifleman are equipped with mounted searchlights (see p. 62).
+Each time a searchlight-equipped ’Mech takes a hit in any torso
+location (Front or Rear), the player must roll 2D6 to determine if the
+searchlight is destroyed. A result of 7+ means the searchlight is
+destroyed, in addition to the normal effects of the attack.
+
+STABILIZED WEAPON (VARIES)
+Some weapons, such as the center torso and head lasers of the
+Mongoose, are better cushioned against or otherwise compensated
+for the increased inaccuracy caused by moving at high speeds. If the
+’Mech runs, all Target Numbers for that weapon receive a –1 modifier.
+The cost is 1 point per 7 points (or fraction thereof) of maximum
+damage the weapon can inflict in a single Damage Value grouping.
+If the “weapon” deals 0 damage (such as TAG), the cost is 1 point.
+More than one weapon can receive this positive quirk, but the cost
+for each must be paid.
+
+STABLE (2 POINTS)
+’Mech designs such as the Dragon are exceptionally stable,
+receiving a –1 Target Number modifier when forced to make a
+Piloting Skill Roll as a result of a physical attack.
+
+UBIQUITOUS (1 POINT)
+Some ’Mechs, such as the Archer, Wasp, and Locust, have been
+in production for literally centuries, with thousands or even tens of
+thousands produced in that time across multiple nations. For other
+’Mechs, the manufacturer has gone to exceptional lengths to ensure
+that parts are readily available, such as mass producing them or using
+parts from other, more common machines. Whatever the case, when
+attempting to locate replacement parts for these ’Mechs, apply a –2
+Target Number modifier.
+This quirk does not cross between the Clans and the Inner
+Sphere unless bought twice. For example, a ’Mech Ubiquitous
+amongst the Clans is not automatically Ubiquitous in the Inner
+Sphere, and vice versa.
+
+VARIABLE RANGE TARGETING (VARIES)
+The ’Mech’s targeting system allows it to launch more
+accurate attacks at either long or short range, at the expense
+of reduced accuracy at other ranges. During a turn’s End Phase,
+the controlling player must designate whether this improved
+targeting feature will be active at long or short range the next
+turn. All weapon attacks at the designated range receive a –1
+Target Number modifier, but all weapon attacks at the other
+range receive a +1 Target Number modifier (medium range
+remains unmodified).
+The cost is 1 point per 5 points (or fraction thereof) maximum
+damage that all the weapons mounted on the ’Mech can inflict
+(excluding physical attack weapons). This quirk cannot be combined
+with Improved Targeting.
+
+VESTIGIAL HANDS (0 POINTS)
+A ’Mech with vestigial hands lacks manipulators substantial enough
+for most game purposes, and does not have hand actuator critical hit
+slots. However, a ’Mech with vestigial hands may lift and drop items (see
+Lifting Items (Simplified), p. 21) if a scenario objective requires it.
+
+NEGATIVE DESIGN QUIRKS
+The following negative design quirks each contain a rule
+detrimental to how the design performs during a game, whether
+during movement, in combat, when eliminating heat and so on.
+Some of these quirks, such as Sensor Ghosts, are quite rare
+or even unheard of on standard examples of any BattleMech.
+These sorts of quirks are instead intended to allow players to add
+personality to worn and/or damaged machines.
+
+AMMUNITION FEED PROBLEM
+(1 POINT)
+The ammunition feed for one ammunition-using component
+has a tendency to jam at inconvenient moments. On an unmodified
+attack roll of 2 with such a weapon, roll 2D6. On a result of 10+, the
+weapon jams and cannot be fired again in this battle. On a roll of
+12, the new round of ammunition will explode in the weapon for
+normal damage. Per normal rules, Gauss weapon ammunition will
+not explode, but the weapon itself does.
+
+BAD REPUTATION (1 POINT)
+While perfectly sound, this ’Mech has acquired a bad reputation
+(for example, the Blackjack during the Succession Wars). As a result,
+it is worth only half the normal resale value, unless ’Mechs are
+particularly rare for a given era and/or location (for example, in the
+late Third Succession War era, ’Mechs are remarkably hard to come
+by, and few would turn up their nose at even the most unpopular
+of machines).
+Designs that are second-line or merely somewhat unpopular
+(such as the Watchman or UrbanMech) should likely not receive this
+quirk. Additionally, a ’Mech may have a Bad Reputation at one point
+in its career, but lose it later (such as the Battle Hawk).
+The Clans do not really have the same sort of economic model
+when it comes to BattleMechs. Instead, if a Clan ’Mech has the Bad
+Reputation quirk and if the optional Clan Honor rules are in effect
+(see p. 273, TW), the MechWarrior begins the battle with 1 dezgra
+point. The ’Mech will still fetch its full value if ever sold on an Inner
+Sphere market.
+Note that when buying a ’Mech with a Bad Reputation, players
+generally still must pay its full price.
+
+COOLING SYSTEM FLAWS (3 POINTS)
+A flaw in the design can result in the ’Mech generating excess
+heat. Whenever the ’Mech executes or receives a physical attack,
+falls, or is forced to make a Piloting Skill Roll because it received 20
+points or more damage, roll 2D6. On a result of 10+ the ’Mech will
+generate 5 points more heat each turn for the rest of the battle. This
+can only occur once a battle.
+
+CRAMPED COCKPIT (2 POINTS)
+The poorly-designed cockpits of ’Mechs like the Wolverine and
+Stinger are very cramped. The ’Mech receives a +1 Piloting Skill Roll
+modifier. This quirk cannot be applied to ’Mechs with a Small Cockpit.
+
+DIFFICULT EJECTION (1 POINT)
+Certain designs have flaws in their emergency escape systems
+detrimental to a MechWarrior’s health. If the MechWarrior fails a
+Piloting Skill Roll when ejecting, they suffer an additional point of
+damage (in addition to the standard damage taken).
+
+DIFFICULT TO MAINTAIN (1 POINT)
+Some ’Mechs are harder to maintain and repair. All repair
+or replacement rolls made for this ’Mech receive a +1 Target
+Number modifier.
+
+EM INTERFERENCE (1 OR 2 POINTS)
+An energy weapon is insufficiently shielded and causes
+interference with other delicate electronics. The turn after the
+weapon has been fired, the following equipment aboard the ’Mech
+will not function: any ECM, any Active Probe, Artemis IV FCS, Artemis
+V FCS, Blue Shield PFD, any C3, Chameleon LPS, Cockpit Command
+Console, Electronic Warfare Equipment, MASC, MRM FCS, Narc (and
+iNarc), Null Signature System, Stealth Armor, Streak Launchers,
+Supercharger, Targeting Computer, and Void Signature System.
+Alternatively, this quirk can be purchased for the ’Mech itself,
+in which case the problem occurs whenever any energy weapon
+on the ’Mech is fired. The cost for this version of the quirk is 2
+points, but can only be purchased if the ’Mech has more than one
+energy weapon.
+
+EXPOSED ACTUATORS (1 POINT)
+The actuators on some designs (such as the Commando) are
+poorly protected and more vulnerable to the effects of Swarm and
+Leg attacks by infantry. The Target Numbers for such attacks receive
+a –1 modifier.
+
+EXPOSED WEAPON LINKAGE (2 POINTS)
+Some designs such as the Cygnus have the mechanics of a
+weapon dangerously exposed. When a location that holds such a
+weapon is hit, roll 2D6. On a roll of 10+, that weapon is unable to
+fire for the remainder of the game.
+This quirk can be taken only once and only for a single weapon
+type, and affects all weapons of that type on the ’Mech (for example,
+all AC/20s, all ER PPCs).
+
+HARD TO PILOT (2 POINTS)
+This ’Mech is hard to operate; MechWarriors receive a +1 Target
+Number modifier to all Piloting Skill Rolls.
+
+ILLEGAL DESIGN (0 POINTS)
+’Mechs designed with this quirk do not follow the existing
+construction rules for some reason, achieving effects that are not
+normally allowed in game-play, and which can fail spectacularly at
+any moment. (Note: The total weight and critical space of all components must still fit within the design’s tonnage and critical space.)
+If employed, the opposing player may roll 2D6 to determine if
+the ’Mech with this quirk suffers a catastrophic failure once every
+6 turns of combat. On a result of 6 or higher, such catastrophic
+failure occurs in 1D6 of the ’Mech’s hit locations (using the Front/
+Back Hit Locations Table). A Critical Hit check is then made for
+each failure location determined, applying a +4 modifier to the
+roll result. On any modified roll result of 13+, the location suffers
+complete collapse if it is an arm, leg, head, wing, main gun, or turret.
+This will destroy all items within (and any explosive components
+checks should be made as appropriate for location destruction). If
+the affected location is none of the above, it suffers 4 critical hits,
+determined as normal.
+Illegal ’Mechs suffer an additional +4 Target Number modifier
+to repair or replace any damaged or destroyed components, and
+double all repair and maintenance times for work performed
+on them. If an Illegal ’Mech repair fails, the item gains the Nonfunctional quirk as well.
+Finally, because they are technically failures at the time of their
+production, Illegal ’Mechs should also receive the Obsolete quirk
+(see p. 88), with the year of their obsolescence determined to be
+the same as their year of introduction.
+
+INACCURATE WEAPON (VARIES)
+Being of poor design, a weapon is less accurate than normal
+and receives a +1 Target Number modifier. The value is 1 point per
+5 points (or fraction thereof) of maximum damage the weapon can
+inflict in a single Damage Value grouping.
+More than one weapon can receive this quirk.
+
+LOW-MOUNTED ARMS (2 POINTS)
+’Mechs equipped with extremely low-mounted arms—such as the
+Dark Crow—have mounted their arms far too low to take advantage of
+the ’Mech’s height advantage. This quirk cannot be combined with the
+Overhead Arms quirk, nor can it be taken by any ’Mech that either does
+not have arms, or lacks any form of weaponry in its arms.
+A ’Mech with Low-Mounted Arms fires its arm-mounted
+weapons as if they are actually mounted in the ’Mech’s legs, even
+though these arms still rotate with the torso position. As a result,
+these weapons may be blocked from firing by partial cover such as
+low hills and buildings. By the same token, attacks against ’Mech
+with Low-Mounted Arms that pass over partial cover cannot strike
+the ’Mech’s arms either, and instead will strike the covering terrain.
+
+NO/MINIMAL ARMS (2 POINTS)
+Some ’Mechs effectively have no arms, such as the Stalker and
+Locust, or arms that are totally ineffective in aiding a fallen ’Mech in
+regaining its feet. When making a Piloting Skill Roll to stand up, such
+’Mechs receive a +2 Target Number modifier; this is not cumulative
+with the Attempting to Stand optional rules (see p. 22, TO:AR). In
+addition, the ’Mech cannot make physical attacks with its arms.
+
+NO COOLING JACKET (2 POINTS)
+A weapon’s design excludes the standard cooling jacket. As a
+result, it generates 2 extra points of heat when fired.
+
+NO EJECTION SYSTEM (2 POINTS)
+Some ’Mechs—notably the Spider—lack an emergency escape
+system. The MechWarrior can never eject and thus cannot use the
+Ejection (Simplified) rules (see p. 81).
+
+NON-FUNCTIONAL ITEM (5 POINTS)
+A ’Mech with this quirk has one or more components or pieces
+of equipment that simply do not work. No amount of repairs or
+replacement will correct this issue; the ’Mech must be redesigned
+from the ground up to solve the problem.
+A ’Mech can have multiple Non-functional quirks, but each
+must be assigned to the specifically non-operational components
+they possess.
+
+NON-STANDARD PARTS (1 POINT)
+Constructed with non-standard components—such as
+the Clint—it is more difficult to source parts for this ’Mech.
+When attempting to locate replacement parts, add +2 to the
+Target Number.
+
+OBSOLETE (4 POINTS)
+An Obsolete ’Mech is one built using technological and/or
+construction standards that have been completely abandoned, such
+as any Primitive ’Mech from the Star League era until the Jihad. Though
+still serviceable—and maybe even effective—an obsolete ’Mech is
+extremely difficult to maintain after its parts sources go silent, forcing
+technicians to resort to jury-rigging and hand-machining even the
+most basic structural parts and electronics to keep it battle worthy.
+A ’Mech with the Obsolete quirk cannot have any variants in
+active production, and must note the year in which its production
+ceased as part of the quirk. After that, the ’Mech will become
+increasingly hard to maintain, and its resale price will drop (for
+anyone except antique collectors, that is). To reflect this, for every
+15 years after production of an obsolete ’Mech ceased, any rolls to
+repair or replace equipment on the ’Mech—or to even locate said
+parts—will suffer a +1 Target Number increase (to a maximum of +5).
+In addition, for every 20 years after production of an obsolete ’Mech
+ceased, the resale cost (but not the purchase cost) will decrease by
+10 percent (to a minimum of 50 percent).
+A ’Mech that somehow comes back into production after
+becoming obsolete automatically negates this quirk 10 years after
+returning to production. Additionally, some ’Mechs may have parts
+manufactured for them even if the chassis themselves are out of
+production, and thus would not qualify for this quirk. Note that an
+obsolete ’Mech may still receive additional modifiers for other quirks
+such as Difficult to Maintain, Easy to Maintain, Non-Standard Parts,
+and Ubiquitous.
+
+OVERSIZED (2 POINTS)
+The Oversized quirk cannot be combined with the Narrow/Low
+Profile quirk, and is further limited to ’Mechs of heavy weight (60
+tons) and larger. This quirk describes a ’Mech that has been built
+physically larger than the norm, such as the Mackie or Scylla.
+Any Piloting Skill Rolls required of an Oversized ’Mech to avoid
+damage when passing through buildings suffer a +1 Target Number
+modifier. Furthermore, they find it harder to use covering terrain
+effectively: an Oversized ’Mech never receives the +1 Target Number
+modifier for partial cover when being attacked.
+
+POOR COOLING JACKET (1 POINT)
+A weapon has a meager or badly designed cooling jacket. As
+a result, it generates 1 more point of heat than normal when fired.
+
+POOR LIFE SUPPORT (1 POINT)
+When determining damage to the MechWarrior or pilot as a
+result of heat following a life support critical hit, treat the ’Mech’s heat
+level as being 5 points higher. This quirk also reduces the cockpit’s
+standard life support time from four days to two.
+
+POOR PERFORMANCE (3 POINTS)
+The ’Mech cannot reach maximum speed immediately. It must
+spend one turn expending MP equal to its Walking speed before it
+can use MP up to its Running speed the following turn.
+
+POOR SEALING (2 POINTS)
+A ’Mech with the Poor Sealing quirk suffers from imperfections
+in its structural and armor design that make it more susceptible to
+leaks and other failures in hostile environments. In any situation
+where a ’Mech must check for hull breaches and/or flooding (such
+as suffering damage while operating in vacuum, toxic environments
+and underwater), this quirk adds a +2 modifier to the roll when
+making a hull breach check (see p. 65). If the ’Mech would otherwise
+not be susceptible to hull breaches, consider it to have a base hull
+breach TN of 12 before applying this modifier.
+In addition to the above, a ’Mech with Poor Sealing must also
+make a hull breach check when first entering a hostile environment
+(such as vacuum or toxic atmospheres, when entering water, or
+when becoming completely submerged in water). Failure will
+result in a flood to a random location that is exposed to the hostile
+environment (use the appropriate Front Locations Table to determine
+the affected area).
+
+POOR TARGETING (2 POINTS)
+The ’Mech has poor targeting capabilities in one range bracket.
+This quirk can be applied more than once, but can be taken only once
+per range bracket. All ranged attacks at the selected range bracket
+receive a +1 Target Number modifier.
+A ’Mech cannot take Poor Targeting for Extreme Range.
+
+POOR WORKMANSHIP (1 POINT)
+Not all manufacturers are as dedicated to producing quality
+products. This ’Mech is one level of unit quality (see p. 189, CO) lower
+than normal. In addition, all rolls for critical damage are modified by
++1, making critical hits more likely. Results of 13 are treated as 12
+(except if using Advanced Determining Critical Hits, in which case do
+not modify down; see p. 72, TO:AR).
+
+PROTOTYPE (2 POINTS)
+The ’Mech is a prototype and still has some issues. Its systems
+are less resilient and lack the redundancy that will be incorporated
+into the production model. All rolls for critical damage are modified
+by +2, making critical hits much more likely. Results of 13 or over are
+treated as 12 (except if using Advanced Determining Critical Hits, in
+which case do not modify down; see p. 72, TO:AR).
+Even if brand new, designs that have just entered service have
+all passed the prototype stage and so likely do not qualify for this
+quirk. ’Mechs found in the Experimental Technical Readout series of
+products would make good candidates.
+
+RAMSHACKLE (3 POINTS)
+Decades or even centuries of hard service and substandard
+maintenance have led to an unpredictable machine patched
+together with bailing wire and prayers.
+The ’Mech’s controller rolls 1D6 at the start of the battle. The
+result indicates what negative quirk, if any, applies to that ’Mech
+for the duration of the battle: Sensor Ghosts (1), EM Interference
+(entire ’Mech) (2), Hard to Pilot (3), Cooling System Flaws (4), Poor
+Performance (5), or no negative result (6).
+
+SENSOR GHOSTS (3 POINTS)
+The ’Mech’s sensor suite projects ghost images, causing
+significant targeting problems. All ranged attacks receive a +1 Target
+Number modifier.
+
+SLOW TRAVERSE (1 POINT)
+The ’Mech has an underpowered turret traverse mechanism.
+Any turret (or 3-point Directional Torso Mount) on the ’Mech may
+only rotate one hexside in a turn.
+
+STATIC AMMO FEED (1 POINT)
+Weapons with the Static Ammo Feed quirk use a very crude
+or minimized form of ammunition feed that renders the weapon
+incapable of switching between multiple ammunition bins. It is
+most commonly seen in ’Mechs that feature exposed ammunition
+feeds, such as the Blade or the Cygnus, and thus often occurs in
+conjunction with the Exposed Weapon Linkage quirk.
+The Static Ammo Feed quirk must be taken for each
+affected weapon type the ’Mech carries, though it can cover
+multiple weapons of that type at the same time. Thus, a ’Mech
+with two Autocannon/10s and two Autocannon/5s would
+need two Static Ammo Quirks to account for all four weapons
+having this issue, if desired—one for the AC/10s and the other
+for the AC/5s. This quick cannot be applied to weapons without
+switchable ammunition.
+All ammunition carried for a weapon with Static Ammo Feed
+must be of the same type. This is true even if the weapon is of the
+Switchable Ammo (S) Type.
+
+UNBALANCED (1 POINT)
+The ’Mech’s design (one notorious example is the Javelin) is
+unbalanced. Treat this quirk as a +1 Target Number modifier for
+Piloting Skill Rolls made whenever the ‘Mech enters a hex requiring
+a PSR due to a building type or planetary condition (i.e. Terrain Type,
+Terrain Modification, and so on).
+
+WEAK HEAD ARMOR (VARIES)
+The value of this quirk is equal to the number of armor points
+effectively lost; for example, a ’Mech with 9 points of head armor
+but using a 4-point version of this quirk effectively has only 5
+armor points.
+
+WEAK LEGS (1 POINT)
+This ’Mech’s legs were never designed to take the stresses
+involved in physical attacks. If the ’Mech executes a Death From
+Above attack, roll on the Determining Critical Hits Table for each
+of its legs. If it is kicked in a leg, roll on the table for the leg that was
+kicked. In both cases, the critical check occurs even if the leg armor
+was not breached.

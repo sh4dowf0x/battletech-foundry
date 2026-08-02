@@ -83,5 +83,5 @@ atow-battletech/module/
 
 Current tagged-release target:
 
-- Version: `0.0.4`
-- Tag: `v0.0.4`
+- Version: `0.0.13`
+- Tag: `v0.0.13`

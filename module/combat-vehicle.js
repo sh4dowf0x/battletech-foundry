@@ -1,7 +1,7 @@
 // module/combat-vehicle.js
 // Combat vehicle actor sheet for AToW Battletech.
 
-import { promptAndRollWeaponAttack } from "./mech-attack.js";
+import { markVTOLDefeated, promptAndRollWeaponAttack } from "./mech-attack.js";
 
 const SYSTEM_ID = "atow-battletech";
 const TEMPLATE = `systems/${SYSTEM_ID}/templates/combat-vehicle.hbs`;
@@ -19,11 +19,20 @@ const ARMOR_KEYS = [
   { key: "turret", label: "Turret" }
 ];
 
+const VTOL_ARMOR_KEYS = [
+  { key: "front", label: "Front" },
+  { key: "left", label: "Left" },
+  { key: "right", label: "Right" },
+  { key: "rear", label: "Rear" },
+  { key: "rotor", label: "Rotors" }
+];
+
 const MOVEMENT_TYPE_OPTIONS = ["Tracked", "Wheeled", "Hovercraft"];
 const CREW_HIT_MAX = 2;
 const SENSOR_HIT_MAX = 2;
 const MOTIVE_HIT_MAX = 4;
 const TONNAGE_OPTIONS = Array.from({ length: 17 }, (_, i) => 20 + (i * 5));
+const VTOL_TONNAGE_OPTIONS = Array.from({ length: 20 }, (_, i) => 5 + (i * 5));
 const VEHICLE_EQUIPMENT_TYPES = new Set(["mechEquipment", "equipment", "gear", "ammo"]);
 const PROCESSED_DROP_EVENTS = new WeakSet();
 
@@ -37,8 +46,9 @@ function slugifyAmmoKey(s) {
 function ammoKeyFromTypeLabel(typeText) {
   const t = String(typeText ?? "").trim().toLowerCase();
   if (!t || t === "none" || t === "n/a" || t === "na" || t === "n-a" || t === "no ammo" || t === "ammo none") return null;
-  if (/^(ac|lrm|mrm|srm|atm)-\d+(?:-(?:er|he))?$/.test(t)) return t;
+  if (/^(ac|lrm|mrm|srm|atm|hag)-\d+(?:-(?:er|he))?$/.test(t)) return t;
   if (/^lbx-\d+(?:-cluster)?$/.test(t)) return t;
+  if (t === "plasma-rifle" || /\bplasma\s+rifle\b/i.test(t)) return "plasma-rifle";
 
   const isCluster = /\bcluster\b/i.test(t);
   let m = t.match(/\blb\s*(\d+)\s*-\s*x\s*ac\b/i);
@@ -52,6 +62,11 @@ function ammoKeyFromTypeLabel(typeText) {
     return slugifyAmmoKey(`atm-${m[1]}${variant}`);
   }
 
+  m = t.match(/\bhag\s*[-/]?\s*(20|30|40)\b/i)
+    ?? t.match(/\bhyper\s*[- ]?\s*assault\s+gauss\s+rifles?\b[^\d]*(20|30|40)\b/i);
+  if (m?.[1]) return slugifyAmmoKey(`hag-${m[1]}`);
+
+  if (/\blight\s+gauss(?:\s+rifle)?\b/i.test(t)) return "light-gauss";
   if (t.includes("gauss")) return "gauss";
   m = t.match(/\bac\s*\/?\s*(\d+)\b/i);
   if (m?.[1]) return slugifyAmmoKey(`ac-${m[1]}`);
@@ -73,6 +88,11 @@ function defaultAmmoAmountForKey(key) {
     "ac-10": 10,
     "ac-20": 5,
     "gauss": 8,
+    "light-gauss": 16,
+    "hag-20": 6,
+    "hag-30": 4,
+    "hag-40": 3,
+    "plasma-rifle": 10,
     "lrm-5": 24,
     "lrm-10": 12,
     "lrm-15": 8,
@@ -118,7 +138,7 @@ function parseAmmoDropItem(item) {
   const trailingCountMatch = name.match(/\b(\d+)\s*(?:shots?|rounds?)\b/i) ?? name.match(/\)\s*(\d+)\s*$/i);
   const nameAmmoTypeMatch =
     ammoLabelMatch ??
-    name.match(/\b((?:LB\s*\d+\s*-\s*X\s*AC|LBX\s*(?:AC\s*\/?\s*)?\d+|ATM\s*(?:3|6|9|12)(?:\s*(?:ER|HE))?|AC\s*\/?\s*\d+|LRM\b[^\d]*\d+|MRM\b[^\d]*\d+|Medium\s+Range\s+Missiles?\b[^\d]*(?:10|20|30|40)|SRM\b[^\d]*\d+|Gauss(?:\s+Rifle)?|Machine Gun|MG|AMS|Arrow\s*IV\s*Homing))\b/i);
+    name.match(/\b((?:LB\s*\d+\s*-\s*X\s*AC|LBX\s*(?:AC\s*\/?\s*)?\d+|ATM\s*(?:3|6|9|12)(?:\s*(?:ER|HE))?|HAG\s*[-/]?\s*(?:20|30|40)|Plasma\s+Rifle|AC\s*\/?\s*\d+|LRM\b[^\d]*\d+|MRM\b[^\d]*\d+|Medium\s+Range\s+Missiles?\b[^\d]*(?:10|20|30|40)|SRM\b[^\d]*\d+|Light\s+Gauss(?:\s+Rifle)?|Gauss(?:\s+Rifle)?|Machine Gun|MG|AMS|Arrow\s*IV\s*Homing))\b/i);
 
   let ammoType = String(ammoLabelMatch?.[1] ?? candidates[0] ?? nameAmmoTypeMatch?.[1] ?? "").trim();
   const candidateKey = ammoKeyFromTypeLabel(ammoType);
@@ -304,11 +324,15 @@ export class ATOWCombatVehicleSheet extends HandlebarsApplicationMixin(ActorShee
   async _prepareContext(options) {
     const context = await super._prepareContext(options);
     const system = this.actor.system ?? {};
+    const isVTOL = String(this.actor?.type ?? "").toLowerCase() === "vtol";
+    const armorKeys = isVTOL ? VTOL_ARMOR_KEYS : ARMOR_KEYS;
     const tonnage = Number(system?.vehicle?.tonnage ?? 0) || 0;
-    const structurePerLoc = Math.max(0, Math.floor(tonnage / 10));
+    const structurePerLoc = isVTOL
+      ? Math.max(1, Math.ceil(tonnage / 10))
+      : Math.max(0, Math.floor(tonnage / 10));
 
     const armor = {};
-    for (const loc of ARMOR_KEYS) {
+    for (const loc of armorKeys) {
       const data = system?.armor?.[loc.key] ?? {};
       const max = Number(data.max ?? 0) || 0;
       const dmg = Number(data.dmg ?? 0) || 0;
@@ -321,8 +345,17 @@ export class ATOWCombatVehicleSheet extends HandlebarsApplicationMixin(ActorShee
       };
     }
 
+    // Rotor armor is one damage track displayed across both ends of the rotor.
+    // Keep each pip's original number so clicking either visual group updates
+    // the same system.armor.rotor.dmg value correctly.
+    if (isVTOL && armor.rotor) {
+      const splitAt = Math.ceil(armor.rotor.pips.length / 2);
+      armor.rotor.leftPips = armor.rotor.pips.slice(0, splitAt);
+      armor.rotor.rightPips = armor.rotor.pips.slice(splitAt);
+    }
+
     const structure = {};
-    for (const loc of ARMOR_KEYS) {
+    for (const loc of armorKeys) {
       const data = system?.structure?.[loc.key] ?? {};
       const dmg = Number(data.dmg ?? 0) || 0;
       structure[loc.key] = {
@@ -368,17 +401,26 @@ export class ATOWCombatVehicleSheet extends HandlebarsApplicationMixin(ActorShee
     const crew = system?.crew ?? {};
     const crit = system?.crit ?? {};
     const movementType = String(system?.vehicle?.movement?.type ?? "Wheeled").trim() || "Wheeled";
+    const baseCruise = Math.max(0, Number(system?.vehicle?.movement?.cruise ?? 0) || 0);
+    const rotorHits = Math.max(0, Number(crit.rotorHits ?? 0) || 0);
+    const vtolCrashed = isVTOL && Boolean(crit.crashed || crit.rotorsDestroyed || crit.defeated);
+    const effectiveCruise = isVTOL ? (vtolCrashed ? 0 : Math.max(0, baseCruise - rotorHits)) : baseCruise;
+    const effectiveFlank = isVTOL ? (vtolCrashed ? 0 : Math.ceil(effectiveCruise * 1.5)) : Math.max(0, Number(system?.vehicle?.movement?.flank ?? 0) || 0);
 
     context.actor = this.actor;
     context.system = system;
+    context.isVTOL = isVTOL;
+    context.vehicleKindLabel = isVTOL ? "VTOL" : "Combat Vehicle";
     context.hideThirdColumn = this._hideThirdColumn === true;
-    context.tonnageOptions = TONNAGE_OPTIONS.reduce((acc, t) => {
+    context.tonnageOptions = (isVTOL ? VTOL_TONNAGE_OPTIONS : TONNAGE_OPTIONS).reduce((acc, t) => {
       acc[String(t)] = String(t);
       return acc;
     }, {});
-    context.movementTypeOptions = MOVEMENT_TYPE_OPTIONS;
+    context.movementTypeOptions = isVTOL ? ["VTOL"] : MOVEMENT_TYPE_OPTIONS;
     context.vehicleTonnage = tonnage;
     context.vehicleTypeLabel = movementType;
+    context.vtolMovement = { effectiveCruise, effectiveFlank, rotorHits, crashed: vtolCrashed };
+    context.structurePerLocation = structurePerLoc;
     context.armor = armor;
     context.structure = structure;
     context.vehicleWeapons = vehicleWeapons;
@@ -393,7 +435,10 @@ export class ATOWCombatVehicleSheet extends HandlebarsApplicationMixin(ActorShee
     };
     context.critTracks = {
       sensor: buildTrack(SENSOR_HIT_MAX, crit.sensorHits),
-      motive: buildTrack(MOTIVE_HIT_MAX, crit.motiveHits)
+      motive: buildTrack(MOTIVE_HIT_MAX, crit.motiveHits),
+      rotor: buildTrack(MOTIVE_HIT_MAX, crit.rotorHits),
+      engine: buildTrack(3, crit.engineHits),
+      flightStabilizer: buildTrack(2, crit.flightStabilizerHits)
     };
 
     const tokenDoc = getActorTokenDocument(this.actor);
@@ -780,7 +825,10 @@ export class ATOWCombatVehicleSheet extends HandlebarsApplicationMixin(ActorShee
     if (!loc || Number.isNaN(pip)) return;
 
     const tonnage = Number(this.actor.system?.vehicle?.tonnage ?? 0) || 0;
-    const max = Math.max(0, Math.floor(tonnage / 10));
+    const isVTOL = String(this.actor?.type ?? "").toLowerCase() === "vtol";
+    const max = isVTOL
+      ? Math.max(1, Math.ceil(tonnage / 10))
+      : Math.max(0, Math.floor(tonnage / 10));
     const structLoc = this.actor.system?.structure?.[loc] ?? {};
     const current = Number(structLoc.dmg ?? 0);
 
@@ -788,7 +836,20 @@ export class ATOWCombatVehicleSheet extends HandlebarsApplicationMixin(ActorShee
     if (pip <= current) next = Math.max(0, pip - 1);
     next = clampInt(next, 0, max, 0);
 
-    await this.actor.update({ [`system.structure.${loc}.dmg`]: next });
+    const updates = { [`system.structure.${loc}.dmg`]: next };
+    if (isVTOL && loc === "rotor") {
+      const destroyed = next >= max;
+      updates["system.crit.rotorsDestroyed"] = destroyed;
+      updates["system.crit.crashed"] = destroyed;
+    }
+
+    await this.actor.update(updates);
+    if (isVTOL && next >= max) {
+      const reason = loc === "rotor"
+        ? "Rotor internal structure destroyed"
+        : `${String(loc).charAt(0).toUpperCase()}${String(loc).slice(1)} internal structure destroyed`;
+      await markVTOLDefeated(this.actor, { reason, crashed: true });
+    }
     this.render(false);
   }
 
@@ -966,3 +1027,49 @@ export class ATOWCombatVehicleSheet extends HandlebarsApplicationMixin(ActorShee
     });
   }
 }
+
+// Keep VTOL destruction synchronized even when damage or critical tracks are
+// edited manually instead of being changed by the attack resolver.
+Hooks.on("updateActor", async (actor, _changed, options = {}) => {
+  try {
+    if (String(actor?.type ?? "").toLowerCase() !== "vtol") return;
+    if (options?.atowVTOLDefeat || actor.system?.crit?.defeated) return;
+
+    const system = actor.system ?? {};
+    const crit = system.crit ?? {};
+    const tonnage = Math.max(0, Number(system.vehicle?.tonnage ?? 0) || 0);
+    const structureMax = Math.max(1, Math.ceil(tonnage / 10));
+    const structureDestroyed = (loc) => Number(system.structure?.[loc]?.dmg ?? 0) >= structureMax;
+    const engineText = String(system.vehicle?.engine ?? "").toLowerCase();
+    const iceOrFuelCell = /\bice\b/.test(engineText)
+      || engineText.includes("internal combustion")
+      || engineText.includes("fuel cell")
+      || engineText.includes("fuel-cell");
+
+    let reason = "";
+    let killCrew = false;
+
+    if (crit.fuelTankHit && iceOrFuelCell) {
+      reason = "Fuel tank explosion";
+      killCrew = true;
+    } else if ((Number(system.crew?.driverHit ?? 0) || 0) >= 2 && (Number(system.crew?.commanderHit ?? 0) || 0) >= 2) {
+      reason = "Pilot and co-pilot incapacitated";
+      killCrew = true;
+    } else if (structureDestroyed("rotor") || crit.rotorsDestroyed) {
+      reason = "Rotor system destroyed: lift lost";
+    } else {
+      const destroyedBodyLoc = ["front", "left", "right", "rear"].find(structureDestroyed);
+      if (destroyedBodyLoc) reason = `${destroyedBodyLoc.charAt(0).toUpperCase()}${destroyedBodyLoc.slice(1)} internal structure destroyed`;
+      else if (crit.engineHit || Number(crit.engineHits ?? 0) > 0) reason = "Engine hit: lift lost";
+      else {
+        const cruise = Math.max(0, Number(system.vehicle?.movement?.cruise ?? 0) || 0);
+        const rotorHits = Math.max(0, Number(crit.rotorHits ?? 0) || 0);
+        if (cruise > 0 && rotorHits >= cruise) reason = "Cruising MP reduced to 0 by rotor damage";
+      }
+    }
+
+    if (reason) await markVTOLDefeated(actor, { reason, killCrew, crashed: true });
+  } catch (err) {
+    console.warn("ATOWCombatVehicleSheet | VTOL destruction synchronization failed", err);
+  }
+});

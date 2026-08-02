@@ -699,6 +699,20 @@
   color: var(--cv-muted);
 }
 
+.combat-vehicle-sheet .cv-vtol-structure-summary {
+  margin: -2px 0 9px;
+  color: var(--cv-muted);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.combat-vehicle-sheet .cv-vtol-structure-summary strong {
+  color: var(--cv-text);
+}
+
 .combat-vehicle-sheet .cv-armor-diagram {
   position: relative;
   display: block;
@@ -826,6 +840,86 @@
   transform: translate(-50%, -50%);
   --cols: 12;
 }
+
+/* VTOL armor and internal-structure overlay. The transparent source image is
+   kept in the system so the sheet remains readable in either color theme. */
+.combat-vehicle-sheet .cv-armor-diagram.cv-vtol-diagram {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.02), rgba(0, 0, 0, 0.08)),
+    url("../assets/armor-diagram-vtol.png") center / contain no-repeat;
+  aspect-ratio: 588 / 822;
+}
+
+.combat-vehicle-sheet .cv-vtol-diagram .cv-armor-front {
+  top: 13%;
+  left: 50%;
+  --cols: 8;
+}
+
+.combat-vehicle-sheet .cv-vtol-diagram .cv-armor-left {
+  top: 25%;
+  left: 38%;
+  --cols: 3;
+}
+
+.combat-vehicle-sheet .cv-vtol-diagram .cv-armor-right {
+  top: 25%;
+  left: 62%;
+  --cols: 3;
+}
+
+.combat-vehicle-sheet .cv-vtol-diagram .cv-armor-rear {
+  top: 84%;
+  left: 50%;
+  --cols: 3;
+}
+
+.combat-vehicle-sheet .cv-vtol-diagram .cv-armor-rotor-left,
+.combat-vehicle-sheet .cv-vtol-diagram .cv-armor-rotor-right {
+  top: 33.5%;
+  transform: translate(-50%, -50%);
+  --cols: 3;
+}
+
+.combat-vehicle-sheet .cv-vtol-diagram .cv-armor-rotor-left {
+  left: 7%;
+}
+
+.combat-vehicle-sheet .cv-vtol-diagram .cv-armor-rotor-right {
+  left: 93%;
+}
+
+.combat-vehicle-sheet .cv-vtol-diagram .cv-structure-front {
+  top: 25%;
+  left: 50%;
+  --cols: 5;
+}
+
+.combat-vehicle-sheet .cv-vtol-diagram .cv-structure-left {
+  top: 46%;
+  left: 46%;
+  --cols: 2;
+}
+
+.combat-vehicle-sheet .cv-vtol-diagram .cv-structure-right {
+  top: 46%;
+  left: 54%;
+  --cols: 2;
+}
+
+.combat-vehicle-sheet .cv-vtol-diagram .cv-structure-rear {
+  top: 62%;
+  left: 50%;
+  --cols: 3;
+}
+
+.combat-vehicle-sheet .cv-vtol-diagram .cv-structure-rotor {
+  top: 34%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  --cols: 10;
+}
+
 
 @media (max-width: 1180px) {
   .combat-vehicle-sheet .cv-main-top {

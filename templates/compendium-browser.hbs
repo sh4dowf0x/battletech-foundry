@@ -1,0 +1,136 @@
+<div class="atow-browser-shell">
+  <header class="atow-browser-header">
+    <div class="atow-browser-heading">
+      <div class="atow-browser-kicker">BattleTech Library</div>
+      <h1>Compendium Browser</h1>
+      <p>Double-click an entry to open it, or drag it where you need it.</p>
+    </div>
+  </header>
+
+  <div class="atow-browser-commandbar">
+    <div class="atow-browser-searchbar">
+      <i class="fa-solid fa-magnifying-glass"></i>
+      <input
+        type="search"
+        value="{{state.search}}"
+        placeholder="Search by name, role, tech base, equipment type..."
+        autocomplete="off"
+        data-browser-search />
+    </div>
+
+    <nav class="atow-browser-categories" aria-label="Compendium categories">
+      {{#each categories as |category|}}
+        <button
+          type="button"
+          class="atow-browser-category {{#if category.active}}active{{/if}}"
+          data-browser-category="{{category.id}}">
+          <i class="{{category.icon}}"></i>
+          <span>{{category.label}}</span>
+          <b>{{category.count}}</b>
+        </button>
+      {{/each}}
+    </nav>
+
+    <button type="button" class="atow-browser-icon-button" data-browser-refresh title="Refresh compendium index">
+      <i class="fa-solid fa-arrows-rotate"></i>
+    </button>
+  </div>
+
+  <div class="atow-browser-filterbar">
+    <span class="atow-browser-filter-icon"><i class="fa-solid fa-filter"></i></span>
+
+    <label class="filter-compendium">
+      <span>Compendium</span>
+      <select data-browser-filter="pack">
+        <option value="">All Compendiums</option>
+        {{selectOptions packOptions selected=state.pack localize=false}}
+      </select>
+    </label>
+
+    <label>
+      <span>Weight Class</span>
+      <select data-browser-filter="weight">
+        <option value="">Any Weight</option>
+        {{selectOptions weightOptions selected=state.weight localize=false}}
+      </select>
+    </label>
+
+    <label class="filter-era">
+      <span>Introduction Era</span>
+      <select data-browser-filter="era" title="Derived from the design's Year Produced field">
+        <option value="">Any Era</option>
+        {{selectOptions eraOptions selected=state.era localize=false}}
+      </select>
+    </label>
+
+    <label>
+      <span>Tech Base</span>
+      <select data-browser-filter="techBase">
+        <option value="">Any Tech Base</option>
+        {{selectOptions techBaseOptions selected=state.techBase localize=false}}
+      </select>
+    </label>
+
+    <span class="atow-browser-filter-spacer"></span>
+    <strong data-browser-result-count>{{totalEntries}} results</strong>
+    <button type="button" class="atow-browser-clear" data-browser-clear>Clear Filters</button>
+  </div>
+
+  <main class="atow-browser-results">
+    <div class="atow-browser-result-toolbar">
+      <span><i class="fa-solid fa-grip-dots-vertical"></i> Drag entries from the browser</span>
+    </div>
+
+    <div class="atow-browser-grid">
+      {{#each entries as |entry|}}
+        <article
+          class="atow-browser-card"
+          data-entry-key="{{entry.key}}"
+          draggable="true"
+          title="Double-click to open {{entry.name}}">
+          <div class="atow-browser-card-art">
+            {{#if entry.isVideo}}
+              <video src="{{entry.img}}" muted loop autoplay playsinline></video>
+            {{else}}
+              <img src="{{entry.img}}" alt="{{entry.name}}" loading="lazy" />
+            {{/if}}
+            <span class="atow-browser-type">{{entry.typeLabel}}</span>
+          </div>
+
+          <div class="atow-browser-card-content">
+            <div class="atow-browser-card-title">
+              <div>
+                <h2>{{entry.name}}</h2>
+                <span>{{entry.packLabel}}</span>
+              </div>
+              <button type="button" data-browser-open title="Open {{entry.name}}">
+                <i class="fa-solid fa-arrow-up-right-from-square"></i>
+              </button>
+            </div>
+
+            {{#if entry.stats}}
+              <dl class="atow-browser-stats">
+                {{#each entry.stats as |stat|}}
+                  <div>
+                    <dt>{{stat.label}}</dt>
+                    <dd>{{stat.value}}</dd>
+                  </div>
+                {{/each}}
+              </dl>
+            {{/if}}
+
+            {{#if entry.summary}}
+              <p class="atow-browser-summary">{{entry.summary}}</p>
+            {{/if}}
+          </div>
+        </article>
+      {{/each}}
+    </div>
+
+    <div class="atow-browser-empty" data-browser-empty hidden>
+      <i class="fa-solid fa-radar"></i>
+      <h2>No matching entries</h2>
+      <p>Try broadening your search or clearing one of the filters.</p>
+    </div>
+  </main>
+</div>

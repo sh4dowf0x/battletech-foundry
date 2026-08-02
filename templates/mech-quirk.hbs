@@ -1,0 +1,56 @@
+<div class="{{cssClass}} atow-item-shell" autocomplete="off">
+  <section class="atow-item-hero" style="grid-template-columns:1fr;">
+    <div class="atow-item-hero-main" style="display:flex; flex-direction:column; gap:10px; min-width:0;">
+      <div class="atow-item-kicker">BattleMech Design Quirk</div>
+
+      <div class="atow-item-title">
+        <input name="name" type="text" value="{{item.name}}" placeholder="Design Quirk Name" />
+      </div>
+
+      <div class="atow-field-grid compact-2">
+        <div class="atow-field">
+          <label class="atow-compact-label">Quirk Type</label>
+          <select name="system.polarity">
+            {{selectOptions quirkTypeChoices selected=system.polarity localize=false}}
+          </select>
+        </div>
+
+        <div class="atow-field">
+          <label class="atow-compact-label">Point Value</label>
+          <input name="system.points" type="number" value="{{system.points}}" min="0" max="5" step="1" />
+        </div>
+      </div>
+    </div>
+  </section>
+
+  {{#if isAccurateWeapon}}
+    <section class="atow-card">
+      <div class="atow-field">
+        <label class="atow-compact-label">Affected Weapon</label>
+        {{#if hasOwningMech}}
+          {{#if hasInstalledWeapons}}
+            <select name="system.selectedWeaponKey">
+              <option value="">Choose an installed weapon…</option>
+              {{selectOptions installedWeaponChoices selected=system.selectedWeaponKey localize=false}}
+            </select>
+            <small>Accurate Weapon applies −1 Target Number to attacks made with this specific weapon mount.</small>
+          {{else}}
+            <div class="atow-empty-note">This mech has no installed weapons available for this quirk.</div>
+          {{/if}}
+        {{else}}
+          <div class="atow-empty-note">Add this quirk to a mech before choosing its affected weapon.</div>
+        {{/if}}
+      </div>
+    </section>
+  {{/if}}
+
+  <section class="atow-card">
+    <div class="atow-field">
+      <label class="atow-compact-label">Description</label>
+      <textarea
+        name="system.description"
+        rows="12"
+        placeholder="Describe the quirk and its passive effects.">{{system.description}}</textarea>
+    </div>
+  </section>
+</div>

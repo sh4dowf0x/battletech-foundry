@@ -1,7 +1,7 @@
-<form class="{{cssClass}} combat-vehicle-sheet{{#if hideThirdColumn}} third-column-hidden{{/if}}" autocomplete="off">
+<form class="{{cssClass}} combat-vehicle-sheet{{#if isVTOL}} vtol-sheet{{/if}}{{#if hideThirdColumn}} third-column-hidden{{/if}}" autocomplete="off">
   <header class="sheet-header">
     <div class="header-left">
-      <input class="name cv-name-input" name="name" type="text" value="{{actor.name}}" placeholder="Vehicle Name" />
+      <input class="name cv-name-input" name="name" type="text" value="{{actor.name}}" placeholder="{{vehicleKindLabel}} Name" />
       <div class="cv-header-meta">
         <span>{{vehicleTypeLabel}}</span>
         <span>{{vehicleTonnage}} Tons</span>
@@ -25,7 +25,7 @@
       <div class="cv-main-top">
         <div class="cv-col cv-col-left">
           <section class="cv-panel">
-            <h3>Vehicle Data</h3>
+            <h3>{{vehicleKindLabel}} Data</h3>
 
             <div class="cv-grid cv-grid-2">
               <div class="cv-field">
@@ -85,13 +85,17 @@
 
             <div class="cv-grid cv-grid-2">
               <div class="cv-field">
-                <label>Movement</label>
+                <label>{{#if isVTOL}}Flight Movement{{else}}Movement{{/if}}</label>
                 <div class="cv-movement-stack">
                   <div class="cv-inline cv-movement-inline">
-                    <span class="cv-mini-label">C</span>
+                    <span class="cv-mini-label">{{#if isVTOL}}Cruise{{else}}C{{/if}}</span>
                     <input class="cv-mini-inline-input" name="system.vehicle.movement.cruise" type="number" value="{{system.vehicle.movement.cruise}}" />
-                    <span class="cv-mini-label">F</span>
+                    <span class="cv-mini-label">{{#if isVTOL}}Flank{{else}}F{{/if}}</span>
                     <input class="cv-mini-inline-input" name="system.vehicle.movement.flank" type="number" value="{{system.vehicle.movement.flank}}" />
+                    {{#if isVTOL}}
+                      <span class="cv-mini-label">Elevation</span>
+                      <input class="cv-mini-inline-input" name="system.vehicle.elevation" type="number" value="{{system.vehicle.elevation}}" min="0" />
+                    {{/if}}
                   </div>
                   <div class="cv-movement-status-row">
                     <span class="cv-mini-label">This Turn</span>
@@ -102,6 +106,15 @@
                     <span class="cv-mini-label">Mode</span>
                     <span class="cv-move-pill">{{movementStatus.mode}}</span>
                   </div>
+                  {{#if isVTOL}}
+                    <div class="cv-movement-status-row">
+                      <span class="cv-mini-label">Effective Cruise</span>
+                      <span class="cv-move-pill">{{vtolMovement.effectiveCruise}}</span>
+                      <span class="cv-mini-label">Effective Flank</span>
+                      <span class="cv-move-pill">{{vtolMovement.effectiveFlank}}</span>
+                      {{#if vtolMovement.crashed}}<span class="cv-move-pill">Crashed</span>{{/if}}
+                    </div>
+                  {{/if}}
                 </div>
               </div>
             </div>
@@ -177,14 +190,14 @@
               </div>
 
               <div class="cv-field">
-                <label>Driving</label>
+                <label>{{#if isVTOL}}Piloting{{else}}Driving{{/if}}</label>
                 <input name="system.crew.driving" type="number" value="{{system.crew.driving}}" />
               </div>
             </div>
 
             <div class="cv-grid cv-grid-2">
               <div class="cv-field">
-                <label>Commander Hit</label>
+                <label>{{#if isVTOL}}Co-Pilot Hit{{else}}Commander Hit{{/if}}</label>
                 <div class="cv-track">
                   {{#each crewTracks.commander as |p|}}
                     <span class="cv-track-box {{#if p.filled}}filled{{/if}}" data-track="crew.commanderHit" data-value="{{p.n}}">
@@ -195,7 +208,7 @@
               </div>
 
               <div class="cv-field">
-                <label>Driver Hit</label>
+                <label>{{#if isVTOL}}Pilot Hit{{else}}Driver Hit{{/if}}</label>
                 <div class="cv-track">
                   {{#each crewTracks.driver as |p|}}
                     <span class="cv-track-box {{#if p.filled}}filled{{/if}}" data-track="crew.driverHit" data-value="{{p.n}}">
@@ -244,6 +257,60 @@
           <section class="cv-panel">
             <h3>Critical Damage</h3>
 
+            {{#if isVTOL}}
+            <div class="cv-crit-grid">
+              <div class="cv-crit-col">
+                <div class="cv-field">
+                  <label>Sensor Hits</label>
+                  <div class="cv-track">
+                    {{#each critTracks.sensor as |p|}}
+                      <span class="cv-track-box {{#if p.filled}}filled{{/if}}" data-track="crit.sensorHits" data-value="{{p.n}}">{{p.n}}</span>
+                    {{/each}}
+                  </div>
+                </div>
+
+                <div class="cv-field">
+                  <label>Rotor Hits</label>
+                  <input name="system.crit.rotorHits" type="number" value="{{system.crit.rotorHits}}" min="0" />
+                </div>
+
+                <div class="cv-field">
+                  <label>Flight Stabilizer Hits</label>
+                  <div class="cv-track">
+                    {{#each critTracks.flightStabilizer as |p|}}
+                      <span class="cv-track-box {{#if p.filled}}filled{{/if}}" data-track="crit.flightStabilizerHits" data-value="{{p.n}}">{{p.n}}</span>
+                    {{/each}}
+                  </div>
+                </div>
+              </div>
+
+              <div class="cv-crit-col">
+                <div class="cv-field">
+                  <label>Engine Hits</label>
+                  <div class="cv-track">
+                    {{#each critTracks.engine as |p|}}
+                      <span class="cv-track-box {{#if p.filled}}filled{{/if}}" data-track="crit.engineHits" data-value="{{p.n}}">{{p.n}}</span>
+                    {{/each}}
+                  </div>
+                </div>
+
+                <label class="cv-check">
+                  <input type="checkbox" name="system.crit.rotorsDestroyed" {{checked system.crit.rotorsDestroyed}} />
+                  <span>Rotors Destroyed</span>
+                </label>
+
+                <div class="cv-field">
+                  <label>Weapon Stabilizers</label>
+                  <div class="cv-inline cv-inline-checks">
+                    <label class="cv-check"><input type="checkbox" name="system.crit.location.front" {{checked system.crit.location.front}} /><span>Front</span></label>
+                    <label class="cv-check"><input type="checkbox" name="system.crit.location.left" {{checked system.crit.location.left}} /><span>Left</span></label>
+                    <label class="cv-check"><input type="checkbox" name="system.crit.location.right" {{checked system.crit.location.right}} /><span>Right</span></label>
+                    <label class="cv-check"><input type="checkbox" name="system.crit.location.rear" {{checked system.crit.location.rear}} /><span>Rear</span></label>
+                  </div>
+                </div>
+              </div>
+            </div>
+            {{else}}
             <div class="cv-crit-grid">
               <div class="cv-crit-col">
                 <label class="cv-check">
@@ -321,6 +388,7 @@
                 </div>
               </div>
             </div>
+            {{/if}}
           </section>
         </div>
 
@@ -345,13 +413,26 @@
                 <label>Rear</label>
                 <input class="cv-armor-max" name="system.armor.rear.max" type="number" value="{{armor.rear.max}}" min="0" />
               </div>
-              <div class="cv-armor-control">
-                <label>Turret</label>
-                <input class="cv-armor-max" name="system.armor.turret.max" type="number" value="{{armor.turret.max}}" min="0" />
-              </div>
+              {{#if isVTOL}}
+                <div class="cv-armor-control">
+                  <label>Rotors</label>
+                  <input class="cv-armor-max" name="system.armor.rotor.max" type="number" value="{{armor.rotor.max}}" min="0" />
+                </div>
+              {{else}}
+                <div class="cv-armor-control">
+                  <label>Turret</label>
+                  <input class="cv-armor-max" name="system.armor.turret.max" type="number" value="{{armor.turret.max}}" min="0" />
+                </div>
+              {{/if}}
             </div>
 
-            <div class="cv-armor-diagram">
+            {{#if isVTOL}}
+              <div class="cv-vtol-structure-summary">
+                Internal Structure: <strong>{{structurePerLocation}}</strong> per location
+              </div>
+            {{/if}}
+
+            <div class="cv-armor-diagram{{#if isVTOL}} cv-vtol-diagram{{/if}}">
               <div class="cv-armor-loc cv-armor-front">
                 <div class="cv-armor-pips">
                   {{#each armor.front.pips as |p|}}
@@ -368,13 +449,30 @@
                 </div>
               </div>
 
-              <div class="cv-armor-loc cv-armor-turret">
-                <div class="cv-armor-pips">
-                  {{#each armor.turret.pips as |p|}}
-                    <span class="cv-armor-pip {{#if p.filled}}filled{{/if}}" data-loc="turret" data-pip="{{p.n}}"></span>
-                  {{/each}}
+              {{#if isVTOL}}
+                <div class="cv-armor-loc cv-armor-rotor-left">
+                  <div class="cv-armor-pips">
+                    {{#each armor.rotor.leftPips as |p|}}
+                      <span class="cv-armor-pip {{#if p.filled}}filled{{/if}}" data-loc="rotor" data-pip="{{p.n}}"></span>
+                    {{/each}}
+                  </div>
                 </div>
-              </div>
+                <div class="cv-armor-loc cv-armor-rotor-right">
+                  <div class="cv-armor-pips">
+                    {{#each armor.rotor.rightPips as |p|}}
+                      <span class="cv-armor-pip {{#if p.filled}}filled{{/if}}" data-loc="rotor" data-pip="{{p.n}}"></span>
+                    {{/each}}
+                  </div>
+                </div>
+              {{else}}
+                <div class="cv-armor-loc cv-armor-turret">
+                  <div class="cv-armor-pips">
+                    {{#each armor.turret.pips as |p|}}
+                      <span class="cv-armor-pip {{#if p.filled}}filled{{/if}}" data-loc="turret" data-pip="{{p.n}}"></span>
+                    {{/each}}
+                  </div>
+                </div>
+              {{/if}}
 
               <div class="cv-armor-loc cv-armor-right">
                 <div class="cv-armor-pips">
@@ -410,11 +508,19 @@
                 {{/each}}
               </div>
 
-              <div class="cv-structure-loc cv-structure-turret">
-                {{#each structure.turret.pips as |p|}}
-                  <span class="cv-structure-pip {{#if p.filled}}filled{{/if}}" data-loc="turret" data-pip="{{p.n}}"></span>
-                {{/each}}
-              </div>
+              {{#if isVTOL}}
+                <div class="cv-structure-loc cv-structure-rotor">
+                  {{#each structure.rotor.pips as |p|}}
+                    <span class="cv-structure-pip {{#if p.filled}}filled{{/if}}" data-loc="rotor" data-pip="{{p.n}}"></span>
+                  {{/each}}
+                </div>
+              {{else}}
+                <div class="cv-structure-loc cv-structure-turret">
+                  {{#each structure.turret.pips as |p|}}
+                    <span class="cv-structure-pip {{#if p.filled}}filled{{/if}}" data-loc="turret" data-pip="{{p.n}}"></span>
+                  {{/each}}
+                </div>
+              {{/if}}
 
               <div class="cv-structure-loc cv-structure-rear">
                 {{#each structure.rear.pips as |p|}}

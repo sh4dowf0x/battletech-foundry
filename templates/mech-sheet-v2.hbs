@@ -61,7 +61,7 @@
     }
 
     /* ------------------------------------------------------------
-       Armor controls compacting + summary header
+       Armor summary header
        ------------------------------------------------------------ */
     .mech-sheet .armor-summary {
       margin: 4px 0 8px 0;
@@ -72,30 +72,14 @@
       margin-left: 6px;
     }
 
-    .mech-sheet .armor-controls {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 4px 10px;
-      margin-bottom: 6px;
-    }
-
-    .mech-sheet .armor-control {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 6px;
-    }
-
-    .mech-sheet .armor-control label {
-      font-size: 11px;
-      opacity: 0.95;
-      margin: 0;
+    .mech-sheet .armor-summary .armor-tonnage {
+      opacity: 0.8;
     }
 
     .mech-sheet input.armor-max {
-      width: 48px;
-      height: 22px;
-      padding: 0 4px;
+      width: 44px;
+      height: 20px;
+      padding: 0 3px;
       font-size: 12px;
     }
 
@@ -272,6 +256,26 @@
       {{/each}}
     </div>
     <div class="header-actions">
+      {{#if hasMASC}}
+      <button
+        type="button"
+        class="header-action-btn{{#if isMASCActive}} is-active{{/if}}"
+        data-header-action="masc"
+        data-macro-label="Activate MASC"
+        data-macro-img="icons/svg/lightning.svg"
+        data-tooltip="{{#if isMASCOperational}}{{#if isMASCActive}}MASC active: Running MP is {{enhancedRunMultiplier}}x Walking MP{{else}}{{#if isMASCFailed}}MASC activation failed this turn{{else}}Activate MASC before movement (current avoid number {{mascAvoidLabel}}){{/if}}{{/if}}{{else}}MASC is damaged and inoperable{{/if}}"
+        draggable="true">{{#if isMASCActive}}MASC Active{{else}}{{#if isMASCFailed}}MASC Failed{{else}}MASC{{/if}}{{/if}}</button>
+      {{/if}}
+      {{#if hasSupercharger}}
+      <button
+        type="button"
+        class="header-action-btn{{#if isSuperchargerActive}} is-active{{/if}}"
+        data-header-action="supercharger"
+        data-macro-label="Activate Supercharger"
+        data-macro-img="icons/svg/lightning.svg"
+        data-tooltip="{{#if isSuperchargerOperational}}{{#if isSuperchargerActive}}Supercharger active: Running MP is {{enhancedRunMultiplier}}x Walking MP{{else}}{{#if isSuperchargerFailed}}Supercharger destroyed by failed activation{{else}}Activate before movement (current avoid number {{superchargerAvoidLabel}}){{/if}}{{/if}}{{else}}Supercharger is damaged or improperly installed{{/if}}"
+        draggable="true">{{#if isSuperchargerActive}}Supercharger Active{{else}}{{#if isSuperchargerFailed}}Supercharger Failed{{else}}Supercharger{{/if}}{{/if}}</button>
+      {{/if}}
       {{#if hasAMS}}
       <button
         type="button"
@@ -943,13 +947,26 @@
 
       <div class="special-options">
         <div class="special-options-title">Special Options</div>
-        <label class="special-option-row">
+        <label class="special-option-row" data-tooltip="Uses 6 CT critical slots and weighs half as much as a standard gyro.">
           <input type="checkbox" name="system.mech.xlGyro" {{checked specialOptions.xlGyro}} />
           <span>XL Gyro</span>
         </label>
-        <div class="special-option-note">
-          CT slots fill with 6 XL Gyro crits. Gyro weight: {{specialOptions.gyroTons}}t.
-        </div>
+        <label class="special-option-row" data-tooltip="Uses 2 CT critical slots and weighs 1.5 times as much as a standard gyro. Current gyro weight: {{specialOptions.gyroTons}}t.">
+          <input type="checkbox" name="system.mech.compactGyro" {{checked specialOptions.compactGyro}} />
+          <span>Compact Gyro</span>
+        </label>
+        <label class="special-option-row" data-tooltip="Inner Sphere only. Uses 4 CT slots, weighs twice as much as a standard gyro, and takes 3 critical hits to destroy.">
+          <input type="checkbox" name="system.mech.heavyDutyGyro" {{checked specialOptions.heavyDutyGyro}} />
+          <span>Heavy-Duty Gyro</span>
+        </label>
+        <label class="special-option-row" data-tooltip="Gives each of the gyro's {{specialOptions.gyroSlots}} critical slots 1 point of armor. Adds {{specialOptions.armoredGyroTons}} tons.">
+          <input type="checkbox" name="system.mech.armoredGyro" {{checked specialOptions.armoredGyro}} />
+          <span>Armored Gyro</span>
+        </label>
+        <label class="special-option-row" data-tooltip="Weighs 2 tons, frees Head slots 5–6, and adds +1 TN to all Piloting Skill Rolls.">
+          <input type="checkbox" name="system.mech.smallCockpit" {{checked specialOptions.smallCockpit}} />
+          <span>Small Cockpit</span>
+        </label>
       </div>
     </div>
 
@@ -1091,32 +1108,48 @@
     <h3>Armor Diagram</h3>
 
     <div class="armor-summary">
-      <label>Total Armor Factor:</label>
-      <span><b>{{armorSummary.current}}</b> / {{armorSummary.max}}</span>
-      <span class="armor-allowed">(Allowed: {{armorSummary.allowed}})</span>
-    </div>
-
-    <div class="armor-controls">
-      {{#each armorLocList as |loc|}}
-        <div class="armor-control">
-          <label>{{loc.label}}</label>
-          <input class="armor-max" name="system.armor.{{loc.key}}.max" type="number" value="{{loc.max}}" min="0" />
-        </div>
-      {{/each}}
+      <div class="armor-summary-total">
+        <label>Total Armor Factor:</label>
+        <span><b>{{armorSummary.current}}</b> / {{armorSummary.max}}</span>
+        <span class="armor-allowed">(Max: {{armorSummary.allowed}})</span>
+        <span class="armor-tonnage">(Armor: {{armorSummary.tons}}t)</span>
+      </div>
+      <div class="armor-summary-type">
+        <label for="armor-type-{{actor.id}}">Armor Type:</label>
+        <select
+          id="armor-type-{{actor.id}}"
+          class="armor-type-select"
+          name="system.mech.armorType"
+          title="{{#if armorTypeAutoDetected}}Detected from armor components installed in critical slots. {{/if}}{{armorTypeRequirement}}"
+        >
+          {{selectOptions armorTypeOptions selected=armorType}}
+        </select>
+      </div>
     </div>
 
     <div class="armor-diagram">
       {{#each armorLocList as |loc|}}
         <div class="armor-loc armor-loc-{{loc.key}}" data-armor-loc="{{loc.key}}">
-          {{#each loc.pips as |p|}}
-            <span class="armor-pip {{#if p.filled}}filled{{/if}}" data-loc="{{loc.key}}" data-pip="{{p.n}}"></span>
-          {{/each}}
+          <input
+            class="armor-max armor-diagram-value"
+            name="system.armor.{{loc.key}}.max"
+            type="number"
+            value="{{loc.max}}"
+            min="0"
+            aria-label="{{loc.label}} armor"
+            title="{{loc.label}} Armor"
+          />
+          <div class="armor-pips">
+            {{#each loc.pips as |p|}}
+              <span class="armor-pip {{#if p.filled}}filled{{else}}{{#if p.partial}}partial{{/if}}{{/if}}" data-loc="{{loc.key}}" data-pip="{{p.n}}"></span>
+            {{/each}}
+          </div>
         </div>
       {{/each}}
     </div>
 
     <div class="armor-hint">
-      Click pips to mark damage (filled = damage taken). Edit the number field to set pip count for each location.
+      Click pips to mark damage (filled = damage taken{{#if armorSummary.hardened}}, half-filled = 1 damage on Hardened Armor{{/if}}). Edit the number above each location to set its armor.
     </div>
   </section>
 
@@ -1124,27 +1157,25 @@
 <section class="panel structure-panel">
   <h3>Internal Structure</h3>
 
-  <div class="structure-controls">
-    {{#each structureLocList as |loc|}}
-      <div class="structure-control">
-        <label>{{loc.label}}</label>
-        <span class="move-pill">{{loc.max}}</span>
-      </div>
-    {{/each}}
-  </div>
-
   <div class="structure-diagram">
     {{#each structureLocList as |loc|}}
       <div class="structure-loc structure-loc-{{loc.key}}" data-structure-loc="{{loc.key}}">
-        {{#each loc.pips as |p|}}
-          <span class="structure-pip {{#if p.filled}}filled{{/if}}" data-loc="{{loc.key}}" data-pip="{{p.n}}"></span>
-        {{/each}}
+        <span
+          class="structure-diagram-value"
+          aria-label="{{loc.label}} internal structure"
+          title="{{loc.label}} Internal Structure"
+        >{{loc.max}}</span>
+        <div class="structure-pips">
+          {{#each loc.pips as |p|}}
+            <span class="structure-pip {{#if p.filled}}filled{{/if}}" data-loc="{{loc.key}}" data-pip="{{p.n}}"></span>
+          {{/each}}
+        </div>
       </div>
     {{/each}}
   </div>
 
   <div class="structure-hint">
-    Click pips to mark structure damage (filled = damage taken). Structure points are derived from tonnage.
+    Click pips to mark structure damage (filled = damage taken). The number above each location is derived from tonnage.
   </div>
 </section>
 
@@ -1204,6 +1235,52 @@
           </div>
         </div>
       {{/each}}
+    </div>
+  </section>
+
+  <section class="panel quirks-panel">
+    <div class="quirks-panel-header">
+      <h3>Design Quirks</h3>
+      <button type="button" class="quirk-add" title="Create a new Design Quirk">
+        <i class="fas fa-plus"></i> Add Quirk
+      </button>
+    </div>
+
+    <div class="drop-zone quirks-drop-zone" data-drop-zone="quirks">
+      {{#if hasMechQuirks}}
+        <div class="quirk-list">
+          {{#each mechQuirks as |quirk|}}
+            <div class="quirk-row quirk-{{quirk.polarity}}" data-item-id="{{quirk.id}}">
+              <span class="quirk-badge">{{#if quirk.isPositive}}Positive{{else}}Negative{{/if}}</span>
+              <div class="quirk-content">
+                <div class="quirk-title-line">
+                  <button type="button" class="quirk-edit quirk-name" title="Open {{quirk.name}}">
+                    {{quirk.name}}
+                  </button>
+                  <span class="quirk-points">{{quirk.pointsLabel}}</span>
+                </div>
+                {{#if quirk.selectedWeaponLabel}}
+                  <div class="quirk-assignment">Affected Weapon: {{quirk.selectedWeaponLabel}}</div>
+                {{else}}
+                  {{#if quirk.needsWeaponSelection}}
+                    <div class="quirk-assignment quirk-assignment-warning">Affected Weapon: Not selected</div>
+                  {{/if}}
+                {{/if}}
+                {{#if quirk.description}}
+                  <div class="quirk-description">{{quirk.description}}</div>
+                {{/if}}
+              </div>
+              <button type="button" class="item-delete quirk-delete" title="Remove {{quirk.name}}">
+                <i class="fas fa-trash"></i>
+              </button>
+            </div>
+          {{/each}}
+        </div>
+      {{else}}
+        <div class="quirks-empty">
+          Drag Mech Design Quirk items here, or create one with Add Quirk.
+        </div>
+      {{/if}}
     </div>
   </section>
 </div>

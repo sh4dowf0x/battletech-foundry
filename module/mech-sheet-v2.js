@@ -1,7 +1,7 @@
 // systems/atow-battletech/mech-sheet.js
 // lets fix ferro fibrous armor
 
-import { promptAndRollWeaponAttack, promptAndRollMeleeAttack, resolveAmmoExplosionEvent, rollHitLocation, applyMechDamageCluster, applyMechPilotHit, resolvePilotSeatbeltCheck, syncNarcPodsForDestroyedLocations, getHatchetProfile, getSwordProfile, getRotaryACProfile } from "./mech-attack.js";
+import { promptAndRollWeaponAttack, promptAndRollMeleeAttack, resolveAmmoExplosionEvent, rollHitLocation, applyMechDamageCluster, applyMechPilotHit, resolvePilotSeatbeltCheck, syncNarcPodsForDestroyedLocations, getHatchetProfile, getSwordProfile, getRetractableBladeProfile, getRotaryACProfile } from "./mech-attack.js";
 import { ATOW_AUDIO_CUES, ATOW_AUDIO_EFFECTS, enqueueActorAudioCues, playActorMechExplosionEffect, playActorPowerRestoredAnnouncement, playActorShutdownAnnouncement } from "./audio-helper.js";
 
 const SYSTEM_ID = "atow-battletech";
@@ -16,6 +16,7 @@ const clamp = (n, min, max) => Math.min(max, Math.max(min, n));
 const HEAT_HARD_CAP = 100;
 const getCurrentCombatTurnStamp = () => `${game.combat?.id ?? "no-combat"}:${game.combat?.round ?? 0}:${game.combat?.turn ?? 0}`;
 const createCritMountId = () => foundry.utils.randomID();
+const handledMechSheetDrops = new WeakSet();
 
 
 // ------------------------------------------------------------
@@ -180,6 +181,27 @@ function getEngineTonnageFromEngineText(engineText) {
   const rating = parseEngineRating(engineText);
   const standard = getEngineTonnageFromRating(rating);
 
+  if (_isXXLEngineText(engineText)) {
+    // XXL engines weigh one-third of a standard fusion engine, rounded up
+    // to the nearest half-ton (minimum 0.5 ton).
+    if (standard <= 0) return 0;
+    return Math.max(0.5, Math.ceil((standard / 3) * 2) / 2);
+  }
+
+  if (_isCompactEngineText(engineText)) {
+    // Compact fusion engines weigh 150% of a standard fusion engine, rounded
+    // up to the nearest half-ton.
+    if (standard <= 0) return 0;
+    return Math.max(0.5, Math.ceil(standard * 1.5 * 2) / 2);
+  }
+
+  if (_isLightFusionEngineText(engineText)) {
+    // Light Fusion engines weigh 75% of a standard fusion engine, rounded up
+    // to the nearest half-ton.
+    if (standard <= 0) return 0;
+    return Math.max(0.5, Math.ceil(standard * 0.75 * 2) / 2);
+  }
+
   if (_isXLEngineText(engineText)) {
     // XL engines weigh half a standard engine, rounded up to the nearest 0.5 ton, minimum 0.5t.
     // Because standard engine weights are in 0.5t increments, this is equivalent to ceil(standard)/2.
@@ -220,8 +242,17 @@ function computeDerivedMovement(engineRatingRaw, tonnageRaw, opts = {}) {
   // Jumping MP: only if jump jets are installed.
   // By default, we cap jump MP to the number of installed jump jets (1 jet = 1 MP).
   const jumpJetCount = Math.max(0, Math.floor(Number(opts?.jumpJetCount ?? 0) || 0));
+  const improvedJumpJetCount = Math.max(0, Math.floor(Number(opts?.improvedJumpJetCount ?? 0) || 0));
   const hasJumpJets = Boolean(opts?.hasJumpJets ?? (jumpJetCount > 0));
-  const jump = hasJumpJets ? (jumpJetCount > 0 ? Math.min(walk, jumpJetCount) : walk) : 0;
+  const jump = hasJumpJets
+    ? (jumpJetCount > 0
+      ? Math.min(
+        run,
+        jumpJetCount,
+        improvedJumpJetCount > 0 ? walk + improvedJumpJetCount : walk
+      )
+      : walk)
+    : 0;
 
   return { walk, run, jump };
 }
@@ -290,6 +321,9 @@ function collectCoolingFromEmbeddedDocs(docs, { isDouble = false } = {}) {
 
   for (const it of (docs ?? [])) {
     if (!it) continue;
+    // Partial Wing cooling is granted once by the paired LT/RT installation,
+    // never once per embedded document or wing half.
+    if (isPartialWingName(it?.name)) continue;
     const isSink = _isHeatSinkDoc(it);
 
     // Heat sinks should always count even if they don't declare a dissipation value.
@@ -367,6 +401,7 @@ async function collectCoolingFromCritSlots(actor, { isDouble = false } = {}) {
   for (const st of starts) {
     const doc = st.uuid ? uuidToDoc.get(st.uuid) : null;
     const label = st.label || doc?.name || "";
+    if (isPartialWingName(label) || isPartialWingName(doc?.name)) continue;
 
     // Dissipation: anything with a positive heatDissipation contributes.
     // Crit slots represent a single installed component; ignore any embedded quantity fields.
@@ -449,46 +484,78 @@ async function countHeatSinkComponentsFromCritSlots(actor) {
   return Math.max(0, count);
 }
 
+function _isImprovedJumpJetText(text) {
+  return /\bimproved\s+jump\s*jets?\b/i.test(String(text ?? ""));
+}
+
+function getJumpJetProfile(tonnage, { improved = false } = {}) {
+  const tons = Number(tonnage ?? 0) || 0;
+  const standardWeight = tons <= 55 ? 0.5 : (tons <= 85 ? 1 : 2);
+  return {
+    improved: Boolean(improved),
+    tonnage: improved ? standardWeight * 2 : standardWeight,
+    critSlots: improved ? 2 : 1
+  };
+}
+
 /**
- * Count installed Jump Jets from crit slots (1 jet = 1 crit slot).
- * We treat a slot as a jump jet if its stored label looks like a jump jet, or its UUID resolves to a Jump Jet item.
+ * Count mounted Jump Jet components, not occupied slots. Improved Jump Jets
+ * span two critical slots but still provide only one Jump MP each.
  */
-async function countJumpJetComponentsFromCritSlots(actor) {
+async function getJumpJetInstallationFromCritSlots(actor) {
   const system = actor?.system ?? {};
   const locKeys = ["head", "ct", "lt", "rt", "la", "ra", "ll", "rl"];
-  let count = 0;
-
-  /** @type {Promise<void>[]} */
+  const result = {
+    standardTotal: 0,
+    standardIntact: 0,
+    improvedTotal: 0,
+    improvedIntact: 0,
+    total: 0,
+    intact: 0
+  };
   const pending = [];
 
   for (const locKey of locKeys) {
     const slots = _getCritSlotsArray(system, locKey);
-    for (const slot of slots) {
+    for (let index = 0; index < slots.length; index++) {
+      const slot = slots[index];
       if (!slot) continue;
-
-      // Skip multi-slot continuations and destroyed components (they don't function / don't count).
-      if (slot.partOf) continue;
-      if (slot.destroyed) continue;
-
-      const label = String(slot.label ?? "");
-      if (_isJumpJetText(label)) {
-        count += 1;
-        continue;
-      }
-
+      if (slot.partOf !== undefined && slot.partOf !== null) continue;
+      const label = String(slot.label ?? "").trim();
       const uuid = String(slot.uuid ?? "");
-      if (uuid) {
-        pending.push(
-          isJumpJetUuid(uuid)
-            .then((isJJ) => { if (isJJ) count += 1; })
-            .catch(() => {}) // ignore resolution failures; just treat as not a jump jet
-        );
+      const record = (name) => {
+        if (!_isJumpJetText(name)) return;
+        const improved = _isImprovedJumpJetText(name);
+        const span = Math.max(1, Number(slot?.span ?? (improved ? 2 : 1)) || 1);
+        let destroyed = false;
+        for (let offset = 0; offset < span && (index + offset) < slots.length; offset++) {
+          destroyed ||= Boolean(slots[index + offset]?.destroyed);
+        }
+        const prefix = improved ? "improved" : "standard";
+        result[`${prefix}Total`] += 1;
+        if (!destroyed) result[`${prefix}Intact`] += 1;
+      };
+
+      if (_isJumpJetText(label)) record(label);
+      else if (uuid) {
+        pending.push((async () => {
+          try {
+            const doc = await fromUuid(uuid);
+            record(String(doc?.name ?? ""));
+          } catch (_) {}
+        })());
       }
     }
   }
 
   if (pending.length) await Promise.all(pending);
-  return count;
+  result.total = result.standardTotal + result.improvedTotal;
+  result.intact = result.standardIntact + result.improvedIntact;
+  return result;
+}
+
+async function countJumpJetComponentsFromCritSlots(actor) {
+  return (await getJumpJetInstallationFromCritSlots(actor)).intact;
 }
 
 
@@ -496,7 +563,566 @@ async function countJumpJetComponentsFromCritSlots(actor) {
 // Triple-Strength Myomer (TSM) helpers
 // ------------------------------------------------------------
 const _TSM_LABEL_RE = /^triple\s*[-]?\s*strength\s*myomer$/i;
-const _MASC_LABEL_RE = /\bmasc\b/i;
+const _MASC_LABEL_RE = /(?:\bmasc\b|\bmyomer\s+acceleration\s+signal\s+circuitry\b)/i;
+const _SUPERCHARGER_LABEL_RE = /\bsuper\s*[-]?\s*charger\b/i;
+const _PARTIAL_WING_LABEL_RE = /^partial\s*[-]?\s*wing(?:\s*\((?:clan|inner\s+sphere)\))?$/i;
+
+function isMASCName(name) {
+  return _MASC_LABEL_RE.test(String(name ?? "").trim());
+}
+
+function isSuperchargerName(name) {
+  return _SUPERCHARGER_LABEL_RE.test(String(name ?? "").trim());
+}
+
+function getMASCProfile(actor, { tonnage = null, techBase = null } = {}) {
+  const system = actor?.system ?? {};
+  const resolvedTonnage = normalizeMechTonnage(tonnage ?? system?.mech?.tonnage ?? system?.tonnage ?? 0);
+  const resolvedTechBase = techBase ?? _getMechTechBase(actor, system?.mech?.engine ?? null);
+  const rate = resolvedTechBase === "clan" ? 0.04 : 0.05;
+  const rawTons = resolvedTonnage * rate;
+  // BattleTech nearest-whole rounding: exact .5 ties round down.
+  // Examples: 1.5 -> 1, 1.75 -> 2, 2.5 -> 2.
+  const derivedTons = Math.max(1, Math.floor(rawTons + 0.5 - 1e-9));
+
+  return {
+    tonnage: derivedTons,
+    critSlots: derivedTons,
+    techBase: resolvedTechBase,
+    rate
+  };
+}
+
+export function getMASCState(actor) {
+  const system = actor?.system ?? {};
+  const profile = getMASCProfile(actor);
+  const totalSlots = countComponentCritSlots(system, _MASC_LABEL_RE, { includeDestroyed: true });
+  const intactSlots = countComponentCritSlots(system, _MASC_LABEL_RE, { includeDestroyed: false });
+  const locations = [];
+
+  for (const locKey of Object.keys(system?.crit ?? {})) {
+    const slots = _getCritSlotsArray(system, locKey);
+    if (slots.some(slot => _MASC_LABEL_RE.test(String(slot?.label ?? "").trim()))) locations.push(locKey);
+  }
+
+  const locationDestroyed = locations.some(locKey => isStructureLocDestroyed(actor, locKey));
+  const installed = totalSlots >= profile.critSlots;
+  const operational = installed && intactSlots >= profile.critSlots && !locationDestroyed;
+
+  return {
+    ...profile,
+    installed,
+    operational,
+    totalSlots,
+    intactSlots,
+    locations,
+    locationDestroyed
+  };
+}
+
+export function isMASCActiveForCurrentTurn(actor, combat = game.combat) {
+  if (!actor || !combat?.started) return false;
+  const state = actor.getFlag?.(SYSTEM_ID, "mascState") ?? {};
+  const stamp = `${combat.id ?? "no-combat"}:${combat.round ?? 0}:${combat.turn ?? 0}`;
+  return Boolean(state.active && state.successful && state.activationStamp === stamp && getMASCState(actor).operational);
+}
+
+function getSuperchargerProfile(actor) {
+  const engineText = actor?.system?.mech?.engine ?? "";
+  const engineTonnage = getEngineTonnageFromEngineText(engineText);
+  const rawTonnage = Math.max(0, engineTonnage * 0.10);
+  const tonnage = rawTonnage > 0
+    ? Math.max(0.5, Math.ceil((rawTonnage * 2) - 1e-9) / 2)
+    : 0;
+  return {
+    tonnage,
+    critSlots: 1,
+    engineTonnage,
+    engineText
+  };
+}
+
+export function getSuperchargerState(actor) {
+  const system = actor?.system ?? {};
+  const profile = getSuperchargerProfile(actor);
+  const totalSlots = countComponentCritSlots(system, _SUPERCHARGER_LABEL_RE, { includeDestroyed: true });
+  const intactSlots = countComponentCritSlots(system, _SUPERCHARGER_LABEL_RE, { includeDestroyed: false });
+  const locations = [];
+  for (const locKey of Object.keys(system?.crit ?? {})) {
+    const slots = _getCritSlotsArray(system, locKey);
+    if (slots.some(slot => _SUPERCHARGER_LABEL_RE.test(String(slot?.label ?? "").trim()))) locations.push(locKey);
+  }
+  const locationDestroyed = locations.some(locKey => isStructureLocDestroyed(actor, locKey));
+  const validLocation = locations.every(locKey =>
+    locKey === "ct" || (["lt", "rt"].includes(locKey) && _xlSideEngineCritCount(actor) > 0)
+  );
+  const installed = totalSlots >= 1;
+  const operational = installed && intactSlots >= 1 && !locationDestroyed && validLocation && profile.tonnage > 0;
+  return {
+    ...profile,
+    installed,
+    operational,
+    totalSlots,
+    intactSlots,
+    locations,
+    locationDestroyed,
+    validLocation
+  };
+}
+
+export function isSuperchargerActiveForCurrentTurn(actor, combat = game.combat) {
+  if (!actor || !combat?.started) return false;
+  const state = actor.getFlag?.(SYSTEM_ID, "superchargerState") ?? {};
+  const stamp = `${combat.id ?? "no-combat"}:${combat.round ?? 0}:${combat.turn ?? 0}`;
+  return Boolean(
+    state.active &&
+    state.successful &&
+    state.activationStamp === stamp &&
+    getSuperchargerState(actor).operational
+  );
+}
+
+export function getEnhancedRunMultiplier(actor, combat = game.combat) {
+  const masc = isMASCActiveForCurrentTurn(actor, combat);
+  const supercharger = isSuperchargerActiveForCurrentTurn(actor, combat);
+  if (masc && supercharger) return 2.5;
+  if (masc || supercharger) return 2;
+  return null;
+}
+
+function _mascAvoidanceForLevel(level) {
+  const normalized = Math.max(0, Math.min(4, Math.floor(Number(level ?? 0) || 0)));
+  return {
+    level: normalized,
+    target: [3, 5, 7, 11, null][normalized],
+    automatic: normalized >= 4,
+    label: normalized >= 4 ? "Automatic critical hits" : `${[3, 5, 7, 11][normalized]}+`
+  };
+}
+
+function _mascMovementStarted(tokenDoc) {
+  if (!tokenDoc) return false;
+  const numericFlags = [
+    "movedHexesThisTurn",
+    "movedThisTurn",
+    "spacesMovedThisTurn",
+    "mpSpentThisTurn",
+    "terrainMpThisTurn",
+    "postureMpSpentThisTurn",
+    "turnedThisTurn"
+  ];
+  return numericFlags.some(key => (Number(tokenDoc.getFlag?.(SYSTEM_ID, key) ?? 0) || 0) > 0)
+    || Boolean(tokenDoc.getFlag?.(SYSTEM_ID, "jumpedThisTurn"))
+    || Boolean(tokenDoc.getFlag?.(SYSTEM_ID, "movementEndedThisTurn"))
+    || Boolean(String(tokenDoc.getFlag?.(SYSTEM_ID, "moveMode") ?? "").trim());
+}
+
+function _mascCritResultLabel(actor, locKey, index) {
+  if (!Number.isFinite(index)) return "No eligible occupied slot";
+  const slot = _getCritSlotsArray(actor?.system ?? {}, locKey)[index] ?? {};
+  return `${String(slot?.label ?? "").trim() || "Component"} (slot ${index + 1})`;
+}
+
+export async function activateMASC(actor, tokenDoc = null) {
+  if (!actor || String(actor.type ?? "").toLowerCase() !== "mech") {
+    ui.notifications?.warn?.("Select or open a mech to activate MASC.");
+    return false;
+  }
+
+  const combat = game.combat;
+  if (!combat?.started) {
+    ui.notifications?.warn?.("MASC activation requires an active combat encounter.");
+    return false;
+  }
+  if (combat?.combatant?.actor?.id !== actor.id) {
+    ui.notifications?.warn?.(`${actor.name} can only activate MASC during its own turn.`);
+    return false;
+  }
+
+  tokenDoc = tokenDoc ?? combat?.combatant?.token ?? actor.getActiveTokens?.(true, true)?.[0]?.document ?? null;
+  if (!tokenDoc) {
+    ui.notifications?.warn?.("MASC activation requires the mech's active combat token.");
+    return false;
+  }
+
+  const installed = getMASCState(actor);
+  if (!installed.installed) {
+    ui.notifications?.warn?.(`${actor.name} does not have a complete MASC installation.`);
+    return false;
+  }
+  if (!installed.operational) {
+    ui.notifications?.warn?.(`${actor.name}'s MASC is damaged and cannot function.`);
+    return false;
+  }
+  if (_mascMovementStarted(tokenDoc)) {
+    ui.notifications?.warn?.("MASC must be activated before the mech moves or declares a movement mode.");
+    return false;
+  }
+
+  const stamp = getCurrentCombatTurnStamp();
+  const prior = actor.getFlag?.(SYSTEM_ID, "mascState") ?? {};
+  if (String(prior.activationStamp ?? "") === stamp) {
+    ui.notifications?.warn?.(`${actor.name} has already attempted to activate MASC this turn.`);
+    return false;
+  }
+
+  const combatId = String(combat.id ?? "");
+  const round = Math.max(0, Number(combat.round ?? 0) || 0);
+  const priorRound = Number(prior.lastRound);
+  const sameCombat = String(prior.combatId ?? "") === combatId && Number.isFinite(priorRound);
+  const skippedTurns = sameCombat ? Math.max(0, round - priorRound - 1) : 0;
+  const priorLevel = sameCombat ? Math.max(0, Math.min(4, Number(prior.lastLevel ?? 0) || 0)) : -1;
+  const level = sameCombat
+    ? (skippedTurns > 0 ? Math.max(0, priorLevel - skippedTurns) : Math.min(4, priorLevel + 1))
+    : 0;
+  const avoidance = _mascAvoidanceForLevel(level);
+
+  const roll = await (new Roll("2d6")).evaluate();
+  const avoidedCriticals = !avoidance.automatic && Number(roll.total ?? 0) >= Number(avoidance.target ?? Infinity);
+  const legCrits = [];
+
+  // Record the attempt before resolving any damage. This makes the original
+  // roll authoritative even if a downstream critical-hit hook encounters an
+  // error, and prevents repeated clicks from rerolling a failed check.
+  await actor.setFlag(SYSTEM_ID, "mascState", {
+    combatId,
+    lastRound: round,
+    lastTurn: Number(combat.turn ?? 0) || 0,
+    lastLevel: level,
+    activationStamp: stamp,
+    active: false,
+    successful: false,
+    avoidedCriticals,
+    avoidTarget: avoidance.target,
+    rollTotal: Number(roll.total ?? 0) || 0,
+    resolving: true
+  });
+
+  await roll.toMessage({
+    speaker: ChatMessage.getSpeaker({ actor, token: tokenDoc }),
+    flavor: `<div class="atow-chat-card">
+      <h3>${foundry.utils.escapeHTML(actor.name)} - MASC Check</h3>
+      <p>Risk interval ${level + 1}: ${avoidance.label}</p>
+      <p>${avoidance.automatic
+        ? "<strong>Automatic critical hits.</strong>"
+        : `<strong>${avoidedCriticals ? "Critical damage avoided" : "Critical damage triggered"}:</strong> rolled ${roll.total} vs. ${avoidance.target}+.`
+      }</p>
+    </div>`
+  });
+
+  if (!avoidedCriticals) {
+    for (const locKey of ["ll", "rl"]) {
+      const location = locKey === "ll" ? "Left Leg" : "Right Leg";
+      try {
+        const picks = await applyRandomCritDestruction(actor, locKey, 1);
+        legCrits.push({
+          location,
+          result: _mascCritResultLabel(actor, locKey, picks?.[0])
+        });
+      } catch (err) {
+        console.error(`${SYSTEM_ID} | MASC failed to apply ${location} critical`, err);
+        legCrits.push({
+          location,
+          result: "Critical hit could not be applied automatically; resolve it manually."
+        });
+      }
+    }
+  }
+
+  // A failed avoidance roll does not cancel MASC. Apply the leg criticals
+  // first, recalculate from the resulting state, then engage MASC unless the
+  // installation itself was disabled by that damage.
+  const remainsOperational = getMASCState(actor).operational;
+  const active = remainsOperational;
+  const nextState = {
+    combatId,
+    lastRound: round,
+    lastTurn: Number(combat.turn ?? 0) || 0,
+    lastLevel: level,
+    activationStamp: stamp,
+    active,
+    successful: active,
+    avoidedCriticals,
+    avoidTarget: avoidance.target,
+    rollTotal: Number(roll.total ?? 0) || 0,
+    resolving: false
+  };
+  await actor.setFlag(SYSTEM_ID, "mascState", nextState);
+
+  const currentWalk = Math.max(0, Number(actor.system?.movement?.walk ?? 0) || 0);
+  const runMultiplier = getEnhancedRunMultiplier(actor) ?? 2;
+  const enhancedRun = Math.ceil(currentWalk * runMultiplier);
+  if (!avoidedCriticals) {
+    await ChatMessage.create({
+      speaker: ChatMessage.getSpeaker({ actor, token: tokenDoc }),
+      content: `<div class="atow-chat-card">
+        <h3>${foundry.utils.escapeHTML(actor.name)} - MASC Critical Damage</h3>
+        <p>One critical hit is assigned to each leg before movement.</p>
+        <ul>${legCrits.map(hit => `<li>${hit.location}: ${foundry.utils.escapeHTML(hit.result)}</li>`).join("")}</ul>
+        <p>${active
+          ? `MASC remains active. Running MP is ${enhancedRun} (${runMultiplier} times recalculated Walking MP ${currentWalk}).`
+          : "The MASC installation was disabled by the resulting damage and provides no movement bonus."}</p>
+      </div>`
+    });
+  }
+
+  ui.notifications?.[avoidedCriticals ? "info" : "warn"]?.(
+    avoidedCriticals
+      ? `${actor.name}: MASC active. Running MP is ${enhancedRun} this turn.`
+      : `${actor.name}: both legs suffer a critical hit; MASC ${active ? "remains active" : "was disabled"}.`
+  );
+  actor.sheet?.render?.(false);
+  return active;
+}
+
+function _superchargerCriticalCount(total) {
+  const value = Number(total ?? 0) || 0;
+  if (value >= 12) return 3;
+  if (value >= 10) return 2;
+  if (value >= 8) return 1;
+  return 0;
+}
+
+async function _resolveSuperchargerFailure(actor, tokenDoc) {
+  const critRoll = await (new Roll("2d6")).evaluate();
+  const critCount = _superchargerCriticalCount(critRoll.total);
+  const ctSlots = _getCritSlotsArray(actor?.system ?? {}, "ct");
+  const engineSlots = [];
+
+  for (let index = 0; index < ctSlots.length; index++) {
+    const slot = ctSlots[index] ?? {};
+    const label = String(slot?.label ?? "").trim() || _defaultCritLabel(actor, "ct", index);
+    if (Boolean(slot?.destroyed) || !_isEngineText(label)) continue;
+    engineSlots.push({ index, label });
+  }
+
+  const struckEngineSlots = engineSlots.slice(0, critCount);
+  const updates = {};
+  for (const hit of struckEngineSlots) {
+    updates[`system.crit.ct.slots.${hit.index}.destroyed`] = true;
+  }
+
+  const destroyedSuperchargerSlots = [];
+  for (const [locKey, loc] of Object.entries(actor?.system?.crit ?? {})) {
+    for (const { idx, slot } of _iterCritSlots(loc?.slots)) {
+      if (!Number.isFinite(idx)) continue;
+      if (!_SUPERCHARGER_LABEL_RE.test(String(slot?.label ?? "").trim())) continue;
+      updates[`system.crit.${locKey}.slots.${idx}.destroyed`] = true;
+      destroyedSuperchargerSlots.push({ locKey, index: idx });
+    }
+  }
+
+  if (Object.keys(updates).length) {
+    await actor.update(updates, { atowSuperchargerFailure: true });
+  }
+
+  const engineHitText = struckEngineSlots.length
+    ? struckEngineSlots.map(hit => `CT slot ${hit.index + 1} (${hit.label})`).join(", ")
+    : (critCount > 0 ? "No undamaged center-torso Engine slots remained" : "None");
+  await critRoll.toMessage({
+    speaker: ChatMessage.getSpeaker({ actor, token: tokenDoc }),
+    flavor: `<div class="atow-chat-card">
+      <h3>${foundry.utils.escapeHTML(actor.name)} - Supercharger Critical Check</h3>
+      <p>Determining Critical Hits roll: ${critRoll.total}</p>
+      <p><strong>${critCount} engine critical hit${critCount === 1 ? "" : "s"}.</strong> ${foundry.utils.escapeHTML(engineHitText)}</p>
+      <p>The failed activation destroys the Supercharger.</p>
+    </div>`
+  });
+
+  return { critRoll, critCount, struckEngineSlots, destroyedSuperchargerSlots };
+}
+
+export async function activateSupercharger(actor, tokenDoc = null) {
+  if (!actor || String(actor.type ?? "").toLowerCase() !== "mech") {
+    ui.notifications?.warn?.("Select or open a mech to activate its Supercharger.");
+    return false;
+  }
+  const combat = game.combat;
+  if (!combat?.started) {
+    ui.notifications?.warn?.("Supercharger activation requires an active combat encounter.");
+    return false;
+  }
+  if (combat?.combatant?.actor?.id !== actor.id) {
+    ui.notifications?.warn?.(`${actor.name} can only activate its Supercharger during its own turn.`);
+    return false;
+  }
+  tokenDoc = tokenDoc ?? combat?.combatant?.token ?? actor.getActiveTokens?.(true, true)?.[0]?.document ?? null;
+  if (!tokenDoc) {
+    ui.notifications?.warn?.("Supercharger activation requires the mech's active combat token.");
+    return false;
+  }
+
+  const installed = getSuperchargerState(actor);
+  if (!installed.installed) {
+    ui.notifications?.warn?.(`${actor.name} does not have a Supercharger installed.`);
+    return false;
+  }
+  if (!installed.operational) {
+    ui.notifications?.warn?.(`${actor.name}'s Supercharger is damaged or improperly installed.`);
+    return false;
+  }
+  if (_mascMovementStarted(tokenDoc)) {
+    ui.notifications?.warn?.("The Supercharger must be activated before the mech moves or declares a movement mode.");
+    return false;
+  }
+
+  const stamp = getCurrentCombatTurnStamp();
+  const prior = actor.getFlag?.(SYSTEM_ID, "superchargerState") ?? {};
+  if (String(prior.activationStamp ?? "") === stamp) {
+    ui.notifications?.warn?.(`${actor.name} has already attempted to activate its Supercharger this turn.`);
+    return false;
+  }
+
+  const combatId = String(combat.id ?? "");
+  const round = Math.max(0, Number(combat.round ?? 0) || 0);
+  const priorRound = Number(prior.lastRound);
+  const sameCombat = String(prior.combatId ?? "") === combatId && Number.isFinite(priorRound);
+  const skippedTurns = sameCombat ? Math.max(0, round - priorRound - 1) : 0;
+  const priorLevel = sameCombat ? Math.max(0, Math.min(4, Number(prior.lastLevel ?? 0) || 0)) : -1;
+  const level = sameCombat
+    ? (skippedTurns > 0 ? Math.max(0, priorLevel - skippedTurns) : Math.min(4, priorLevel + 1))
+    : 0;
+  const avoidance = _mascAvoidanceForLevel(level);
+  const roll = await (new Roll("2d6")).evaluate();
+  const successful = !avoidance.automatic && Number(roll.total ?? 0) >= Number(avoidance.target ?? Infinity);
+
+  await actor.setFlag(SYSTEM_ID, "superchargerState", {
+    combatId,
+    lastRound: round,
+    lastTurn: Number(combat.turn ?? 0) || 0,
+    lastLevel: level,
+    activationStamp: stamp,
+    active: false,
+    successful: false,
+    avoidTarget: avoidance.target,
+    rollTotal: Number(roll.total ?? 0) || 0,
+    resolving: true
+  });
+
+  await roll.toMessage({
+    speaker: ChatMessage.getSpeaker({ actor, token: tokenDoc }),
+    flavor: `<div class="atow-chat-card">
+      <h3>${foundry.utils.escapeHTML(actor.name)} - Supercharger Activation</h3>
+      <p>Risk interval ${level + 1}: ${avoidance.label}</p>
+      <p>${avoidance.automatic
+        ? "<strong>Automatic activation failure.</strong>"
+        : `Rolled ${roll.total} vs. ${avoidance.target}+: <strong>${successful ? "SUCCESS" : "FAILURE"}</strong>.`
+      }</p>
+    </div>`
+  });
+
+  if (!successful) {
+    await _resolveSuperchargerFailure(actor, tokenDoc);
+  }
+
+  const active = successful && getSuperchargerState(actor).operational;
+  await actor.setFlag(SYSTEM_ID, "superchargerState", {
+    combatId,
+    lastRound: round,
+    lastTurn: Number(combat.turn ?? 0) || 0,
+    lastLevel: level,
+    activationStamp: stamp,
+    active,
+    successful: active,
+    avoidTarget: avoidance.target,
+    rollTotal: Number(roll.total ?? 0) || 0,
+    resolving: false
+  });
+
+  const walk = Math.max(0, Number(actor.system?.movement?.walk ?? 0) || 0);
+  const multiplier = getEnhancedRunMultiplier(actor) ?? 2;
+  ui.notifications?.[active ? "info" : "warn"]?.(
+    active
+      ? `${actor.name}: Supercharger active. Running MP is ${Math.ceil(walk * multiplier)}.`
+      : `${actor.name}: Supercharger activation failed; the system is destroyed.`
+  );
+  actor.sheet?.render?.(false);
+  return active;
+}
+
+function isPartialWingName(name) {
+  return _PARTIAL_WING_LABEL_RE.test(String(name ?? "").trim());
+}
+
+function getPartialWingWeight(tonnage, techBase) {
+  const tons = Math.max(0, Number(tonnage ?? 0) || 0);
+  if (tons <= 0) return 0;
+  const rate = String(techBase ?? "").toLowerCase() === "clan" ? 0.05 : 0.07;
+  // Subtract a tiny epsilon so exact half-ton results are not rounded up due
+  // to binary floating-point artifacts (for example, 100 * 0.07).
+  return Math.ceil(((tons * rate) * 2) - 1e-9) / 2;
+}
+
+function getPartialWingState(actor, { tonnage = null, techBase = null } = {}) {
+  const system = actor?.system ?? {};
+  const resolvedTonnage = normalizeMechTonnage(tonnage ?? system?.mech?.tonnage ?? system?.tonnage ?? 0);
+  const resolvedTechBase = techBase ?? _getMechTechBase(actor, system?.mech?.engine ?? null);
+  const critSlotsPerSide = resolvedTechBase === "clan" ? 3 : 4;
+
+  const inspectSide = (locKey) => {
+    const slots = _getCritSlotsArray(system, locKey);
+    let installed = false;
+    let intact = false;
+    let destroyedCrits = 0;
+
+    for (let i = 0; i < slots.length; i++) {
+      const start = slots[i] ?? {};
+      if (start.partOf !== undefined && start.partOf !== null) continue;
+      if (!isPartialWingName(start.label)) continue;
+
+      installed = true;
+      const span = clamp(Number(start.span ?? critSlotsPerSide) || critSlotsPerSide, 1, slots.length - i);
+      let componentIntact = !isStructureLocDestroyed(actor, locKey);
+      let componentDestroyedCrits = 0;
+      for (let j = 0; j < span; j++) {
+        if (Boolean(slots[i + j]?.destroyed)) {
+          componentIntact = false;
+          componentDestroyedCrits += 1;
+        }
+      }
+      // A destroyed side torso destroys every critical slot in that wing section,
+      // even if an imported actor has not explicitly marked the individual slots.
+      if (isStructureLocDestroyed(actor, locKey)) componentDestroyedCrits = span;
+      destroyedCrits += componentDestroyedCrits;
+      if (componentIntact) intact = true;
+    }
+
+    return { installed, intact, destroyedCrits };
+  };
+
+  const left = inspectSide("lt");
+  const right = inspectSide("rt");
+  const complete = left.installed && right.installed;
+  const active = complete;
+  const baseJumpBonus = complete ? (resolvedTonnage <= 55 ? 2 : 1) : 0;
+  const destroyedCrits = (Number(left.destroyedCrits) || 0) + (Number(right.destroyedCrits) || 0);
+  const jumpBonus = Math.max(0, baseJumpBonus - destroyedCrits);
+  // Partial Wing critical hits reduce only the Jump MP bonus. They do not
+  // reduce the system's cooling benefit.
+  const heatDissipationBonus = complete ? 3 : 0;
+
+  return {
+    left,
+    right,
+    complete,
+    active,
+    tonnage: complete ? getPartialWingWeight(resolvedTonnage, resolvedTechBase) : 0,
+    designTonnage: getPartialWingWeight(resolvedTonnage, resolvedTechBase),
+    techBase: resolvedTechBase,
+    critSlotsPerSide,
+    baseJumpBonus,
+    destroyedCrits,
+    jumpBonus,
+    heatDissipationBonus
+  };
+}
+
+function applyPartialWingJumpBonus(move, actor, tonnage = null) {
+  if (!move) return move;
+  const partialWing = getPartialWingState(actor, { tonnage });
+  if (!partialWing.active || Number(move.jump ?? 0) <= 0) return move;
+  return { ...move, jump: Math.max(0, Number(move.jump ?? 0) + partialWing.jumpBonus) };
+}
 
 /**
  * Count occupied crit slots for a component that can span multiple slots.
@@ -590,6 +1216,7 @@ function countFerroFibrousCritSlots(actorSystem) {
   const crit = actorSystem?.crit ?? {};
   let standard = 0;
   let light = 0;
+  let heavy = 0;
 
   for (const loc of Object.values(crit)) {
     const arr = loc?.slots;
@@ -604,6 +1231,12 @@ function countFerroFibrousCritSlots(actorSystem) {
       const label = (typeof s === "string") ? String(s).trim() : String(s.label ?? "").trim();
       if (!label) continue;
 
+      // Heavy Ferro-Fibrous contains the standard name, so classify it first.
+      if (/heavy\s+ferro\s*-?\s*fibrous/i.test(label)) {
+        heavy += 1;
+        continue;
+      }
+
       // Accept "Light Ferro Fibrous" as its own armor type first.
       if (/light\s+ferro\s*-?\s*fibrous/i.test(label)) {
         light += 1;
@@ -615,7 +1248,102 @@ function countFerroFibrousCritSlots(actorSystem) {
     }
   }
 
-  return { standard, light };
+  return { standard, light, heavy };
+}
+
+const ARMOR_TYPE_OPTIONS = Object.freeze({
+  standard: "Standard",
+  "ferro-fibrous": "Ferro Fibrous",
+  "ferro-fibrous-light": "Ferro Fibrous (Light)",
+  "ferro-fibrous-heavy": "Ferro Fibrous (Heavy)",
+  "ferro-lamellor": "Ferro-Lamellor",
+  hardened: "Hardened",
+  "laser-reflective": "Laser-Reflective",
+  reactive: "Reactive",
+  "vehicular-stealth": "Vehicular Stealth"
+});
+
+function normalizeArmorType(value) {
+  const raw = String(value ?? "").trim().toLowerCase();
+  if (Object.hasOwn(ARMOR_TYPE_OPTIONS, raw)) return raw;
+
+  const compact = raw.replace(/[^a-z0-9]+/g, "");
+  if (!compact || compact === "standard") return "standard";
+  if (compact.includes("ferrofibrousheavy") || compact.includes("heavyferrofibrous")) return "ferro-fibrous-heavy";
+  if (compact.includes("ferrofibrouslight") || compact.includes("lightferrofibrous")) return "ferro-fibrous-light";
+  if (compact.includes("ferrolamellor")) return "ferro-lamellor";
+  if (compact.includes("ferrofibrous")) return "ferro-fibrous";
+  if (compact.includes("laserreflective")) return "laser-reflective";
+  if (compact.includes("vehicularstealth")) return "vehicular-stealth";
+  if (compact.includes("hardened")) return "hardened";
+  if (compact.includes("reactive")) return "reactive";
+  return "standard";
+}
+
+function getArmorTypeRequirement(type, techBase) {
+  const clan = String(techBase ?? "").toLowerCase() === "clan";
+  switch (normalizeArmorType(type)) {
+    case "ferro-fibrous": return `${clan ? 7 : 14} critical slots`;
+    case "ferro-fibrous-light": return "7 critical slots (Inner Sphere only)";
+    case "ferro-fibrous-heavy": return "21 critical slots (Inner Sphere only)";
+    case "ferro-lamellor": return "12 critical slots";
+    case "hardened": return "No critical slots; movement effects pending";
+    case "laser-reflective": return `${clan ? 5 : 10} critical slots`;
+    case "reactive": return `${clan ? 7 : 14} critical slots`;
+    case "vehicular-stealth": return "Special installation rules pending";
+    default: return "No critical slots";
+  }
+}
+
+/**
+ * Detect armor construction components already installed in critical slots.
+ * A partial installation is enough to identify the selector, but existing
+ * completed-slot checks remain authoritative for armor tonnage benefits.
+ */
+function detectArmorTypeFromCritSlots(actorSystem) {
+  const found = new Set();
+  for (const loc of Object.values(actorSystem?.crit ?? {})) {
+    const rawSlots = loc?.slots;
+    if (!rawSlots) continue;
+    const slots = Array.isArray(rawSlots) ? rawSlots : Object.values(rawSlots);
+    for (const slot of slots) {
+      if (!slot || (slot.partOf !== undefined && slot.partOf !== null)) continue;
+      const label = String(typeof slot === "string" ? slot : slot.label ?? "").trim();
+      if (!label) continue;
+      const compact = label.toLowerCase().replace(/[^a-z0-9]+/g, "");
+
+      if (compact.includes("heavyferrofibrous") || compact.includes("ferrofibrousheavy")) found.add("ferro-fibrous-heavy");
+      else if (compact.includes("lightferrofibrous") || compact.includes("ferrofibrouslight")) found.add("ferro-fibrous-light");
+      else if (compact.includes("ferrolamellor")) found.add("ferro-lamellor");
+      else if (compact.includes("ferrofibrous")) found.add("ferro-fibrous");
+      else if (compact.includes("laserreflective")) found.add("laser-reflective");
+      else if (compact.includes("vehicularstealth")) found.add("vehicular-stealth");
+      else if (compact.includes("reactivearmor") || compact === "reactive") found.add("reactive");
+    }
+  }
+
+  // Prefer the most specific ferro variants if conflicting legacy labels exist.
+  return [
+    "ferro-fibrous-heavy",
+    "ferro-fibrous-light",
+    "ferro-fibrous",
+    "ferro-lamellor",
+    "laser-reflective",
+    "reactive",
+    "vehicular-stealth"
+  ].find(type => found.has(type)) ?? null;
+}
+
+function isHardenedArmorSystem(actorSystem) {
+  return normalizeArmorType(actorSystem?.mech?.armorType) === "hardened"
+    && !detectArmorTypeFromCritSlots(actorSystem);
+}
+
+function applyHardenedArmorMovementPenalty(move, actorOrSystem) {
+  if (!move) return move;
+  const system = actorOrSystem?.system ?? actorOrSystem ?? {};
+  if (!isHardenedArmorSystem(system)) return move;
+  return { ...move, run: Math.max(0, Number(move.run ?? 0) - 1) };
 }
 
 
@@ -675,6 +1403,22 @@ async function collectInstalledCritSlotTonnage(actor) {
     const name = String(doc?.name ?? label ?? "");
 
     const techBase = _getMechTechBase(actor);
+    // Partial Wing mass is calculated once for the completed LT/RT pair.
+    if (isPartialWingName(label) || isPartialWingName(name)) continue;
+    // MASC mass is carrier-derived and the contiguous start slot represents
+    // the entire system, regardless of how many continuation slots it spans.
+    if (isMASCName(label) || isMASCName(name)) {
+      otherCritTons += getMASCProfile(actor, { techBase }).tonnage;
+      continue;
+    }
+    if (isSuperchargerName(label) || isSuperchargerName(name)) {
+      otherCritTons += getSuperchargerProfile(actor).tonnage;
+      continue;
+    }
+    if (/^(?:ecm\s+suite(?:\s*\(clan\))?|guardian\s+ecm)$/i.test(String(label || name).trim())) {
+      otherCritTons += 1.5;
+      continue;
+    }
     const isCase = (/(^|\b)case(\b|$)/i.test(String(label ?? "")) || (/(^|\b)case(\b|$)/i.test(name)));
     if (isCase) {
       // Inner Sphere CASE weighs 0.5t (Clan CASE is free). Protection rules are handled elsewhere.
@@ -776,6 +1520,12 @@ function _ammoKeyFromType(typeText) {
   // dialog can offer each installed bin independently.
   m = t.match(/\b(lrm|mml|srm)\b[^\d]*(\d+)\b/i) ?? t.match(/\b(lrm|mml|srm)\s*[-/]?\s*(\d+)\b/i);
   if (m?.[1] && m?.[2]) {
+    const missileType = String(m[1]).toLowerCase();
+    let mmlMode = "";
+    if (missileType === "mml") {
+      if (/\[\s*srm\s*\]/i.test(t) || /(?:^|[-\s])srm(?:$|[-\s])/i.test(t)) mmlMode = "srm";
+      else if (/\[\s*lrm\s*\]/i.test(t) || /(?:^|[-\s])lrm(?:$|[-\s])/i.test(t)) mmlMode = "lrm";
+    }
     let variant = "";
     if (/\bartemis[\s-]*(?:v|5)\b/i.test(t)) variant = "artemis-v";
     else if (/\bartemis[\s-]*(?:iv|4)\b/i.test(t)) variant = "artemis-iv";
@@ -783,7 +1533,7 @@ function _ammoKeyFromType(typeText) {
     else if (/\binferno\b/i.test(t)) variant = "inferno";
     else if (/\bsemi[ -]?guided\b/i.test(t)) variant = "semi-guided";
     else if (/\bnarc(?:[ -]?equipped)?\b/i.test(t)) variant = "narc";
-    return _slugifyKey(`${m[1]}-${m[2]}${variant ? `-${variant}` : ""}`);
+    return _slugifyKey(`${missileType}-${m[2]}${mmlMode ? `-${mmlMode}` : ""}${variant ? `-${variant}` : ""}`);
   }
 
   // LB-X Autocannon ammo (various label styles):
@@ -802,6 +1552,16 @@ function _ammoKeyFromType(typeText) {
     const variant = /\ber\b/i.test(t) ? "-er" : (/\bhe\b/i.test(t) ? "-he" : "");
     return _slugifyKey(`atm-${m[1]}${variant}`);
   }
+
+  if (t === "plasma-rifle" || /\bplasma\s+rifle\b/i.test(t)) return "plasma-rifle";
+
+  // Hyper-Assault Gauss Rifle ammo must retain the rack size. Do this before
+  // the generic Gauss check so HAG 20/30/40 do not collapse into one bin.
+  m = t.match(/\bhag\s*[-/]?\s*(20|30|40)\b/i)
+    ?? t.match(/\bhyper\s*[- ]?\s*assault\s+gauss\s+rifles?\b[^\d]*(20|30|40)\b/i);
+  if (m?.[1]) return _slugifyKey(`hag-${m[1]}`);
+
+  if (/\blight\s+gauss(?:\s+rifle)?\b/i.test(t)) return "light-gauss";
 
   // Gauss Rifle ammo ("Gauss", "Gauss Rifle", etc.)
   if (t === "gauss" || t.includes("gauss")) return "gauss";
@@ -850,11 +1610,11 @@ function buildAmmoBinsFromCritSlots(actorSystem) {
       const label = String(slot?.label ?? "").trim();
       if (!label) continue;
 
-      // Match: Ammo (LRM 20) 6
-      const m = label.match(/^\s*Ammo\s*\(([^)]+)\)\s*(\d+)\s*$/i);
+      // Match: Ammo (LRM 20) 6 or Ammo (MML 9) 13 [LRM]
+      const m = label.match(/^\s*Ammo\s*\(([^)]+)\)\s*(\d+)\s*(?:\[\s*(LRM|SRM)\s*\])?\s*$/i);
       if (!m) continue;
 
-      const typeText = String(m[1] ?? "").trim();
+      const typeText = `${String(m[1] ?? "").trim()}${m[3] ? ` [${m[3]}]` : ""}`;
       const amt = Number(m[2] ?? 0);
       const key = _ammoKeyFromType(typeText);
 
@@ -905,6 +1665,40 @@ function _isCanonicalSword(itemOrName) {
   return String(name).trim().toLowerCase() === "sword";
 }
 
+function _isCanonicalRetractableBlade(itemOrName) {
+  const name = typeof itemOrName === "string" ? itemOrName : (itemOrName?.name ?? "");
+  return String(name).trim().toLowerCase() === "retractable blade";
+}
+
+function _isHumanoidMechConfiguration(actor) {
+  const mech = actor?.system?.mech ?? {};
+  const raw = [
+    mech.configuration,
+    mech.chassisType,
+    mech.unitType,
+    mech.type
+  ].filter(Boolean).join(" ").toLowerCase();
+  // Existing actors generally omit configuration and are treated as standard
+  // humanoid/biped BattleMechs. Explicit quad/tripod configurations are blocked.
+  return !/\b(?:quad|quadruped|tripod)\b/.test(raw);
+}
+
+function _armHasRetractableBladeActuators(actor, locKey) {
+  if (!["la", "ra"].includes(String(locKey ?? "").toLowerCase())) return false;
+  const slots = actor?.system?.crit?.[locKey]?.slots ?? [];
+  const labels = [];
+  for (let i = 0; i < 12; i++) {
+    const slot = slots?.[i] ?? {};
+    const hasStoredLabel = Object.prototype.hasOwnProperty.call(slot, "label");
+    labels.push(String(hasStoredLabel ? (slot.label ?? "") : (_defaultCritLabel(actor, locKey, i) ?? "")).trim().toLowerCase());
+  }
+  return [
+    /^shoulder$/,
+    /^upper\s+arm\s+actuator$/,
+    /^lower\s+arm\s+actuator$/
+  ].every(pattern => labels.some(label => pattern.test(label)));
+}
+
 function _looksLikeAmmoLabel(label) {
   const s = String(label ?? "").trim();
   return /^ammo\s*(?:\(|$)/i.test(s) || /\bammo\b/i.test(s);
@@ -916,7 +1710,7 @@ function _looksLikeWeaponLabel(label) {
   if (_looksLikeAmmoLabel(s)) return false;
 
   if (/^\s*narc\s+missile\s+beacon\s*$/i.test(s)) return true;
-  if (/^\s*(?:hatchet|sword)\s*$/i.test(s)) return true;
+  if (/^\s*(?:hatchet|sword|retractable\s+blade)\s*$/i.test(s)) return true;
   if (/^\s*arrow\s*iv\s*system(?:\s*\(c\))?\s*$/i.test(s)) return true;
   if (/^\s*ams\s*$/i.test(s) || /\banti\s*-?\s*missile\s+system\b/i.test(s)) return true;
   if (/\batm\b[^\d]*(3|6|9|12)\b/i.test(s) || /\badvanced\s+tactical\s+missiles?\b[^\d]*(3|6|9|12)\b/i.test(s)) return true;
@@ -1051,6 +1845,13 @@ async function buildAutoWeaponsFromCritSlots(actor) {
       o.system.tonnage = profile.tonnage;
       o.system.critSlots = profile.critSlots;
       o.system.swordProfile = profile;
+    }
+    if (_isCanonicalRetractableBlade(o)) {
+      const profile = getRetractableBladeProfile(actor);
+      o.system.damage = profile.damage;
+      o.system.tonnage = profile.tonnage;
+      o.system.critSlots = profile.critSlots;
+      o.system.retractableBladeProfile = profile;
     }
     const rotaryProfile = getRotaryACProfile(o);
     if (rotaryProfile) {
@@ -1393,8 +2194,9 @@ function _computeTotalStructureDamageFrom(structureObj) {
   return total;
 }
 
-function _computeArmorTotalsFrom(armorObj) {
+function _computeArmorTotalsFrom(armorObj, { damagePerPip = 1 } = {}) {
   const armor = armorObj ?? {};
+  const pipCapacity = Math.max(1, Number(damagePerPip ?? 1) || 1);
   let max = 0;
   let dmg = 0;
   for (const v of Object.values(armor)) {
@@ -1403,8 +2205,9 @@ function _computeArmorTotalsFrom(armorObj) {
     if (Number.isFinite(m)) max += m;
     if (Number.isFinite(d)) dmg += d;
   }
-  dmg = clamp(dmg, 0, max);
-  const current = Math.max(0, max - dmg);
+  dmg = clamp(dmg, 0, max * pipCapacity);
+  const destroyedPips = Math.floor(dmg / pipCapacity);
+  const current = Math.max(0, max - destroyedPips);
   return { max, dmg, current };
 }
 
@@ -1520,6 +2323,32 @@ function _isJumpJetText(text) {
   return t.includes("jump jet") || t.includes("jumpjet");
 }
 
+function _getImprovedHeavyLaserExplosionDamage(text) {
+  const match = String(text ?? "").trim().match(
+    /^improved\s+heavy\s+(small|medium|large)\s+laser$/i
+  );
+  if (!match) return 0;
+  if (String(match[1]).toLowerCase() === "small") return 3;
+  if (String(match[1]).toLowerCase() === "medium") return 5;
+  return 8;
+}
+
+function _getHAGExplosionDamage(text) {
+  const value = String(text ?? "").trim();
+  const match = value.match(/\bhag\s*[-/]?\s*(20|30|40)\b/i)
+    ?? value.match(/\bhyper\s*[- ]?\s*assault\s+gauss\s+rifles?\b[^\d]*(20|30|40)\b/i);
+  if (!match) return 0;
+  return Number(match[1]) / 2;
+}
+
+function _getGaussRifleExplosionDamage(text) {
+  const value = String(text ?? "").trim();
+  if (/\bammo\b/i.test(value)) return 0;
+  if (/\blight\s+gauss\s+rifle\b/i.test(value)) return 16;
+  if (/\bgauss\s+rifle\b/i.test(value)) return 15;
+  return 0;
+}
+
 function _isHeatSinkText(text) {
   const t = String(text ?? "").toLowerCase();
   if (t.includes("radical heat sink")) return false;
@@ -1567,16 +2396,26 @@ const DEFAULT_CRIT_LABELS = {
   ct:   ["Engine", "Engine", "Engine", "Gyro", "Gyro", "Gyro", "Gyro", "Engine", "Engine", "Engine", "", ""]
 };
 
+const SMALL_COCKPIT_HEAD_LABELS = ["Life Support", "Sensors", "Cockpit", "Sensors", "", ""];
 const XL_GYRO_CT_LABELS = ["Engine", "Engine", "Engine", "XL Gyro", "XL Gyro", "XL Gyro", "XL Gyro", "XL Gyro", "XL Gyro", "Engine", "Engine", "Engine"];
+const COMPACT_GYRO_CT_LABELS = ["Engine", "Engine", "Engine", "Compact Gyro", "Compact Gyro", "", "", "Engine", "Engine", "Engine", "", ""];
 const CRIT_AUTO_LABELS = new Set([
   "",
   ...Object.values(DEFAULT_CRIT_LABELS).flat(),
+  ...SMALL_COCKPIT_HEAD_LABELS,
   ...XL_GYRO_CT_LABELS,
-  "XL Engine"
+  ...COMPACT_GYRO_CT_LABELS,
+  "XL Engine",
+  "XXL Engine",
+  "Light Fusion Engine",
+  "Compact Engine"
 ]);
 
 function _getEngineCritLabel(actor, engineTextOverride = null) {
   const engineText = engineTextOverride ?? actor?.system?.mech?.engine ?? "";
+  if (_isCompactEngineText(engineText)) return "Compact Engine";
+  if (_isLightFusionEngineText(engineText)) return "Light Fusion Engine";
+  if (_isXXLEngineText(engineText)) return "XXL Engine";
   return _isXLEngineText(engineText) ? "XL Engine" : "Engine";
 }
 
@@ -1585,15 +2424,56 @@ function _isXLGyroEnabled(actor, enabledOverride = null) {
   return Boolean(actor?.system?.mech?.xlGyro);
 }
 
-function _getCTDefaultCritLabels(actor, enabledOverride = null, engineTextOverride = null) {
-  const engineLabel = _getEngineCritLabel(actor, engineTextOverride);
-  const labels = _isXLGyroEnabled(actor, enabledOverride) ? XL_GYRO_CT_LABELS : DEFAULT_CRIT_LABELS.ct;
-  return labels.map(label => String(label ?? "") === "Engine" ? engineLabel : label);
+function _isCompactGyroEnabled(actor, enabledOverride = null) {
+  if (enabledOverride !== null && enabledOverride !== undefined) return Boolean(enabledOverride);
+  return Boolean(actor?.system?.mech?.compactGyro);
 }
 
-function _buildXLGyroCritLabelUpdates(actor, enabledOverride = null, engineTextOverride = null) {
+function _isHeavyDutyGyroEnabled(actor, enabledOverride = null) {
+  if (enabledOverride !== null && enabledOverride !== undefined) return Boolean(enabledOverride);
+  return Boolean(actor?.system?.mech?.heavyDutyGyro);
+}
+
+function _isSmallCockpitEnabled(actor, enabledOverride = null) {
+  if (enabledOverride !== null && enabledOverride !== undefined) return Boolean(enabledOverride);
+  return Boolean(actor?.system?.mech?.smallCockpit);
+}
+
+function _getHeadDefaultCritLabels(actor, enabledOverride = null) {
+  return _isSmallCockpitEnabled(actor, enabledOverride)
+    ? [...SMALL_COCKPIT_HEAD_LABELS]
+    : [...DEFAULT_CRIT_LABELS.head];
+}
+
+function _getCTDefaultCritLabels(
+  actor,
+  enabledOverride = null,
+  engineTextOverride = null,
+  compactEnabledOverride = null
+) {
+  const engineText = engineTextOverride ?? actor?.system?.mech?.engine ?? "";
+  const engineLabel = _getEngineCritLabel(actor, engineTextOverride);
+  const compactEnabled = _isCompactGyroEnabled(actor, compactEnabledOverride);
+  const labels = compactEnabled
+    ? COMPACT_GYRO_CT_LABELS
+    : (_isXLGyroEnabled(actor, enabledOverride) ? XL_GYRO_CT_LABELS : DEFAULT_CRIT_LABELS.ct);
+  const isCompact = _isCompactEngineText(engineText);
+  return labels.map((label, index) => {
+    if (String(label ?? "") !== "Engine") return label;
+    // Compact engines retain only CT slots 1-3. All later standard/XL-Gyro
+    // engine positions are released for other equipment.
+    return (isCompact && index >= 3) ? "" : engineLabel;
+  });
+}
+
+function _buildXLGyroCritLabelUpdates(
+  actor,
+  enabledOverride = null,
+  engineTextOverride = null,
+  compactEnabledOverride = null
+) {
   const enabled = _isXLGyroEnabled(actor, enabledOverride);
-  const desired = _getCTDefaultCritLabels(actor, enabled, engineTextOverride);
+  const desired = _getCTDefaultCritLabels(actor, enabled, engineTextOverride, compactEnabledOverride);
   const updates = {};
   const blocked = [];
 
@@ -1629,6 +2509,45 @@ function _buildXLGyroCritLabelUpdates(actor, enabledOverride = null, engineTextO
     }
 
     updates[`system.crit.ct.slots.${i}.label`] = next;
+  }
+
+  return { updates, blocked };
+}
+
+function _buildSmallCockpitCritLabelUpdates(actor, enabledOverride = null) {
+  const desired = _getHeadDefaultCritLabels(actor, enabledOverride);
+  const updates = {};
+  const blocked = [];
+
+  if (!actor?.system?.crit?.head?.slots) {
+    updates["system.crit.head.slots"] = Array.from({ length: desired.length }, (_, i) => ({
+      label: desired[i] ?? "",
+      uuid: "",
+      mountId: null,
+      span: 1,
+      partOf: null,
+      destroyed: false,
+      rearMounted: false
+    }));
+    return { updates, blocked };
+  }
+
+  for (let i = 0; i < desired.length; i++) {
+    const slot = actor?.system?.crit?.head?.slots?.[i] ?? {};
+    const uuid = String(slot?.uuid ?? "").trim();
+    const label = String(slot?.label ?? "");
+    const next = String(desired[i] ?? "");
+    if (label === next) continue;
+
+    // An intentionally open Small Cockpit slot may contain user-installed
+    // equipment. Leaving that item in place already satisfies the layout.
+    if (!next && (uuid || !CRIT_AUTO_LABELS.has(label))) continue;
+
+    if (uuid || !CRIT_AUTO_LABELS.has(label)) {
+      blocked.push(i + 1);
+      continue;
+    }
+    updates[`system.crit.head.slots.${i}.label`] = next;
   }
 
   return { updates, blocked };
@@ -1963,6 +2882,41 @@ function _isXLEngineText(engineText) {
   );
 }
 
+function _isXXLEngineText(engineText) {
+  const t = String(engineText ?? "").trim().toLowerCase();
+  if (!t) return false;
+
+  // Accept "300 XXL", "300 XXL Engine", "300XXL", and "XXL300".
+  return (
+    /\bxxl\b/.test(t) ||
+    /\d+\s*xxl\b/.test(t) ||
+    /\bxxl\s*\d+/.test(t)
+  );
+}
+
+function _isLightFusionEngineText(engineText) {
+  const t = String(engineText ?? "").trim().toLowerCase();
+  if (!t) return false;
+
+  // Accept "240 Light Fusion", "240 Light Fusion Engine", "240 LF",
+  // and compact rating/type forms such as "240LF" or "LF240".
+  return (
+    /\blight\s+fusion(?:\s+engine)?\b/.test(t) ||
+    /\blf\b/.test(t) ||
+    /\d+\s*lf\b/.test(t) ||
+    /\blf\s*\d+/.test(t)
+  );
+}
+
+function _isCompactEngineText(engineText) {
+  const t = String(engineText ?? "").trim().toLowerCase();
+  if (!t) return false;
+
+  // Primary supported form: "300 Compact". Also accept explicit
+  // "Compact Engine" and "Compact Fusion" descriptions.
+  return /\bcompact(?:\s+(?:fusion|engine|fusion\s+engine))?\b/.test(t);
+}
+
 
 function _getMechTechBase(actor, engineText = null) {
   const sys = actor?.system ?? {};
@@ -1975,12 +2929,16 @@ function _getMechTechBase(actor, engineText = null) {
   if (t.includes("clan")) return "clan";
   if (t.includes("inner")) return "inner";
   if (t.includes("sphere")) return "inner";
-  if (_isXLEngineText(engineText) && String(engineText ?? "").toLowerCase().includes("clan")) return "clan";
+  if ((_isXLEngineText(engineText) || _isXXLEngineText(engineText)) && String(engineText ?? "").toLowerCase().includes("clan")) return "clan";
   return "inner";
 }
 
 function _xlSideEngineCritCount(actor) {
   const engineText = actor?.system?.mech?.engine ?? "";
+  if (_isLightFusionEngineText(engineText)) return 2;
+  if (_isXXLEngineText(engineText)) {
+    return _getMechTechBase(actor, engineText) === "clan" ? 4 : 6;
+  }
   if (!_isXLEngineText(engineText)) return 0;
 
   const techBase = _getMechTechBase(actor, engineText);
@@ -1990,12 +2948,21 @@ function _xlSideEngineCritCount(actor) {
 
 function _buildXLEngineCritLabelUpdates(actor, engineTextOverride = null) {
   const engineText = engineTextOverride ?? actor?.system?.mech?.engine ?? "";
+  const isLightFusion = _isLightFusionEngineText(engineText);
+  const isXXL = _isXXLEngineText(engineText);
   const isXL = _isXLEngineText(engineText);
   const desiredLabel = _getEngineCritLabel(actor, engineText);
 
-  // Inner Sphere XL: 3 crits each side torso; Clan XL: 2 each side torso
-  const desiredSide = isXL ? ((_getMechTechBase(actor, engineText) === "clan") ? 2 : 3) : 0;
-  const maxPossible = 3; // we only ever reserve up to 3 slots in each side torso
+  // Light Fusion: 2 crits each side torso.
+  // Inner Sphere XL: 3 per side; Clan XL: 2 per side.
+  // Inner Sphere XXL: 6 per side; Clan XXL: 4 per side.
+  const techBase = _getMechTechBase(actor, engineText);
+  const desiredSide = isLightFusion
+    ? 2
+    : isXXL
+      ? (techBase === "clan" ? 4 : 6)
+      : (isXL ? (techBase === "clan" ? 2 : 3) : 0);
+  const maxPossible = 6;
 
   const updates = {};
   for (const locKey of ["lt", "rt"]) {
@@ -2013,11 +2980,13 @@ function _buildXLEngineCritLabelUpdates(actor, engineTextOverride = null) {
         if (!uuid) {
           if (label !== desiredLabel) updates[`system.crit.${locKey}.slots.${i}.label`] = desiredLabel;
         } else if (label !== desiredLabel) {
-          console.warn(`AToWMechSheet | XL engine side crit slot ${locKey.toUpperCase()} ${i + 1} is occupied by an item; not overwriting.`);
+          console.warn(`AToWMechSheet | Engine side crit slot ${locKey.toUpperCase()} ${i + 1} is occupied by an item; not overwriting.`);
         }
       } else {
         // If we're no longer reserving this slot, clear our auto label (only if empty).
-        if (!uuid && (label === "Engine" || label === "XL Engine")) updates[`system.crit.${locKey}.slots.${i}.label`] = "";
+        if (!uuid && (label === "Engine" || label === "XL Engine" || label === "XXL Engine" || label === "Light Fusion Engine" || label === "Compact Engine")) {
+          updates[`system.crit.${locKey}.slots.${i}.label`] = "";
+        }
       }
     }
   }
@@ -2026,9 +2995,10 @@ function _buildXLEngineCritLabelUpdates(actor, engineTextOverride = null) {
 }
 
 function _defaultCritLabel(actor, locKey, idx) {
-  // Dynamic XL engine side-torso crits.
+  // Dynamic XL/Light Fusion engine side-torso crits.
   const lk = String(locKey ?? "").toLowerCase();
   const i = Number(idx);
+  if (lk === "head" && Number.isFinite(i)) return (_getHeadDefaultCritLabels(actor)?.[i] ?? "");
   if (lk === "ct" && Number.isFinite(i)) return (_getCTDefaultCritLabels(actor)?.[i] ?? "");
   if ((lk === "lt" || lk === "rt") && Number.isFinite(i)) {
     const side = _xlSideEngineCritCount(actor);
@@ -2246,7 +3216,8 @@ async function applyStructureLocationDestruction(actor, locKey) {
       const aNode = actor.system?.armor?.[key];
       const sNode = actor.system?.structure?.[key];
       if (aNode && Number.isFinite(Number(aNode.max))) {
-        updates[`system.armor.${key}.dmg`] = Number(aNode.max);
+        const damagePerPip = isHardenedArmorSystem(actor.system) ? 2 : 1;
+        updates[`system.armor.${key}.dmg`] = Number(aNode.max) * damagePerPip;
       }
       if (sNode && Number.isFinite(Number(sNode.max))) {
         updates[`system.structure.${key}.dmg`] = Number(sNode.max);
@@ -2627,15 +3598,17 @@ const AMMO_EXPLOSION_PRIORITY = [
 
 function _parseAmmoCritLabel(label) {
   const raw = String(label ?? "").trim();
-  // Expected: Ammo (LRM 20) 6  OR  Ammo (AC/20) 5  OR  Ammo (Machine Gun) 100
-  const m = raw.match(/^\s*Ammo\s*\(([^)]+)\)\s*(\d+)\s*$/i);
+  // Expected: Ammo (LRM 20) 6, Ammo (MML 9) 13 [LRM], or Ammo (AC/20) 5
+  const m = raw.match(/^\s*Ammo\s*\(([^)]+)\)\s*(\d+)\s*(?:\[\s*(LRM|SRM)\s*\])?\s*$/i);
   if (!m) return null;
 
-  const typeText = String(m[1] ?? "").trim();
+  const typeText = `${String(m[1] ?? "").trim()}${m[3] ? ` [${m[3]}]` : ""}`;
   const shots = Number(m[2] ?? 0) || 0;
 
   const lower = typeText.toLowerCase();
-  const noExplode = lower.includes("gauss"); // Gauss ammo does not explode when hit
+  const noExplode =
+    lower.includes("gauss") ||
+    /\bhag\s*[-/]?\s*(?:20|30|40)\b/i.test(lower); // Gauss/HAG ammo does not explode when hit
 
   // Reuse existing key generator when possible
   const key = _ammoKeyFromType(typeText) ?? _slugifyKey(typeText);
@@ -2825,10 +3798,11 @@ async function applyExplosionDamage(actor, originLocKey, totalDamage) {
 
   const aMax = Number(armorNode?.max ?? 0) || 0;
   const aCur = Number(armorNode?.dmg ?? 0) || 0;
+  const aCapacity = aMax * (isHardenedArmorSystem(actor.system) ? 2 : 1);
   const sMax = Number(structNode?.max ?? 0) || 0;
   const sCur = Number(structNode?.dmg ?? 0) || 0;
 
-  const aRem = Math.max(0, aMax - aCur);
+  const aRem = Math.max(0, aCapacity - aCur);
   const sRem = Math.max(0, sMax - sCur);
 
   const tookS = Math.min(dmg, sRem);
@@ -2836,7 +3810,7 @@ async function applyExplosionDamage(actor, originLocKey, totalDamage) {
   dmg -= tookS;
 
   const tookA = Math.min(dmg, aRem);
-  if (tookA > 0) updates[`system.armor.${locKey}.dmg`] = clamp(aCur + tookA, 0, aMax);
+  if (tookA > 0) updates[`system.armor.${locKey}.dmg`] = clamp(aCur + tookA, 0, aCapacity);
 
   if (Object.keys(updates).length) {
     await actor.update(updates, { atowAmmoExplosion: true }).catch(() => {});
@@ -2870,7 +3844,8 @@ function _occupiedCritIndices(actor, locKey) {
 
     let label = String(slot?.label ?? "").trim();
     if (!label) label = _defaultCritLabel(actor, locKey, idx);
-    if (_isFerroFibrousCritLabel(label)) continue;
+    const compactLabel = label.toLowerCase().replace(/[^a-z0-9]/g, "");
+    if (compactLabel.includes("ferrofibrous")) continue;
 
     const uuid = String(slot?.uuid ?? "");
     const occupied = Boolean(uuid) || Boolean(label);
@@ -2882,27 +3857,28 @@ function _occupiedCritIndices(actor, locKey) {
 }
 
 async function applyRandomCritDestruction(actor, locKey, count) {
-  if (!actor || !locKey) return;
+  if (!actor || !locKey) return [];
   const n = Number(count ?? 0) || 0;
-  if (n <= 0) return;
+  if (n <= 0) return [];
 
   const candidates = _occupiedCritIndices(actor, locKey);
-  if (!candidates.length) return;
+  if (!candidates.length) return [];
 
   const picks = [];
   const pool = candidates.slice();
   while (pool.length && picks.length < n) {
-    const i = int(pool.length * Math.random());
+    const i = Math.floor(pool.length * Math.random());
     picks.push(pool.splice(i, 1)[0]);
   }
 
-  if (!picks.length) return;
+  if (!picks.length) return [];
 
   const updates = {};
   for (const idx of picks) {
     updates[`system.crit.${locKey}.slots.${idx}.destroyed`] = true;
   }
   await actor.update(updates, { atowAmmoExplosion: true }).catch(() => {});
+  return picks;
 }
 
 async function _processAmmoExplosionQueue(actor) {
@@ -3362,7 +4338,9 @@ Hooks.once("ready", async () => {
     for (const actor of actors) {
       if (actor?.type && actor.type !== "mech") continue;
 
-      const totals = _computeArmorTotalsFrom(actor.system?.armor);
+      const totals = _computeArmorTotalsFrom(actor.system?.armor, {
+        damagePerPip: isHardenedArmorSystem(actor.system) ? 2 : 1
+      });
       const curV = Number(actor.system?.armorTrack?.value);
       const curM = Number(actor.system?.armorTrack?.max);
 
@@ -3391,7 +4369,9 @@ Hooks.on("updateActor", async (actor, changed, options) => {
     const armorTouched = keys.some(k => k.startsWith("system.armor."));
     if (!armorTouched) return;
 
-    const totals = _computeArmorTotalsFrom(actor.system?.armor);
+    const totals = _computeArmorTotalsFrom(actor.system?.armor, {
+      damagePerPip: isHardenedArmorSystem(actor.system) ? 2 : 1
+    });
     const curV = Number(actor.system?.armorTrack?.value);
     const curM = Number(actor.system?.armorTrack?.max);
 
@@ -3602,6 +4582,9 @@ Hooks.on("canvasReady", async () => {
       // --- Crit-slot destruction SFX ---
       const critDelta = changed?.system?.crit;
       if (critDelta) {
+        const improvedHeavyLasersTriggered = new Set();
+        const hagWeaponsTriggered = new Set();
+        const gaussWeaponsTriggered = new Set();
         for (const [locKey, locVal] of Object.entries(critDelta ?? {})) {
           const slotsDelta = locVal?.slots;
           if (!slotsDelta) continue;
@@ -3628,6 +4611,84 @@ Hooks.on("canvasReady", async () => {
               label = _defaultCritLabel(actor, locKey, index) ?? "";
             }
 
+// Improved Heavy Lasers explode on their first critical hit. Multi-slot
+// continuations belong to the same mounted component and must not cause
+// additional explosions after that first crit.
+const storedSlot = actor.system?.crit?.[locKey]?.slots?.[index] ?? {};
+const componentStart = (storedSlot?.partOf !== undefined && storedSlot.partOf !== null)
+  ? Number(storedSlot.partOf)
+  : index;
+const componentStartSlot = actor.system?.crit?.[locKey]?.slots?.[componentStart] ?? storedSlot;
+const componentLabel = String(componentStartSlot?.label ?? label).trim() || String(label).trim();
+const improvedHeavyLaserDamage = _getImprovedHeavyLaserExplosionDamage(componentLabel);
+if (!options?.atowLocDestroy && improvedHeavyLaserDamage > 0) {
+  const componentSpan = Math.max(1, Number(componentStartSlot?.span ?? 1) || 1);
+  let previouslyCritted = false;
+  for (let offset = 0; offset < componentSpan; offset++) {
+    previouslyCritted ||= Boolean(
+      actor.system?.crit?.[locKey]?.slots?.[componentStart + offset]?.destroyed
+    );
+  }
+  const componentKey = `${locKey}:${String(componentStartSlot?.mountId ?? componentStart)}`;
+  if (!previouslyCritted && !improvedHeavyLasersTriggered.has(componentKey)) {
+    improvedHeavyLasersTriggered.add(componentKey);
+    if (game.user?.isGM) {
+      setTimeout(async () => {
+        try {
+          playAtowSfx(AMMO_EXPLOSION_SFX, { volume: 1.0 });
+          await ChatMessage.create({
+            speaker: ChatMessage.getSpeaker({ actor }),
+            content: `<b>${actor.name}</b> suffers an <b>IMPROVED HEAVY LASER EXPLOSION</b> in <b>${String(locKey).toUpperCase()}</b>!<br/>Weapon: <b>${componentLabel}</b><br/>Damage: <b>${improvedHeavyLaserDamage}</b> (internal first)`
+          });
+          await applyExplosionDamage(actor, locKey, improvedHeavyLaserDamage);
+          const crits = await rollExplosionCritCount(actor, {
+            flavor: `${componentLabel} Explosion Critical Check`
+          });
+          if (crits > 0) await applyRandomCritDestruction(actor, locKey, crits);
+        } catch (err) {
+          console.warn("AToW Battletech | Improved Heavy Laser explosion failed", err);
+        }
+      }, 0);
+    }
+  }
+  continue;
+}
+
+// HAGs likewise explode on the mounted weapon's first critical hit.
+const hagExplosionDamage = _getHAGExplosionDamage(componentLabel);
+if (!options?.atowLocDestroy && hagExplosionDamage > 0) {
+  const componentSpan = Math.max(1, Number(componentStartSlot?.span ?? 1) || 1);
+  let previouslyCritted = false;
+  for (let offset = 0; offset < componentSpan; offset++) {
+    previouslyCritted ||= Boolean(
+      actor.system?.crit?.[locKey]?.slots?.[componentStart + offset]?.destroyed
+    );
+  }
+  const componentKey = `${locKey}:${String(componentStartSlot?.mountId ?? componentStart)}`;
+  if (!previouslyCritted && !hagWeaponsTriggered.has(componentKey)) {
+    hagWeaponsTriggered.add(componentKey);
+    if (game.user?.isGM) {
+      setTimeout(async () => {
+        try {
+          playAtowSfx(AMMO_EXPLOSION_SFX, { volume: 1.0 });
+          await ChatMessage.create({
+            speaker: ChatMessage.getSpeaker({ actor }),
+            content: `<b>${actor.name}</b> suffers a <b>HAG AMMUNITION EXPLOSION</b> in <b>${String(locKey).toUpperCase()}</b>!<br/>Weapon: <b>${componentLabel}</b><br/>Damage: <b>${hagExplosionDamage}</b> (internal first)`
+          });
+          await applyExplosionDamage(actor, locKey, hagExplosionDamage);
+          const crits = await rollExplosionCritCount(actor, {
+            flavor: `${componentLabel} Explosion Critical Check`
+          });
+          if (crits > 0) await applyRandomCritDestruction(actor, locKey, crits);
+        } catch (err) {
+          console.warn("AToW Battletech | HAG explosion failed", err);
+        }
+      }, 0);
+    }
+  }
+  continue;
+}
+
 
 // Ammo explosion on crit: if an ammo slot is destroyed, it detonates (but NOT when a whole location is destroyed).
 const ammoInfo = _parseAmmoCritLabel(label);
@@ -3639,17 +4700,30 @@ if (ammoInfo && !ammoInfo.noExplode) {
   continue;
 }
 
-// Gauss Rifle detonation: the weapon itself explodes for 15 internal-first damage (gauss ammo does not).
-if (!options?.atowLocDestroy && String(label).toLowerCase().includes("gauss") && String(label).toLowerCase().includes("rifle")) {
+// Gauss rifles detonate on a weapon critical; Light Gauss uses its own
+// 16-point explosion while the standard Gauss Rifle remains 15 points.
+const gaussExplosionDamage = _getGaussRifleExplosionDamage(label);
+if (!options?.atowLocDestroy && gaussExplosionDamage > 0) {
+  const componentSpan = Math.max(1, Number(componentStartSlot?.span ?? 1) || 1);
+  let previouslyCritted = false;
+  for (let offset = 0; offset < componentSpan; offset++) {
+    previouslyCritted ||= Boolean(
+      actor.system?.crit?.[locKey]?.slots?.[componentStart + offset]?.destroyed
+    );
+  }
+  const componentKey = `${locKey}:${String(componentStartSlot?.mountId ?? componentStart)}`;
+  if (previouslyCritted || gaussWeaponsTriggered.has(componentKey)) continue;
+  gaussWeaponsTriggered.add(componentKey);
+
   if (game.user?.isGM) {
     setTimeout(async () => {
       try {
         playAtowSfx(AMMO_EXPLOSION_SFX, { volume: 1.0 });
         await ChatMessage.create({
           speaker: ChatMessage.getSpeaker({ actor }),
-          content: `<b>${actor.name}</b> suffers a <b>GAUSS RIFLE DETONATION</b> in <b>${String(locKey).toUpperCase()}</b>!<br/>Damage: <b>15</b>`
+          content: `<b>${actor.name}</b> suffers a <b>GAUSS RIFLE DETONATION</b> in <b>${String(locKey).toUpperCase()}</b>!<br/>Weapon: <b>${label}</b><br/>Damage: <b>${gaussExplosionDamage}</b>`
         });
-        await applyExplosionDamage(actor, locKey, 15);
+        await applyExplosionDamage(actor, locKey, gaussExplosionDamage);
         const crits = await rollExplosionCritCount(actor, { flavor: "Gauss Detonation Critical Check" });
         if (crits > 0) await applyRandomCritDestruction(actor, locKey, crits);
       } catch (e) {
@@ -3840,6 +4914,15 @@ export class AToWMechSheetV2 extends HandlebarsApplicationMixin(ActorSheetV2) {
     }, {});
     context.mechTonnage = mechTonnage;
     context.mechStructureProfile = mechStructureProfile;
+    const storedArmorType = normalizeArmorType(system?.mech?.armorType);
+    const detectedArmorType = detectArmorTypeFromCritSlots(system);
+    context.armorTypeOptions = ARMOR_TYPE_OPTIONS;
+    context.armorType = detectedArmorType ?? storedArmorType;
+    context.armorTypeAutoDetected = Boolean(detectedArmorType);
+    context.armorTypeRequirement = getArmorTypeRequirement(
+      context.armorType,
+      _getMechTechBase(this.actor, system?.mech?.engine ?? null)
+    );
     context.mechHeaderMeta = [
       getMechWeightClassLabel(mechTonnage),
       `${mechTonnage} Tons`,
@@ -3848,18 +4931,27 @@ export class AToWMechSheetV2 extends HandlebarsApplicationMixin(ActorSheetV2) {
 
     // --- Derived movement (auto-calculated from Engine Rating + Tonnage) ---
     // Jump MP is only calculated if jump jets are installed in crit slots.
-    const jumpJetInstalledCount = await countJumpJetComponentsFromCritSlots(this.actor);
+    const jumpJetInstallation = await getJumpJetInstallationFromCritSlots(this.actor);
+    const jumpJetInstalledCount = jumpJetInstallation.intact;
 
     const derivedMoveBase = computeDerivedMovement(system?.mech?.engine, mechTonnage, {
-      jumpJetCount: jumpJetInstalledCount
+      jumpJetCount: jumpJetInstalledCount,
+      improvedJumpJetCount: jumpJetInstallation.improvedIntact
     });
 
     // --- Triple-Strength Myomer (TSM) ---
     const mechTechBase = _getMechTechBase(this.actor, system?.mech?.engine ?? null);
+    const partialWing = getPartialWingState(this.actor, {
+      tonnage: mechTonnage,
+      techBase: mechTechBase
+    });
+    context.partialWing = partialWing;
 
     const tsmSlotsTotal = countComponentCritSlots(system, _TSM_LABEL_RE, { includeDestroyed: true });
     const tsmSlotsIntact = countComponentCritSlots(system, _TSM_LABEL_RE, { includeDestroyed: false });
-    const mascSlotsIntact = countComponentCritSlots(system, _MASC_LABEL_RE, { includeDestroyed: false });
+    const masc = getMASCState(this.actor);
+    const supercharger = getSuperchargerState(this.actor);
+    const mascSlotsIntact = masc.intactSlots;
 
     const tsmNeeded = 6;
     const hasTSM = tsmSlotsTotal > 0;
@@ -3884,7 +4976,10 @@ export class AToWMechSheetV2 extends HandlebarsApplicationMixin(ActorSheetV2) {
 
     let tsmWalk = derivedMoveBase?.walk ?? 0;
     let tsmRun = derivedMoveBase?.run ?? 0;
-    const baseJump = derivedMoveBase?.jump ?? 0;
+    const baseJumpWithoutWing = derivedMoveBase?.jump ?? 0;
+    const baseJump = (partialWing.active && baseJumpWithoutWing > 0)
+      ? baseJumpWithoutWing + partialWing.jumpBonus
+      : baseJumpWithoutWing;
 
     if (tsmActive) {
       tsmWalk = Math.max(0, tsmWalk + 2);
@@ -3897,8 +4992,62 @@ export class AToWMechSheetV2 extends HandlebarsApplicationMixin(ActorSheetV2) {
       jump: Math.max(0, baseJump - heatMovePenalty)
     };
     const derivedMove = applyLegLossMovementOverride(derivedMoveRaw, this.actor);
+    const mascActive = isMASCActiveForCurrentTurn(this.actor);
+    const superchargerActive = isSuperchargerActiveForCurrentTurn(this.actor);
+    const enhancedRunMultiplier = getEnhancedRunMultiplier(this.actor);
+    if (enhancedRunMultiplier) {
+      derivedMove.run = Math.max(0, Math.ceil(derivedMove.walk * enhancedRunMultiplier));
+    }
+    if (isHardenedArmorSystem(system)) {
+      derivedMove.run = Math.max(0, Number(derivedMove.run ?? 0) - 1);
+    }
 
     context.derivedMove = derivedMove;
+    context.hasMASC = masc.installed;
+    context.isMASCOperational = masc.operational;
+    context.isMASCActive = mascActive;
+    const mascHistory = this.actor.getFlag?.(SYSTEM_ID, "mascState") ?? {};
+    const mascAttemptedThisTurn = String(mascHistory.activationStamp ?? "") === getCurrentCombatTurnStamp();
+    context.isMASCAttempted = mascAttemptedThisTurn;
+    context.isMASCFailed = mascAttemptedThisTurn && !mascActive;
+    const mascCurrentRound = Number(game.combat?.round ?? 0) || 0;
+    const mascPriorRound = Number(mascHistory.lastRound);
+    const mascSameCombat = game.combat?.started
+      && String(mascHistory.combatId ?? "") === String(game.combat?.id ?? "")
+      && Number.isFinite(mascPriorRound);
+    const mascSkipped = mascSameCombat ? Math.max(0, mascCurrentRound - mascPriorRound - 1) : 0;
+    const mascNextLevel = !mascSameCombat
+      ? 0
+      : (mascAttemptedThisTurn
+        ? Math.max(0, Math.min(4, Number(mascHistory.lastLevel ?? 0) || 0))
+        : (mascSkipped > 0
+          ? Math.max(0, (Number(mascHistory.lastLevel ?? 0) || 0) - mascSkipped)
+          : Math.min(4, (Number(mascHistory.lastLevel ?? 0) || 0) + 1)));
+    context.mascAvoidLabel = _mascAvoidanceForLevel(mascNextLevel).label;
+    context.hasSupercharger = supercharger.installed;
+    context.isSuperchargerOperational = supercharger.operational;
+    context.isSuperchargerActive = superchargerActive;
+    context.isCombinedEnhancersActive = mascActive && superchargerActive;
+    context.enhancedRunMultiplier = enhancedRunMultiplier;
+    const superchargerHistory = this.actor.getFlag?.(SYSTEM_ID, "superchargerState") ?? {};
+    const superchargerAttemptedThisTurn =
+      String(superchargerHistory.activationStamp ?? "") === getCurrentCombatTurnStamp();
+    context.isSuperchargerFailed = superchargerAttemptedThisTurn && !superchargerActive;
+    const superchargerPriorRound = Number(superchargerHistory.lastRound);
+    const superchargerSameCombat = game.combat?.started
+      && String(superchargerHistory.combatId ?? "") === String(game.combat?.id ?? "")
+      && Number.isFinite(superchargerPriorRound);
+    const superchargerSkipped = superchargerSameCombat
+      ? Math.max(0, mascCurrentRound - superchargerPriorRound - 1)
+      : 0;
+    const superchargerNextLevel = !superchargerSameCombat
+      ? 0
+      : (superchargerAttemptedThisTurn
+        ? Math.max(0, Math.min(4, Number(superchargerHistory.lastLevel ?? 0) || 0))
+        : (superchargerSkipped > 0
+          ? Math.max(0, (Number(superchargerHistory.lastLevel ?? 0) || 0) - superchargerSkipped)
+          : Math.min(4, (Number(superchargerHistory.lastLevel ?? 0) || 0) + 1)));
+    context.superchargerAvoidLabel = _mascAvoidanceForLevel(superchargerNextLevel).label;
 
     if (derivedMove) {
       system.movement = system.movement ?? {};
@@ -3908,16 +5057,28 @@ export class AToWMechSheetV2 extends HandlebarsApplicationMixin(ActorSheetV2) {
       system.movement._base = derivedMoveBase;
       system.movement._heatMovePenalty = heatMovePenalty;
       system.movement._tsmActive = tsmActive;
+      system.movement._partialWingActive = partialWing.active;
+      system.movement._partialWingBonus = partialWing.jumpBonus;
+      system.movement._mascActive = mascActive;
+      system.movement._superchargerActive = superchargerActive;
+      system.movement._enhancedRunMultiplier = enhancedRunMultiplier;
     }
 
-    // Jump jet bookkeeping: installed vs "full jump" requirement.
-    // In classic BT, to achieve Jump MP equal to Walk MP, you must install Jump Jets equal to Walk MP.
+    // Jump jet bookkeeping: standard jets cap at Walking MP; Improved Jump
+    // Jets may be installed up to standard Running MP.
     const jumpJetsInstalled = Math.max(0, Math.floor(Number(jumpJetInstalledCount ?? 0) || 0));
-    const jumpJetsRequired = (jumpJetsInstalled > 0 && derivedMoveBase?.walk) ? derivedMoveBase.walk : 0;
+    const jumpJetMaximum = jumpJetInstallation.improvedTotal > 0
+      ? Number(derivedMoveBase?.run ?? 0)
+      : Number(derivedMoveBase?.walk ?? 0);
+    const jumpJetsRequired = jumpJetsInstalled > 0 ? jumpJetMaximum : 0;
     const jumpJetsDelta = jumpJetsInstalled - jumpJetsRequired;
 
     const jumpJetStatus = {
       installed: jumpJetsInstalled,
+      totalInstalled: jumpJetInstallation.total,
+      standardInstalled: jumpJetInstallation.standardTotal,
+      improvedInstalled: jumpJetInstallation.improvedTotal,
+      destroyed: Math.max(0, jumpJetInstallation.total - jumpJetInstallation.intact),
       required: jumpJetsRequired,
       delta: jumpJetsDelta,
       ok: (jumpJetsRequired === 0 ? jumpJetsInstalled === 0 : jumpJetsInstalled === jumpJetsRequired)
@@ -4011,6 +5172,41 @@ export class AToWMechSheetV2 extends HandlebarsApplicationMixin(ActorSheetV2) {
     };
 
     context.loadout = loadoutDisplay;
+    context.mechQuirks = items
+      .filter(item => item.type === "mechQuirk")
+      .map(item => {
+        const polarity = item.system?.polarity === "negative" ? "negative" : "positive";
+        const rawPoints = Number(item.system?.points ?? 0);
+        const points = Math.min(5, Math.max(0, Number.isFinite(rawPoints) ? Math.round(rawPoints) : 0));
+        const selectedWeaponKey = String(item.system?.selectedWeaponKey ?? "").trim();
+        const selectedWeapon = selectedWeaponKey
+          ? autoWeapons.find(entry => {
+              const mountKey = entry?.mountId ? `mount:${entry.mountId}` : "";
+              const critMatch = String(entry?.weaponFireKey ?? "").match(/^crit:([^:]+):(\d+)/i);
+              const critKey = critMatch ? `crit:${critMatch[1]}:${critMatch[2]}` : "";
+              return selectedWeaponKey === mountKey || selectedWeaponKey === critKey;
+            })
+          : null;
+        return {
+          id: item.id,
+          name: item.name,
+          description: String(item.system?.description ?? ""),
+          polarity,
+          points,
+          pointsLabel: `${points} ${points === 1 ? "pt" : "pts"}`,
+          selectedWeaponLabel: selectedWeapon
+            ? `${selectedWeapon.name} (${selectedWeapon.system?.loc ?? selectedWeapon.mountLocKey?.toUpperCase?.() ?? "Unknown"})`
+            : "",
+          needsWeaponSelection: String(item.name ?? "").trim().toLowerCase() === "accurate weapon" && !selectedWeapon,
+          isPositive: polarity === "positive",
+          isNegative: polarity === "negative"
+        };
+      })
+      .sort((a, b) => {
+        if (a.polarity !== b.polarity) return a.isPositive ? -1 : 1;
+        return String(a.name ?? "").localeCompare(String(b.name ?? ""));
+      });
+    context.hasMechQuirks = context.mechQuirks.length > 0;
 
     // --- Tonnage Breakdown (informational; also drives current weight) ---
     const techBase = mechTechBase;
@@ -4035,38 +5231,74 @@ const ferroSlots = countFerroFibrousCritSlots(system);
 // Clan Ferro-Fibrous: 7 crit slots, 1.20 multiplier.
 // Inner Sphere Ferro-Fibrous: 14 crit slots, 1.12 multiplier.
 // Inner Sphere Light Ferro-Fibrous: 7 crit slots, 1.06 multiplier.
+// Inner Sphere Heavy Ferro-Fibrous: 21 crit slots, 1.24 multiplier.
 const ferroNeeded = (techBase === "clan") ? 7 : 14;
 const lightFerroNeeded = 7;
-const hasLightFerro = (techBase === "inner") && (Number(ferroSlots.light ?? 0) >= lightFerroNeeded);
-const hasFerro = !hasLightFerro && (Number(ferroSlots.standard ?? 0) >= ferroNeeded);
+const heavyFerroNeeded = 21;
+const hasHeavyFerro = (techBase === "inner") && (Number(ferroSlots.heavy ?? 0) >= heavyFerroNeeded);
+const hasLightFerro = !hasHeavyFerro && (techBase === "inner") && (Number(ferroSlots.light ?? 0) >= lightFerroNeeded);
+const hasFerro = !hasHeavyFerro && !hasLightFerro && (Number(ferroSlots.standard ?? 0) >= ferroNeeded);
+const ferroLamellorSlots = countComponentCritSlots(system, /^ferro\s*-?\s*lamellor(?:\s+armor)?$/i, { includeDestroyed: true });
+const ferroLamellorNeeded = 12;
+const hasFerroLamellor = context.armorType === "ferro-lamellor" && ferroLamellorSlots >= ferroLamellorNeeded;
 
 const armorTonsStd = armorPoints / 16;
 // Ferro-Fibrous math (per our rule): 1 ton = 16 armor points × multiplier (then rounded)
 // -> derive tonnage from points as points / (16 * multiplier). Avoid per-ton rounding.
-const armorMultiplier = hasLightFerro
-  ? 1.06
-  : hasFerro
-    ? ((techBase === "clan") ? 1.20 : 1.12)
-    : 1.0;
+const armorMultiplier = hasHeavyFerro
+  ? 1.24
+  : hasLightFerro
+    ? 1.06
+    : hasFerro
+      ? ((techBase === "clan") ? 1.20 : 1.12)
+      : 1.0;
+const hasHardenedArmor = context.armorType === "hardened";
 const armorTons = roundTons(
-  armorMultiplier > 1
-    ? (armorPoints / (16 * armorMultiplier))
-    : armorTonsStd
+  hasHardenedArmor
+    ? (armorPoints / 8)
+    : hasFerroLamellor
+      ? (armorPoints / 14)
+    : armorMultiplier > 1
+      ? (armorPoints / (16 * armorMultiplier))
+      : armorTonsStd
 );
 
 
-const armorNote = hasLightFerro
-  ? `Light Ferro-Fibrous (${Number(ferroSlots.light ?? 0)}/${lightFerroNeeded} slots)`
-  : hasFerro
-    ? `Ferro-Fibrous (${Number(ferroSlots.standard ?? 0)}/${ferroNeeded} slots)`
-    : `Standard (${Number(ferroSlots.standard ?? 0)}/${ferroNeeded} slots)`;
+const armorNote = hasHardenedArmor
+  ? "Hardened Armor (2 damage per armor point; -1 Running MP; +1 Piloting TN)"
+  : hasFerroLamellor
+  ? `Ferro-Lamellor (${ferroLamellorSlots}/${ferroLamellorNeeded} slots; 14 armor points/ton; damage reduction active)`
+  : context.armorType === "ferro-lamellor"
+    ? `Standard protection (Ferro-Lamellor ${ferroLamellorSlots}/${ferroLamellorNeeded} slots)`
+  : hasHeavyFerro
+  ? `Heavy Ferro-Fibrous (${Number(ferroSlots.heavy ?? 0)}/${heavyFerroNeeded} slots)`
+  : hasLightFerro
+    ? `Light Ferro-Fibrous (${Number(ferroSlots.light ?? 0)}/${lightFerroNeeded} slots)`
+    : hasFerro
+      ? `Ferro-Fibrous (${Number(ferroSlots.standard ?? 0)}/${ferroNeeded} slots)`
+      : Number(ferroSlots.heavy ?? 0) > 0
+        ? `Standard (Heavy Ferro-Fibrous ${Number(ferroSlots.heavy ?? 0)}/${heavyFerroNeeded} slots)`
+        : `Standard (${Number(ferroSlots.standard ?? 0)}/${ferroNeeded} slots)`;
 // Engine + Gyro (best-effort from the engine text field)
 const engineText = system?.mech?.engine ?? "";
 const engineRating = parseEngineRating(engineText);
 const engineTons = roundTons(getEngineTonnageFromEngineText(engineText));
 const standardGyroTons = engineRating ? Math.ceil(engineRating / 100) : 0;
 const xlGyroEnabled = _isXLGyroEnabled(this.actor);
-const gyroTons = xlGyroEnabled ? roundTons(standardGyroTons / 2) : standardGyroTons;
+const compactGyroEnabled = _isCompactGyroEnabled(this.actor);
+const heavyDutyGyroEnabled = _isHeavyDutyGyroEnabled(this.actor);
+const armoredGyroEnabled = Boolean(system?.mech?.armoredGyro);
+const smallCockpitEnabled = _isSmallCockpitEnabled(this.actor);
+const baseGyroTons = compactGyroEnabled
+  ? roundTons(standardGyroTons * 1.5)
+  : xlGyroEnabled
+    ? roundTons(standardGyroTons / 2)
+    : heavyDutyGyroEnabled
+      ? roundTons(standardGyroTons * 2)
+      : standardGyroTons;
+const gyroSlots = compactGyroEnabled ? 2 : (xlGyroEnabled ? 6 : 4);
+const armoredGyroTons = armoredGyroEnabled ? gyroSlots * 0.5 : 0;
+const gyroTons = roundTons(baseGyroTons + armoredGyroTons);
 
 // Ammo + installed crit-slot equipment tonnage:
 // - Ammo bins: use the underlying ammo Item's tonnage when available (fixes 0.5t bins, etc.)
@@ -4136,7 +5368,10 @@ const installedSinks = (critCooling.sinkCount > 0) ? critCooling.sinkCount : emb
 const installedSinkDissipation = (critCooling.sinkCount > 0) ? critCooling.sinkDissipation : embeddedCooling.sinkDissipation;
 
 // Non-sink cooling always contributes (best-effort).
-const otherCoolingDissipation = (Number(critCooling.otherDissipation) || 0) + (Number(embeddedCooling.otherDissipation) || 0);
+const otherCoolingDissipation =
+  (Number(critCooling.otherDissipation) || 0) +
+  (Number(embeddedCooling.otherDissipation) || 0) +
+  (Number(partialWing.heatDissipationBonus) || 0);
 
 const totalHeatSinks = Math.max(0, (Number(engineMountedSinks) || 0) + (Number(installedSinks) || 0));
 const heatSinkTons = Math.max(0, totalHeatSinks - 10);
@@ -4145,14 +5380,24 @@ const heatSinkTons = Math.max(0, totalHeatSinks - 10);
 const baseSinkDissipation = (mechIsDouble ? 2 : 1) * (Number(engineMountedSinks) || 0);
 const heatDissipation = Math.max(0, baseSinkDissipation + (Number(installedSinkDissipation) || 0) + (Number(otherCoolingDissipation) || 0));
 
-// Jump jets: count installed jets from crit slots (1 jet = 1 crit slot).
-// If none are installed, tonnage is 0.
-const jumpJetCount = Math.max(0, Math.floor(Number(jumpJetInstalledCount ?? 0) || 0));
-const jumpJetPer = getJumpJetWeightPerJet(context.mechTonnage);
-const jumpJetTons = roundTons(jumpJetCount * jumpJetPer);
+// Jump jets are counted by mounted component. Improved Jump Jets occupy two
+// slots and weigh twice as much, but still provide one Jump MP each.
+const standardJumpJetCount = Math.max(0, Number(jumpJetInstallation?.standardTotal ?? 0) || 0);
+const improvedJumpJetCount = Math.max(0, Number(jumpJetInstallation?.improvedTotal ?? 0) || 0);
+const standardJumpJetProfile = getJumpJetProfile(context.mechTonnage);
+const improvedJumpJetProfile = getJumpJetProfile(context.mechTonnage, { improved: true });
+const jumpJetCount = standardJumpJetCount + improvedJumpJetCount;
+const jumpJetTons = roundTons(
+  (standardJumpJetCount * standardJumpJetProfile.tonnage) +
+  (improvedJumpJetCount * improvedJumpJetProfile.tonnage)
+);
+const jumpJetNote = [
+  standardJumpJetCount ? `${standardJumpJetCount} standard @ ${standardJumpJetProfile.tonnage}t` : "",
+  improvedJumpJetCount ? `${improvedJumpJetCount} improved @ ${improvedJumpJetProfile.tonnage}t` : ""
+].filter(Boolean).join("; ") || "0 installed";
 
-// Cockpit is always 3 tons
-const cockpitTons = 3;
+// A Small Cockpit saves 1 ton but imposes +1 TN on Piloting Skill Rolls.
+const cockpitTons = smallCockpitEnabled ? 2 : 3;
 
 // Weapons: we can’t reliably compute until weapon items define tonnage; we still sum if present.
 let weaponsTons = 0;
@@ -4163,12 +5408,18 @@ weaponsTons = roundTons(weaponsTons);
 let otherTons = 0;
 for (const d of equipmentDocs) {
   if (isHeatSinkItemName(d?.name)) continue;
+  if (isPartialWingName(d?.name)) continue;
   otherTons += getItemTonnage(d);
 }
 // Exclude "ammo" items here; ammo tonnage is derived from crit slots above.
-for (const d of other) otherTons += getItemTonnage(d);
+for (const d of other) {
+  if (isPartialWingName(d?.name)) continue;
+  otherTons += getItemTonnage(d);
+}
 // Add any additional crit-slot installed equipment (e.g., Command Module) that declares tonnage.
 otherTons += otherCritTons;
+// A completed Partial Wing pair is one system whose mass depends on carrier tonnage and tech base.
+otherTons += partialWing.tonnage;
 otherTons = roundTons(otherTons);
 
 const totalTons = roundTons(
@@ -4199,6 +5450,12 @@ context.mechWeight = {
 
 context.specialOptions = {
   xlGyro: xlGyroEnabled,
+  compactGyro: compactGyroEnabled,
+  heavyDutyGyro: heavyDutyGyroEnabled,
+  armoredGyro: armoredGyroEnabled,
+  armoredGyroTons,
+  gyroSlots,
+  smallCockpit: smallCockpitEnabled,
   gyroTons,
   standardGyroTons
 };
@@ -4206,14 +5463,44 @@ context.specialOptions = {
 context.tonnageBreakdown = [
   { key: "structure",  label: "Structure",   tons: structureTons, display: `${structureTons}t`, note: structureNote },
   { key: "armor",      label: "Armor",       tons: armorTons,     display: `${armorTons}t`,     note: `${armorNote}; ${armorPoints} pts` },
-  { key: "engine",     label: "Engine",      tons: engineTons,    display: `${engineTons}t`,    note: engineRating ? `Rating ${engineRating}${_isXLEngineText(engineText) ? " (XL)" : ""}` : "—" },
+  {
+    key: "engine",
+    label: "Engine",
+    tons: engineTons,
+    display: `${engineTons}t`,
+    note: engineRating
+      ? `Rating ${engineRating}${_isCompactEngineText(engineText) ? " (Compact)" : (_isLightFusionEngineText(engineText) ? " (Light Fusion)" : (_isXXLEngineText(engineText) ? " (XXL)" : (_isXLEngineText(engineText) ? " (XL)" : "")))}`
+      : "—"
+  },
   { key: "weapons",    label: "Weapons",     tons: weaponsTons,   display: `${weaponsTons}t`,   note: "Total weapon weight" },
   { key: "ammo",       label: "Ammo",        tons: ammoTons,      display: `${ammoTons}t`,      note: `${ammoSlots} bins (from item tonnage)` },
   { key: "heatsinks",  label: "Heat Sinks",  tons: heatSinkTons,  display: `${heatSinkTons}t`,  note: `${totalHeatSinks} total (${engineMountedSinks} engine used / ${engineMountedSinksAuto} auto + ${installedSinks} installed), ${sinkType.toUpperCase()} cooling ${heatDissipation}` },
-  { key: "gyro",       label: "Gyroscope",  tons: gyroTons,      display: `${gyroTons}t`,      note: engineRating ? (xlGyroEnabled ? `XL Gyro, half of ${standardGyroTons}t` : `ceil(${engineRating}/100)`) : "—" },
-  { key: "cockpit",    label: "Cockpit",     tons: cockpitTons,   display: `${cockpitTons}t`,   note: "Fixed" },
-  { key: "jumpjets",   label: "Jump Jets",   tons: jumpJetTons,   display: `${jumpJetTons}t`,   note: `${jumpJetCount} @ ${jumpJetPer}t` },
-  { key: "other",      label: "Other",       tons: otherTons,     display: `${otherTons}t`,     note: "Equipment w/ tonnage fields (incl. crit-slot gear)" }
+  {
+    key: "gyro",
+    label: "Gyroscope",
+    tons: gyroTons,
+    display: `${gyroTons}t`,
+    note: engineRating
+      ? `${compactGyroEnabled
+          ? `Compact Gyro, 1.5 × ${standardGyroTons}t`
+          : xlGyroEnabled
+            ? `XL Gyro, half of ${standardGyroTons}t`
+            : heavyDutyGyroEnabled
+              ? `Heavy-Duty Gyro, 2 × ${standardGyroTons}t`
+              : `ceil(${engineRating}/100)`}${armoredGyroEnabled ? `; armored ${gyroSlots} slots (+${armoredGyroTons}t)` : ""}`
+      : "—"
+  },
+  { key: "cockpit",    label: "Cockpit",     tons: cockpitTons,   display: `${cockpitTons}t`,   note: smallCockpitEnabled ? "Small Cockpit; +1 Piloting TN" : "Standard" },
+  { key: "jumpjets",   label: "Jump Jets",   tons: jumpJetTons,   display: `${jumpJetTons}t`,   note: jumpJetNote },
+  {
+    key: "other",
+    label: "Other",
+    tons: otherTons,
+    display: `${otherTons}t`,
+    note: partialWing.complete
+      ? `Equipment incl. Partial Wing ${partialWing.tonnage}t`
+      : "Equipment w/ tonnage fields (incl. crit-slot gear)"
+  }
 ];
 
 // ---- Ammunition (derived from installed ammo in crit slots) ----
@@ -4260,17 +5547,26 @@ context.armorLocList = ORDER
       dmg: loc.dmg,
       pips: Array.from({ length: loc.max }, (_, i) => {
         const n = i + 1;
-        return { n, filled: n <= loc.dmg };
+        if (hasHardenedArmor) {
+          return {
+            n,
+            filled: Number(loc.dmg ?? 0) >= n * 2,
+            partial: Number(loc.dmg ?? 0) === (n * 2) - 1
+          };
+        }
+        return { n, filled: n <= loc.dmg, partial: false };
       })
     };
   });
 
 // Armor totals (for display + token bar resource)
-const armorTotals = _computeArmorTotalsFrom(armor);
+const armorTotals = _computeArmorTotalsFrom(armor, { damagePerPip: hasHardenedArmor ? 2 : 1 });
 context.armorSummary = {
   current: armorTotals.current,
   max: armorTotals.max,
-  allowed: Number(context.mechStructureProfile?.maxArmor ?? 0) || 0
+  allowed: Number(context.mechStructureProfile?.maxArmor ?? 0) || 0,
+  tons: armorTons,
+  hardened: hasHardenedArmor
 };
 
 
@@ -4339,8 +5635,9 @@ const DEFAULT_CRIT = {
   ct:   { label: "Center Torso", slots13: ["Engine", "Engine", "Engine", "Gyro", "Gyro", "Gyro"], slots46: ["Gyro", "Engine", "Engine", "Engine", "", ""] }
 };
 
+DEFAULT_CRIT.head.slots = _getHeadDefaultCritLabels(this.actor);
 
-// Dynamic defaults for XL engines: reserve extra Engine crits in side torsos.
+// Dynamic defaults for XL, XXL, and Light Fusion engines: reserve Engine crits in side torsos.
 try {
   const ctLabels = _getCTDefaultCritLabels(this.actor);
   DEFAULT_CRIT.ct.slots13 = ctLabels.slice(0, 6);
@@ -4348,9 +5645,10 @@ try {
 
   const side = _xlSideEngineCritCount(this.actor);
   if (side > 0) {
+    const engineLabel = _getEngineCritLabel(this.actor);
     for (let i = 0; i < side; i++) {
-      DEFAULT_CRIT.lt.slots13[i] = "Engine";
-      DEFAULT_CRIT.rt.slots13[i] = "Engine";
+      DEFAULT_CRIT.lt.slots13[i] = engineLabel;
+      DEFAULT_CRIT.rt.slots13[i] = engineLabel;
     }
   }
 } catch (_) {}
@@ -4423,7 +5721,7 @@ function _classifyCritLabel(label) {
   // Weapon-ish keywords (best-effort; we don't want to async resolve fromUuid for every slot)
   if (
     // Include LB-X autocannon label styles (e.g., "LB 10-X AC") so they don't fall into "system/other".
-    /(hatchet|sword|narc\s+missile\s+beacon|laser|ppc|ac\s*\/?\s*\d+|lrm\s*\d+|mml\s*\d+|mrm\s*\d+|srm\s*\d+|\batm\s*[-/]?\s*\d+\b|\blb\s*\d+\s*-\s*x\s*ac\b|\blbx\b|gauss|mg\b|machine gun|flamer|autocannon|rifle|plasma|pulse|anti-missile|\bams\b)/i.test(label)
+    /(hatchet|sword|retractable\s+blade|narc\s+missile\s+beacon|laser|ppc|ac\s*\/?\s*\d+|lrm\s*\d+|mml\s*\d+|mrm\s*\d+|srm\s*\d+|\batm\s*[-/]?\s*\d+\b|\blb\s*\d+\s*-\s*x\s*ac\b|\blbx\b|gauss|mg\b|machine gun|flamer|autocannon|rifle|plasma|pulse|anti-missile|\bams\b)/i.test(label)
   ) {
     return { category: "weapon", iconClass: "fas fa-crosshairs" };
   }
@@ -4434,7 +5732,7 @@ function _classifyCritLabel(label) {
 
 function _isFerroFibrousCritLabel(label) {
   const compact = String(label ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
-  return compact.includes("ferrofibrous");
+  return compact.includes("ferrofibrous") || compact.includes("ferrolamellor");
 }
 
 // Build renderable slot arrays, supporting multi-slot "span" (start slot only)
@@ -4480,6 +5778,9 @@ const buildSlots = (locKey, labels, offset = 0) => {
       : (isEmpty ? "EMPTY" : String(label ?? "").trim());
     let slotTag = (!continuation && span > 1) ? `${span} slots` : "";
     if (!continuation && category === "case") slotTag = "CASE";
+    const isArmoredGyroSlot = armoredGyroEnabled && /\bgyro\b/i.test(String(label ?? ""));
+    const gyroArmorDestroyed = isArmoredGyroSlot && Boolean(stored?.armorDestroyed);
+    if (!continuation && isArmoredGyroSlot) slotTag = gyroArmorDestroyed ? "ARMOR SPENT" : "ARMORED";
     const canRearMount = !continuation && ["ct", "lt", "rt"].includes(locKey) && category === "weapon" && (Boolean(uuid) || Boolean(label));
     const rearMounted = Boolean(componentStartSlot?.rearMounted ?? stored?.rearMounted);
     if (!continuation && canRearMount && rearMounted) slotTag = slotTag ? `${slotTag} | REAR` : "REAR";
@@ -4491,6 +5792,8 @@ const buildSlots = (locKey, labels, offset = 0) => {
       label,
       uuid,
       destroyed,
+      armored: isArmoredGyroSlot,
+      armorDestroyed: gyroArmorDestroyed,
       category,
       iconClass,
       displayName,
@@ -4535,7 +5838,7 @@ const dots = (count, filled) => Array.from({ length: count }, (_, i) => ({ n: i 
 
 context.critHits = {
   engine: dots(3, critHits.engine),
-  gyro: dots(2, critHits.gyro),
+  gyro: dots(heavyDutyGyroEnabled ? 3 : 2, critHits.gyro),
   sensor: dots(2, critHits.sensor),
   lifeSupport: dots(1, critHits.lifeSupport)
 };
@@ -4711,6 +6014,39 @@ engineSinksRemoved: Math.max(0, (Number(engineMountedSinksAuto) || 0) - (Number(
           addStatus("info", "💪", "Triple-Strength Myomer: ACTIVE", `Heat ${heatNow} (≥ ${thr})`);
         } else {
           addStatus("info", "💪", "Triple-Strength Myomer: Inactive", `Heat ${heatNow} (needs ≥ ${thr})`);
+        }
+      }
+    } catch (_) { /* ignore */ }
+
+    // Partial Wing status (shown once either torso half is installed).
+    try {
+      const wing = context?.partialWing ?? {};
+      if (wing.left?.installed || wing.right?.installed) {
+        if (!wing.complete) {
+          const missing = [
+            !wing.left?.installed ? "Left Torso" : "",
+            !wing.right?.installed ? "Right Torso" : ""
+          ].filter(Boolean).join(" and ");
+          addStatus(
+            "warning",
+            "🪽",
+            "Partial Wing: INCOMPLETE",
+            `Install the matching half in ${missing}; full system mass ${wing.designTonnage}t`
+          );
+        } else if (Number(wing.destroyedCrits ?? 0) > 0) {
+          addStatus(
+            "warning",
+            "🪽",
+            "Partial Wing: DAMAGED",
+            `${wing.destroyedCrits} critical hit(s) • +${wing.jumpBonus}/${wing.baseJumpBonus} Jump MP • +${wing.heatDissipationBonus} cooling`
+          );
+        } else {
+          addStatus(
+            "info",
+            "🪽",
+            "Partial Wing: ACTIVE",
+            `+${wing.jumpBonus} Jump MP • +${wing.heatDissipationBonus} cooling • ${wing.tonnage}t`
+          );
         }
       }
     } catch (_) { /* ignore */ }
@@ -4910,6 +6246,9 @@ engineSinksRemoved: Math.max(0, (Number(engineMountedSinksAuto) || 0) - (Number(
     this._syncDerivedHeatDissipation(context).catch(err => {
       console.warn("AToWMechSheetV2 | Failed to sync derived heat dissipation", err);
     });
+    this._syncDerivedJumpMovement(context).catch(err => {
+      console.warn("AToWMechSheetV2 | Failed to sync derived jump movement", err);
+    });
     this._injectWindowColumnToggle(root);
 
     const html = globalThis.jQuery?.(root) ?? globalThis.$?.(root) ?? null;
@@ -4922,6 +6261,14 @@ engineSinksRemoved: Math.max(0, (Number(engineMountedSinksAuto) || 0) - (Number(
     const current = Number(this.actor?.system?.heat?.dissipation ?? NaN);
     if (Math.abs((Number.isFinite(current) ? current : 0) - next) < 0.001) return;
     await this.actor.update({ "system.heat.dissipation": next }, { atowSyncHeatDissipation: true });
+  }
+
+  async _syncDerivedJumpMovement(context) {
+    const next = Number(context?.derivedMove?.jump ?? NaN);
+    if (!Number.isFinite(next)) return;
+    const current = Number(this.actor?.system?.movement?.jump ?? NaN);
+    if (Number.isFinite(current) && current === next) return;
+    await this.actor.update({ "system.movement.jump": next }, { atowSyncJumpMovement: true });
   }
 
   _injectWindowColumnToggle(root) {
@@ -4994,6 +6341,8 @@ engineSinksRemoved: Math.max(0, (Number(engineMountedSinksAuto) || 0) - (Number(
     });
 
     html.find(".item-delete").on("click", this._onItemDelete.bind(this));
+    html.find(".quirk-add").on("click", this._onQuirkAdd.bind(this));
+    html.find(".quirk-edit").on("click", this._onQuirkEdit.bind(this));
     html.find(".we-attack").on("click", this._onWeaponAttack.bind(this));
     html.find(".we-row").on("click", this._onWeaponRowClick.bind(this));
     html.find(".we-row").on("contextmenu", this._onWeaponRowContext.bind(this));
@@ -5004,6 +6353,7 @@ engineSinksRemoved: Math.max(0, (Number(engineMountedSinksAuto) || 0) - (Number(
     html.find('input[name="system.heat.value"]').on("change", this._onHeatValueChange.bind(this));
     html.find('input[name="system.heat.isDouble"]').on("change", this._onHeatSinkModeChange.bind(this));
     html.find('.armor-max[name^="system.armor."][name$=".max"]').on("change", this._onArmorMaxChange.bind(this));
+    html.find('select[name="system.mech.armorType"]').on("change", this._onArmorTypeChange.bind(this));
     html.find([
       'input[name="system.mech.chassis"]',
       'input[name="system.mech.model"]',
@@ -5027,6 +6377,10 @@ engineSinksRemoved: Math.max(0, (Number(engineMountedSinksAuto) || 0) - (Number(
     // Tech base can change how many XL engine side-torso crits are reserved.
     html.find('select[name="system.mech.techBase"], select[name="system.techBase"], input[name="system.mech.techBase"], input[name="system.techBase"]').on("change", this._onTechBaseChange.bind(this));
     html.find('input[name="system.mech.xlGyro"]').on("change", this._onXLGyroChange.bind(this));
+    html.find('input[name="system.mech.compactGyro"]').on("change", this._onCompactGyroChange.bind(this));
+    html.find('input[name="system.mech.heavyDutyGyro"]').on("change", this._onHeavyDutyGyroChange.bind(this));
+    html.find('input[name="system.mech.armoredGyro"]').on("change", this._onArmoredGyroChange.bind(this));
+    html.find('input[name="system.mech.smallCockpit"]').on("change", this._onSmallCockpitChange.bind(this));
 
 
     // Engine-mounted sinks slider <-> number sync. The range input has no name,
@@ -5051,6 +6405,7 @@ engineSinksRemoved: Math.max(0, (Number(engineMountedSinksAuto) || 0) - (Number(
     this._ensureMovementFromEngine().catch(() => {});
     this._ensureXLEngineCrits().catch(() => {});
     this._syncCTCritLabels().catch(() => {});
+    this._syncSmallCockpitCrits().catch(() => {});
 
 
 
@@ -5070,6 +6425,7 @@ engineSinksRemoved: Math.max(0, (Number(engineMountedSinksAuto) || 0) - (Number(
     html.find(".drop-zone").on("dragover", (ev) => ev.preventDefault());
     html.find(".drop-zone").on("drop", (ev) => {
       ev.preventDefault();
+      ev.stopImmediatePropagation();
       this._onDrop(ev.originalEvent ?? ev);
     });
   }
@@ -5319,7 +6675,12 @@ engineSinksRemoved: Math.max(0, (Number(engineMountedSinksAuto) || 0) - (Number(
   const zone = event.target.closest(".drop-zone")?.dataset?.dropZone;
 
   // If it’s not one of our zones, let Foundry handle it normally.
-  if (zone !== "loadout" && zone !== "crit") return super._onDrop(event);
+  if (!["loadout", "crit", "quirks"].includes(zone)) return super._onDrop(event);
+
+  // ActorSheetV2 and the responsive drop-zone listener can both route the
+  // same native event here. Process it only once so a drop creates one item.
+  if (handledMechSheetDrops.has(event)) return;
+  handledMechSheetDrops.add(event);
 
   const data = TextEditor.getDragEventData(event);
   if (data?.type !== "Item") return;
@@ -5335,6 +6696,27 @@ engineSinksRemoved: Math.max(0, (Number(engineMountedSinksAuto) || 0) - (Number(
   }
   if (!dropped) return;
 
+  if (zone === "quirks") {
+    if (dropped.type !== "mechQuirk") {
+      ui.notifications?.warn?.("Only Mech Design Quirk items can be added to the Design Quirks section.");
+      return;
+    }
+    if (dropped.parent?.id === this.actor.id) return;
+
+    const quirkData = dropped.toObject();
+    delete quirkData._id;
+    const [createdQuirk] = await this.actor.createEmbeddedDocuments("Item", [quirkData]);
+    if (String(createdQuirk?.name ?? "").trim().toLowerCase() === "accurate weapon") {
+      createdQuirk.sheet?.render?.(true);
+    }
+    return;
+  }
+
+  if (zone === "crit" && dropped.type === "mechQuirk") {
+    ui.notifications?.info?.("Add Mech Design Quirks to the Design Quirks section at the bottom of the sheet.");
+    return;
+  }
+
   
 // Crit-slot drop: store a reference + label.
 // If the item declares a crit slot size (e.g. system.critSlots), fill adjacent slots as a single component.
@@ -5347,12 +6729,96 @@ if (zone === "crit") {
   const droppedName = String(dropped?.name ?? "").trim();
   const isHatchet = _isCanonicalHatchet(droppedName);
   const isSword = _isCanonicalSword(droppedName);
+  const isRetractableBlade = _isCanonicalRetractableBlade(droppedName);
   const artemisMatch = droppedName.match(/^artemis\s*(iv|v|4|5)\s*fcs$/i);
   const isArtemis = Boolean(artemisMatch);
   const artemisVersion = /^(?:v|5)$/i.test(String(artemisMatch?.[1] ?? "")) ? "V" : "IV";
   const artemisLabelRe = artemisVersion === "V" ? /^artemis\s*(?:v|5)\s*fcs$/i : /^artemis\s*(?:iv|4)\s*fcs$/i;
   const isTSM = _TSM_LABEL_RE.test(droppedName);
   const isMASC = _MASC_LABEL_RE.test(droppedName);
+  const isSupercharger = _SUPERCHARGER_LABEL_RE.test(droppedName);
+  const isImprovedJumpJet = _isImprovedJumpJetText(droppedName);
+  const isPartialWing = isPartialWingName(droppedName);
+  const isHeavyFerroFibrous = /^heavy\s+ferro\s*-?\s*fibrous$/i.test(droppedName);
+  const isFerroLamellor = /^ferro\s*-?\s*lamellor(?:\s+armor)?$/i.test(droppedName);
+  const isClanECMSuite = /^ecm\s+suite(?:\s*\(clan\))?$/i.test(droppedName);
+  const isGuardianECM = /^guardian\s+ecm$/i.test(droppedName);
+  const isECMEquipment = isClanECMSuite || isGuardianECM;
+
+  if (isECMEquipment) {
+    const techBase = _getMechTechBase(this.actor, this.actor.system?.mech?.engine ?? null);
+    if (isClanECMSuite && techBase !== "clan") {
+      ui?.notifications?.warn?.("ECM Suite is Clan technology. Use Guardian ECM on an Inner Sphere 'Mech.");
+      return;
+    }
+    if (isGuardianECM && techBase !== "inner") {
+      ui?.notifications?.warn?.("Guardian ECM is Inner Sphere technology. Use ECM Suite on a Clan 'Mech.");
+      return;
+    }
+  }
+
+  if (isRetractableBlade) {
+    if (!_isHumanoidMechConfiguration(this.actor)) {
+      ui?.notifications?.warn?.("Retractable Blades may only be installed on humanoid BattleMechs or IndustrialMechs.");
+      return;
+    }
+    if (!["la", "ra"].includes(loc)) {
+      ui?.notifications?.warn?.("Retractable Blades may only be installed in the Left Arm or Right Arm.");
+      return;
+    }
+    if (!_armHasRetractableBladeActuators(this.actor, loc)) {
+      ui?.notifications?.warn?.("A Retractable Blade requires Shoulder, Upper Arm, and Lower Arm Actuators in the same arm.");
+      return;
+    }
+  }
+
+  if (isHeavyFerroFibrous) {
+    const techBase = _getMechTechBase(this.actor, this.actor.system?.mech?.engine ?? null);
+    if (techBase !== "inner") {
+      ui?.notifications?.warn?.("Heavy Ferro-Fibrous armor can only be installed on Inner Sphere 'Mechs.");
+      return;
+    }
+  }
+
+  if (isPartialWing && loc !== "lt" && loc !== "rt") {
+    ui?.notifications?.warn?.("Partial Wing sections can only be installed in the Left Torso and Right Torso.");
+    return;
+  }
+  if (isSupercharger) {
+    const profile = getSuperchargerProfile(this.actor);
+    if (profile.engineTonnage <= 0) {
+      ui?.notifications?.warn?.("Set a valid engine rating before installing a Supercharger.");
+      return;
+    }
+    const sideEngineSlots = _xlSideEngineCritCount(this.actor);
+    const validLocation = loc === "ct" || (["lt", "rt"].includes(loc) && sideEngineSlots > 0);
+    if (!validLocation) {
+      ui?.notifications?.warn?.("A Supercharger must be installed in the Center Torso, or in a side torso containing engine critical slots.");
+      return;
+    }
+    const targetSlot = this.actor.system?.crit?.[loc]?.slots?.[index] ?? {};
+    const targetLabel = String(targetSlot?.label ?? "").trim() || _defaultCritLabel(this.actor, loc, index);
+    if (_isEngineText(targetLabel)) {
+      ui?.notifications?.warn?.("The Supercharger must occupy its own critical slot; choose an open slot in the engine location rather than replacing an Engine slot.");
+      return;
+    }
+  }
+  if (isImprovedJumpJet) {
+    const installation = await getJumpJetInstallationFromCritSlots(this.actor);
+    const baseMovement = computeDerivedMovement(
+      this.actor.system?.mech?.engine,
+      this.actor.system?.mech?.tonnage
+    );
+    const maximumJets = Math.max(0, Number(baseMovement?.run ?? 0) || 0);
+    if (maximumJets <= 0) {
+      ui?.notifications?.warn?.("Set a valid engine rating and mech tonnage before installing Improved Jump Jets.");
+      return;
+    }
+    if (installation.total >= maximumJets) {
+      ui?.notifications?.warn?.(`Improved Jump Jets are limited to the mech's standard Running MP (${maximumJets}).`);
+      return;
+    }
+  }
 
   // Triple-Strength Myomer is Inner Sphere only
   if (isTSM) {
@@ -5385,6 +6851,42 @@ if (zone === "crit") {
   });
   const artemisCount = _countStartSlotsInLoc((lbl) => artemisLabelRe.test(lbl));
 
+  if (isPartialWing) {
+    const locData = this.actor.system?.crit?.[loc]?.slots ?? [];
+    const slots = Array.isArray(locData) ? locData : Object.values(locData);
+    const alreadyInstalled = slots.some((slot) => {
+      if (!slot || (slot.partOf !== undefined && slot.partOf !== null)) return false;
+      return isPartialWingName(slot.label);
+    });
+    if (alreadyInstalled) {
+      ui?.notifications?.warn?.(`A Partial Wing section is already installed in the ${loc === "lt" ? "Left" : "Right"} Torso.`);
+      return;
+    }
+  }
+
+  if (isMASC) {
+    const mascAlreadyInstalled = countComponentCritSlots(
+      this.actor.system,
+      _MASC_LABEL_RE,
+      { includeDestroyed: true }
+    ) > 0;
+    if (mascAlreadyInstalled) {
+      ui?.notifications?.warn?.("MASC is already installed on this 'Mech. Remove the existing installation before placing another.");
+      return;
+    }
+  }
+  if (isSupercharger) {
+    const alreadyInstalled = countComponentCritSlots(
+      this.actor.system,
+      _SUPERCHARGER_LABEL_RE,
+      { includeDestroyed: true }
+    ) > 0;
+    if (alreadyInstalled) {
+      ui?.notifications?.warn?.("A Supercharger is already installed on this 'Mech.");
+      return;
+    }
+  }
+
   if (isArtemis && launcherCount <= 0) {
     const compatibleLaunchers = artemisVersion === "V" ? "LRM/SRM" : "LRM/MML/SRM";
     ui?.notifications?.warn?.(`Artemis ${artemisVersion} FCS must be installed in the same location as a compatible ${compatibleLaunchers} launcher.`);
@@ -5414,6 +6916,26 @@ if (zone === "crit") {
   if (isTSM) requested = 1; // TSM is installed as six separate 1-slot components, distributed anywhere.
   if (isHatchet) requested = getHatchetProfile(this.actor).critSlots;
   if (isSword) requested = getSwordProfile(this.actor).critSlots;
+  if (isRetractableBlade) requested = getRetractableBladeProfile(this.actor).critSlots;
+  if (isPartialWing) {
+    requested = getPartialWingState(this.actor, {
+      tonnage: this.actor.system?.mech?.tonnage,
+      techBase: _getMechTechBase(this.actor, this.actor.system?.mech?.engine ?? null)
+    }).critSlotsPerSide;
+  }
+  if (isMASC) {
+    requested = getMASCProfile(this.actor, {
+      tonnage: this.actor.system?.mech?.tonnage,
+      techBase: _getMechTechBase(this.actor, this.actor.system?.mech?.engine ?? null)
+    }).critSlots;
+  }
+  if (isSupercharger) requested = 1;
+  if (isImprovedJumpJet) {
+    requested = getJumpJetProfile(this.actor.system?.mech?.tonnage, { improved: true }).critSlots;
+  }
+  if (isHeavyFerroFibrous) requested = 1;
+  if (isFerroLamellor) requested = 1;
+  if (isECMEquipment) requested = 2;
 
   // TSM and MASC are mutually exclusive.
   if (isTSM) {
@@ -5441,6 +6963,28 @@ if (zone === "crit") {
   const startIndex = (existing?.partOf !== undefined && existing.partOf !== null) ? Number(existing.partOf) : index;
 
   const maxSpan = Math.max(1, locMax - startIndex);
+  if ((isPartialWing || isMASC || isImprovedJumpJet || isRetractableBlade || isECMEquipment) && requested > maxSpan) {
+    const componentName = isPartialWing
+      ? "Partial Wing"
+      : (isMASC ? "MASC" : (isImprovedJumpJet ? "Improved Jump Jet" : (isRetractableBlade ? "Retractable Blade" : droppedName)));
+    ui?.notifications?.warn?.(`${componentName} requires ${requested} consecutive critical slots in one location.`);
+    return;
+  }
+  if (isPartialWing || isMASC || isImprovedJumpJet || isRetractableBlade || isECMEquipment) {
+    for (let j = 0; j < requested; j++) {
+      const slot = this.actor.system?.crit?.[loc]?.slots?.[startIndex + j] ?? {};
+      const belongsToReplacedComponent =
+        (startIndex + j === startIndex) ||
+        (slot.partOf !== undefined && slot.partOf !== null && Number(slot.partOf) === startIndex);
+      if (String(slot.label ?? "").trim() && !belongsToReplacedComponent) {
+        const componentName = isPartialWing
+          ? "Partial Wing"
+          : (isMASC ? "MASC" : (isImprovedJumpJet ? "Improved Jump Jet" : (isRetractableBlade ? "Retractable Blade" : droppedName)));
+        ui?.notifications?.warn?.(`${componentName} requires ${requested} clear consecutive critical slots.`);
+        return;
+      }
+    }
+  }
   const span = clamp(Number.isNaN(requested) ? 1 : requested, 1, maxSpan);
 
   const updates = {};
@@ -5482,11 +7026,62 @@ if (zone === "crit") {
   }
 
   await this.actor.update(updates);
+  if (isPartialWing) {
+    const side = loc === "lt" ? "Left Torso" : "Right Torso";
+    const otherSide = loc === "lt" ? "Right Torso" : "Left Torso";
+    const wingState = getPartialWingState(this.actor);
+    const message = wingState.active
+      ? `Partial Wing is active: +${wingState.jumpBonus} Jump MP and +3 heat dissipation (${wingState.tonnage} tons).`
+      : `Partial Wing installed in ${side} (${span} critical slots). Install the matching section in ${otherSide} to activate it.`;
+    ui?.notifications?.info?.(message);
+  }
+  if (isMASC) {
+    const profile = getMASCProfile(this.actor);
+    ui?.notifications?.info?.(`MASC installed as one contiguous ${profile.critSlots}-slot, ${profile.tonnage}-ton system.`);
+  }
+  if (isSupercharger) {
+    const profile = getSuperchargerProfile(this.actor);
+    ui?.notifications?.info?.(
+      `Supercharger installed in the ${loc.toUpperCase()}: 1 critical slot, ${profile.tonnage} tons (10% of ${profile.engineTonnage}-ton engine, rounded up to 0.5 ton).`
+    );
+  }
+  if (isImprovedJumpJet) {
+    const profile = getJumpJetProfile(this.actor.system?.mech?.tonnage, { improved: true });
+    ui?.notifications?.info?.(
+      `Improved Jump Jet installed: ${profile.critSlots} critical slots, ${profile.tonnage} tons, +1 Jump MP.`
+    );
+  }
+  if (isRetractableBlade) {
+    const profile = getRetractableBladeProfile(this.actor);
+    ui?.notifications?.info?.(
+      `Retractable Blade installed in ${loc.toUpperCase()}: ${profile.critSlots} critical slots, ${profile.tonnage} tons, ${profile.damage} damage, -2 TN.`
+    );
+  }
+  if (isECMEquipment) {
+    ui?.notifications?.info?.(`${droppedName} installed: 1.5 tons, 2 critical slots, 6-hex ECM radius.`);
+  }
   return;
 }
   // Loadout zone: only accept equipment/gear, and embed them on the mech.
   // Weapons should be installed via crit slots (they will auto-appear in the list).
   if (dropped.parent?.id === this.actor.id) return;
+
+  if (isPartialWingName(dropped.name)) {
+    ui.notifications?.info?.("Install Partial Wing sections by dragging them into Left Torso and Right Torso critical slots.");
+    return;
+  }
+  if (isMASCName(dropped.name)) {
+    ui.notifications?.info?.("Install MASC by dragging it into a critical slot with enough contiguous space.");
+    return;
+  }
+  if (isSuperchargerName(dropped.name)) {
+    ui.notifications?.info?.("Install the Supercharger in a Center Torso slot, or in a side torso containing engine slots.");
+    return;
+  }
+  if (_isImprovedJumpJetText(dropped.name)) {
+    ui.notifications?.info?.("Install Improved Jump Jets by dragging each jet into two clear consecutive critical slots.");
+    return;
+  }
 
   if (_isWeaponItemType(dropped.type) || _looksLikeWeaponLabel(dropped.name)) {
     ui.notifications?.info?.("Install weapons by dragging them into a crit slot.");
@@ -5525,7 +7120,7 @@ if (zone === "crit") {
     }
   }
 
-  // Ensure XL engine side-torso crit slots are reserved (LT/RT 1-3 for IS XL, 1-2 for Clan XL).
+  // Ensure side-torso engine slots are reserved for Light Fusion, XL, and XXL engines.
   async _ensureXLEngineCrits(engineOverride = null) {
     if (this._atowXLSyncing) return;
     this._atowXLSyncing = true;
@@ -5547,8 +7142,17 @@ if (zone === "crit") {
     await this._syncXLGyroCrits(enabledOverride, engineOverride, { warn });
   }
 
-  async _syncXLGyroCrits(enabledOverride = null, engineOverride = null, { warn = true } = {}) {
-    const { updates, blocked } = _buildXLGyroCritLabelUpdates(this.actor, enabledOverride, engineOverride);
+  async _syncXLGyroCrits(
+    enabledOverride = null,
+    engineOverride = null,
+    { warn = true, compactEnabledOverride = null } = {}
+  ) {
+    const { updates, blocked } = _buildXLGyroCritLabelUpdates(
+      this.actor,
+      enabledOverride,
+      engineOverride,
+      compactEnabledOverride
+    );
     if (Object.keys(updates).length) await this.actor.update(updates);
 
     if (warn && blocked.length) {
@@ -5563,8 +7167,88 @@ if (zone === "crit") {
     const input = event?.currentTarget;
     const enabled = Boolean(input?.checked);
 
-    await this.actor.update({ "system.mech.xlGyro": enabled });
-    await this._syncXLGyroCrits(enabled);
+    await this.actor.update({
+      "system.mech.xlGyro": enabled,
+      ...(enabled ? { "system.mech.compactGyro": false, "system.mech.heavyDutyGyro": false } : {})
+    });
+    await this._syncXLGyroCrits(enabled, null, {
+      compactEnabledOverride: enabled ? false : null
+    });
+    if (this.actor.system?.mech?.armoredGyro) await this._restoreArmoredGyroSlotArmor();
+  }
+
+  async _onCompactGyroChange(event) {
+    event?.preventDefault?.();
+    const input = event?.currentTarget;
+    const enabled = Boolean(input?.checked);
+    const xlEnabled = enabled ? false : _isXLGyroEnabled(this.actor);
+
+    await this.actor.update({
+      "system.mech.compactGyro": enabled,
+      ...(enabled ? { "system.mech.xlGyro": false, "system.mech.heavyDutyGyro": false } : {})
+    });
+    await this._syncXLGyroCrits(xlEnabled, null, {
+      compactEnabledOverride: enabled
+    });
+    if (this.actor.system?.mech?.armoredGyro) await this._restoreArmoredGyroSlotArmor();
+  }
+
+  async _onHeavyDutyGyroChange(event) {
+    event?.preventDefault?.();
+    const input = event?.currentTarget;
+    const enabled = Boolean(input?.checked);
+
+    if (enabled && _getMechTechBase(this.actor, this.actor.system?.mech?.engine ?? null) !== "inner") {
+      input.checked = false;
+      ui.notifications?.warn?.("Heavy-Duty Gyros are Inner Sphere technology.");
+      return;
+    }
+
+    await this.actor.update({
+      "system.mech.heavyDutyGyro": enabled,
+      ...(enabled ? { "system.mech.xlGyro": false, "system.mech.compactGyro": false } : {})
+    });
+    await this._syncXLGyroCrits(false, null, { compactEnabledOverride: false });
+    if (this.actor.system?.mech?.armoredGyro) await this._restoreArmoredGyroSlotArmor();
+  }
+
+  async _restoreArmoredGyroSlotArmor() {
+    const updates = {};
+    const desired = _getCTDefaultCritLabels(this.actor);
+    for (let i = 0; i < desired.length; i++) {
+      const storedLabel = String(this.actor.system?.crit?.ct?.slots?.[i]?.label ?? "");
+      const label = storedLabel || String(desired[i] ?? "");
+      if (/\bgyro\b/i.test(label)) updates[`system.crit.ct.slots.${i}.armorDestroyed`] = false;
+    }
+    if (Object.keys(updates).length) await this.actor.update(updates);
+  }
+
+  async _onArmoredGyroChange(event) {
+    event?.preventDefault?.();
+    const enabled = Boolean(event?.currentTarget?.checked);
+    await this.actor.update({ "system.mech.armoredGyro": enabled });
+
+    // Enabling or re-enabling the construction option restores the ablative
+    // point on every current gyro slot, providing a straightforward repair path.
+    if (enabled) await this._restoreArmoredGyroSlotArmor();
+  }
+
+  async _syncSmallCockpitCrits(enabledOverride = null, { warn = true } = {}) {
+    const { updates, blocked } = _buildSmallCockpitCritLabelUpdates(this.actor, enabledOverride);
+    if (Object.keys(updates).length) await this.actor.update(updates);
+
+    if (warn && blocked.length) {
+      const slots = blocked.join(", ");
+      ui.notifications?.warn?.(`Could not update occupied/custom Head crit slot(s): ${slots}.`);
+      console.warn(`AToWMechSheetV2 | Small Cockpit head layout blocked for ${this.actor?.name ?? "actor"}: ${slots}`);
+    }
+  }
+
+  async _onSmallCockpitChange(event) {
+    event?.preventDefault?.();
+    const enabled = Boolean(event?.currentTarget?.checked);
+    await this.actor.update({ "system.mech.smallCockpit": enabled });
+    await this._syncSmallCockpitCrits(enabled);
   }
 
   async _onTechBaseChange(event) {
@@ -5586,12 +7270,20 @@ if (zone === "crit") {
     const tonnage = normalizeMechTonnage(tonnageOverride ?? current?.mech?.tonnage);
     const engine = engineOverride ?? current?.mech?.engine;
 
-    const jumpJetInstalledCount = await countJumpJetComponentsFromCritSlots(this.actor);
+    const jumpJetInstallation = await getJumpJetInstallationFromCritSlots(this.actor);
+    const jumpJetInstalledCount = jumpJetInstallation.intact;
 
-    const derived = applyLegLossMovementOverride(
-      computeDerivedMovement(engine, tonnage, { jumpJetCount: jumpJetInstalledCount }),
+    const derived = applyHardenedArmorMovementPenalty(applyLegLossMovementOverride(
+      applyPartialWingJumpBonus(
+        computeDerivedMovement(engine, tonnage, {
+          jumpJetCount: jumpJetInstalledCount,
+          improvedJumpJetCount: jumpJetInstallation.improvedIntact
+        }),
+        this.actor,
+        tonnage
+      ),
       this.actor
-    );
+    ), this.actor);
     if (!derived) return;
 
     const updates = {};
@@ -5648,11 +7340,19 @@ if (zone === "crit") {
 
     
     // Movement derived from engine rating + (possibly changed) tonnage.
-    const jumpJetInstalledCount = await countJumpJetComponentsFromCritSlots(this.actor);
-    const derivedMove = applyLegLossMovementOverride(
-      computeDerivedMovement(current?.mech?.engine, tonnage, { jumpJetCount: jumpJetInstalledCount }),
+    const jumpJetInstallation = await getJumpJetInstallationFromCritSlots(this.actor);
+    const jumpJetInstalledCount = jumpJetInstallation.intact;
+    const derivedMove = applyHardenedArmorMovementPenalty(applyLegLossMovementOverride(
+      applyPartialWingJumpBonus(
+        computeDerivedMovement(current?.mech?.engine, tonnage, {
+          jumpJetCount: jumpJetInstalledCount,
+          improvedJumpJetCount: jumpJetInstallation.improvedIntact
+        }),
+        this.actor,
+        tonnage
+      ),
       this.actor
-    );
+    ), this.actor);
     if (derivedMove) {
       if (Number(current?.movement?.walk) !== Number(derivedMove.walk)) updates["system.movement.walk"] = Number(derivedMove.walk);
       if (Number(current?.movement?.run) !== Number(derivedMove.run)) updates["system.movement.run"] = Number(derivedMove.run);
@@ -5852,7 +7552,8 @@ if (Object.keys(updates).length) {
     const rawValue = Number(input?.value ?? 0);
     const nextMax = Math.max(0, Number.isFinite(rawValue) ? rawValue : 0);
     const currentDmg = Number(this.actor?.system?.armor?.[loc]?.dmg ?? 0) || 0;
-    const nextDmg = Math.min(currentDmg, nextMax);
+    const damagePerPip = isHardenedArmorSystem(this.actor?.system) ? 2 : 1;
+    const nextDmg = Math.min(currentDmg, nextMax * damagePerPip);
 
     if (input) input.value = String(nextMax);
 
@@ -5862,12 +7563,58 @@ if (Object.keys(updates).length) {
     });
   }
 
+  async _onArmorTypeChange(event) {
+    event?.preventDefault?.();
+    const input = event?.currentTarget;
+    const wasHardened = isHardenedArmorSystem(this.actor?.system);
+    const armorType = normalizeArmorType(input?.value);
+    if (input) input.value = armorType;
+    const willBeHardened = armorType === "hardened" && !detectArmorTypeFromCritSlots(this.actor?.system);
+    const updates = { "system.mech.armorType": armorType };
+
+    // Preserve the number of destroyed armor circles when changing modes.
+    if (wasHardened !== willBeHardened) {
+      for (const [loc, node] of Object.entries(this.actor?.system?.armor ?? {})) {
+        const max = Math.max(0, Number(node?.max ?? 0) || 0);
+        const damage = Math.max(0, Number(node?.dmg ?? 0) || 0);
+        updates[`system.armor.${loc}.dmg`] = willBeHardened
+          ? Math.min(max * 2, damage * 2)
+          : Math.min(max, Math.floor(damage / 2));
+      }
+    }
+
+    await this.actor.update(updates);
+    await this._syncMovementFromEngine();
+  }
+
   async _onItemDelete(event) {
     event.preventDefault();
     const li = event.currentTarget.closest("[data-item-id]");
     const itemId = li?.dataset?.itemId;
     if (!itemId) return;
     await this.actor.deleteEmbeddedDocuments("Item", [itemId]);
+  }
+
+  async _onQuirkAdd(event) {
+    event.preventDefault();
+    const created = await this.actor.createEmbeddedDocuments("Item", [{
+      name: "New Design Quirk",
+      type: "mechQuirk",
+      system: {
+        polarity: "positive",
+        points: 0,
+        description: "",
+        selectedWeaponKey: ""
+      }
+    }]);
+    created?.[0]?.sheet?.render(true);
+  }
+
+  async _onQuirkEdit(event) {
+    event.preventDefault();
+    const row = event.currentTarget.closest("[data-item-id]");
+    const item = this.actor.items.get(row?.dataset?.itemId);
+    item?.sheet?.render(true);
   }
 
 
@@ -5983,9 +7730,20 @@ if (isMechDestroyed(this.actor)) {
   const max = Number(armorLoc.max ?? 0);
   const current = Number(armorLoc.dmg ?? 0);
 
-  let next = pip;
-  if (pip <= current) next = Math.max(0, pip - 1);
-  next = clamp(next, 0, max);
+  let next;
+  if (isHardenedArmorSystem(this.actor?.system)) {
+    const beforePip = Math.max(0, (pip - 1) * 2);
+    const halfPip = beforePip + 1;
+    const fullPip = pip * 2;
+    if (current < halfPip) next = halfPip;
+    else if (current === halfPip) next = fullPip;
+    else next = beforePip;
+    next = clamp(next, 0, max * 2);
+  } else {
+    next = pip;
+    if (pip <= current) next = Math.max(0, pip - 1);
+    next = clamp(next, 0, max);
+  }
 
   await this.actor.update({ [`system.armor.${loc}.dmg`]: next });
 }
@@ -6059,6 +7817,15 @@ async _onCritDestroyToggle(event) {
   // and crit locations remain valid targets even if other slots are already destroyed.
   const cur = Boolean(this.actor.system?.crit?.[loc]?.slots?.[index]?.destroyed);
   const next = !cur;
+
+  const storedLabel = String(this.actor.system?.crit?.[loc]?.slots?.[index]?.label ?? "");
+  const label = storedLabel || String(_defaultCritLabel(this.actor, loc, index) ?? "");
+  const armorDestroyed = Boolean(this.actor.system?.crit?.[loc]?.slots?.[index]?.armorDestroyed);
+  if (!cur && this.actor.system?.mech?.armoredGyro && /\bgyro\b/i.test(label) && !armorDestroyed) {
+    await this.actor.update({ [`system.crit.${loc}.slots.${index}.armorDestroyed`]: true });
+    ui.notifications?.info?.(`Armored Gyro slot ${index + 1}: armor absorbed the critical hit.`);
+    return;
+  }
 
   await this.actor.update({ [`system.crit.${loc}.slots.${index}.destroyed`]: next });
 }

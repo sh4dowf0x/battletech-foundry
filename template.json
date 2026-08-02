@@ -8,6 +8,7 @@
       "dropship",
       "company",
       "wheeledvehicle",
+      "vtol",
       "vehicle"
     ],
     "templates": {
@@ -215,7 +216,12 @@
         "profileMedia": "",
         "bv": 0,
         "yearProduced": 0,
-        "xlGyro": false
+        "armorType": "standard",
+        "xlGyro": false,
+        "compactGyro": false,
+        "heavyDutyGyro": false,
+        "armoredGyro": false,
+        "smallCockpit": false
       },
       "stats": {}
     },
@@ -449,7 +455,6 @@
         "turret": { "dmg": 0 }
       },
       "crit": {
-        "turretLocked": false,
         "engineHit": false,
         "sensorHits": 0,
         "motiveHits": 0,
@@ -463,6 +468,70 @@
           "turret": false
         }
       }
+    },
+    "vtol": {
+      "templates": [
+        "base"
+      ],
+      "vehicle": {
+        "type": "",
+        "tonnage": 5,
+        "techBase": "",
+        "rulesLevel": "",
+        "role": "",
+        "engine": "",
+        "movement": {
+          "cruise": 0,
+          "flank": 0,
+          "type": "VTOL"
+        },
+        "elevation": 0,
+        "bv": 0
+      },
+      "crew": {
+        "name": "",
+        "gunnery": 0,
+        "driving": 0,
+        "commanderHit": 0,
+        "driverHit": 0
+      },
+      "armor": {
+        "front": { "max": 0, "dmg": 0 },
+        "left": { "max": 0, "dmg": 0 },
+        "right": { "max": 0, "dmg": 0 },
+        "rear": { "max": 0, "dmg": 0 },
+        "rotor": { "max": 0, "dmg": 0 }
+      },
+      "structure": {
+        "front": { "dmg": 0 },
+        "left": { "dmg": 0 },
+        "right": { "dmg": 0 },
+        "rear": { "dmg": 0 },
+        "rotor": { "dmg": 0 }
+      },
+      "crit": {
+        "turretLocked": false,
+        "engineHit": false,
+        "engineHits": 0,
+        "sensorHits": 0,
+        "rotorHits": 0,
+        "flightStabilizerHits": 0,
+        "rotorsDestroyed": false,
+        "crashed": false,
+        "defeated": false,
+        "defeatReason": "",
+        "crewKilled": false,
+        "fuelTankHit": false,
+        "stabilizerLeft": false,
+        "stabilizerRight": false,
+        "location": {
+          "front": false,
+          "rear": false,
+          "left": false,
+          "right": false,
+          "rotor": false
+        }
+      }
     }
   },
   "Item": {
@@ -473,6 +542,7 @@
       "characterTrait",
       "mechWeapon",
       "mechEquipment",
+      "mechQuirk",
       "characterModule",
       "characterWeapon",
       "characterArmor",
@@ -506,11 +576,25 @@
       "heat": 0,
       "damage": 0,
       "dmgType": "DE",
+      "useAlternateProfile": false,
+      "profileLabel": "",
+      "profileMode": "",
       "range": {
         "min": 0,
         "short": 0,
         "medium": 0,
         "long": 0
+      },
+      "alternateProfile": {
+        "label": "",
+        "ammoMode": "",
+        "damage": 0,
+        "range": {
+          "min": 0,
+          "short": 0,
+          "medium": 0,
+          "long": 0
+        }
       },
       "manufacturer": "",
       "ammoType": "",
@@ -525,6 +609,15 @@
       "ammoAmount": 0,
       "heatDissipation": 0,
       "notes": ""
+    },
+    "mechQuirk": {
+      "templates": [
+        "base"
+      ],
+      "polarity": "positive",
+      "points": 0,
+      "description": "",
+      "selectedWeaponKey": ""
     },
     "characterModule": {
       "templates": [

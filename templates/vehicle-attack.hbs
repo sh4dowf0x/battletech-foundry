@@ -1,4 +1,4 @@
-<form class="atow-attack-dialog atow-vehicle-attack-dialog" data-base-tn-without-range="{{baseTNWithoutRange}}" data-auto-attacker-move-mod="{{autoAttackerMoveMod}}" data-range-mod="{{selectedRangeMod}}">
+<form class="atow-attack-dialog atow-vehicle-attack-dialog" data-base-tn-without-range="{{baseTNWithoutRange}}" data-auto-attacker-move-mod="{{autoAttackerMoveMod}}" data-range-mod="{{selectedRangeMod}}" data-range-band="{{selectedRangeBand}}" data-improved-targeting-bands="{{improvedTargetingBands}}">
   <header class="attack-card-header">
     <div>
       <div class="attack-kicker">BattleTech Attack</div>
@@ -98,6 +98,9 @@
 
   <section class="attack-note-line">
     <span>{{arcNote}}</span>
+    {{#if rangeDamageNote}}
+      <span>{{rangeDamageNote}}</span>
+    {{/if}}
     {{#if showRapidFire}}
       <span>Each rapid-fire shot spends 1 ammo and adds +{{weaponHeat}} Heat.</span>
     {{/if}}

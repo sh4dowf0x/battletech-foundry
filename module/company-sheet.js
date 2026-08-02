@@ -801,7 +801,7 @@ export class ATOWCompanySheet extends HandlebarsApplicationMixin(ActorSheetV2) {
     const actor = sourceDoc?.documentName === "Token" ? sourceDoc.actor : sourceDoc;
     if (!actor || actor.documentName !== "Actor") return;
     const actorType = String(actor.type ?? "").toLowerCase();
-    if (!["vehicle", "wheeledvehicle"].includes(actorType)) {
+    if (!["vehicle", "wheeledvehicle", "vtol"].includes(actorType)) {
       ui.notifications?.warn?.("Drop a combat vehicle actor onto the Vehicles section.");
       return;
     }

@@ -1,12 +1,20 @@
 // atow-battletech.js (ROOT)
-// version 0.0.12
+// version 0.0.13
 
 import { ATOWCharacterSheet } from "./module/character-sheet.js";
 import { ATOWAbominationSheet } from "./module/abomination-sheet.js";
 import { ATOWSkillSheet } from "./module/skill-sheet.js";
 import { ATOWTraitSheet } from "./module/trait-sheet.js";
 import { ATOWCharacterEquipmentSheet } from "./module/character-equipment.js";
-import { AToWMechSheetV2, ensureActorCritMountIds } from "./module/mech-sheet-v2.js";
+import {
+  AToWMechSheetV2,
+  activateMASC,
+  activateSupercharger,
+  ensureActorCritMountIds,
+  getEnhancedRunMultiplier,
+  getMASCState,
+  getSuperchargerState
+} from "./module/mech-sheet-v2.js";
 import { AToWMechWeaponSheet} from "./module/mech-weapon.js";
 import { ATOWCombatVehicleSheet } from "./module/combat-vehicle.js";
 import { ATOWDropshipSheet } from "./module/dropship-sheet.js";
@@ -14,12 +22,21 @@ import { ATOWCompanySheet } from "./module/company-sheet.js";
 import { getCharacterInitiativeDetails, registerCharacterCombatApi } from "./module/character-combat.js";
 
 import { AToWMechEquipmentSheet } from "./module/mech-equipment.js";
+import { AToWMechQuirkSheet } from "./module/mech-quirk.js";
 import { registerATOWCharacterWeaponSheet } from "./module/character-weapon.js";
 import { registerATOWCharacterArmorSheet } from "./module/character-armor.js";
-import { registerATOWAttackSockets, rollHitLocation, applyMechDamageCluster, applyMechPilotHit, resolvePilotSeatbeltCheck } from "./module/mech-attack.js";
+import {
+  registerATOWAttackSockets,
+  rollHitLocation,
+  applyMechDamageCluster,
+  applyMechPilotHit,
+  resolvePilotSeatbeltCheck,
+  syncECMProtectionStatuses
+} from "./module/mech-attack.js";
 import { registerATOWCharacterAttackSockets } from "./module/character-attack.js";
 import { registerAtowAudioHooks, playActorJumpjetEffect, playActorPowerRestoredAnnouncement, playActorShutdownAnnouncement, playRandomFootstepSequence, playTorsoTwistEffect } from "./module/audio-helper.js";
 import { registerAtowTerrainTools } from "./module/terrain.js";
+import { registerAToWCompendiumBrowser } from "./module/compendium-browser.js";
 import {
   SKILL_CLASSIFICATION_REFERENCE,
   SKILL_CLASSIFICATION_REFERENCE_VERSION,
@@ -51,7 +68,7 @@ function getSingleControlledMechTokenDoc() {
   if (controlled.length !== 1) return null;
   const tokenDoc = controlled[0]?.document ?? controlled[0] ?? null;
   const actorType = String(tokenDoc?.actor?.type ?? "").toLowerCase();
-  if (!["mech", "wheeledvehicle"].includes(actorType)) return null;
+  if (!["mech", "wheeledvehicle", "vtol"].includes(actorType)) return null;
   return tokenDoc;
 }
 
@@ -69,6 +86,31 @@ function getTokenDocById(tokenId) {
 const clamp = (n, min, max) => Math.min(max, Math.max(min, n));
 
 const isCharacterSkillItem = item => ["skill", "characterSkill"].includes(String(item?.type ?? ""));
+
+function hasInstalledAdvancedArmorComponents(actorOrSystem) {
+  const system = actorOrSystem?.system ?? actorOrSystem ?? {};
+  for (const loc of Object.values(system?.crit ?? {})) {
+    const rawSlots = loc?.slots;
+    if (!rawSlots) continue;
+    const slots = Array.isArray(rawSlots) ? rawSlots : Object.values(rawSlots);
+    for (const slot of slots) {
+      if (!slot || (slot.partOf !== undefined && slot.partOf !== null)) continue;
+      const label = String(typeof slot === "string" ? slot : slot.label ?? "")
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "");
+      if (/ferrofibrous|ferrolamellor|laserreflective|reactivearmor|^reactive$|vehicularstealth/.test(label)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function isHardenedArmorActive(actorOrSystem) {
+  const system = actorOrSystem?.system ?? actorOrSystem ?? {};
+  return String(system?.mech?.armorType ?? "").trim().toLowerCase() === "hardened"
+    && !hasInstalledAdvancedArmorComponents(system);
+}
 
 async function migrateCanonicalSkillClassifications() {
   if (!game.user?.isGM) return 0;
@@ -116,6 +158,106 @@ Hooks.once("ready", () => {
   });
 });
 
+// Keep the ECM Protected awareness marker synchronized with operational ECM
+// bubbles. A short debounce coalesces multi-document drag/drop and crit updates.
+if (!globalThis.__ATOW_BT_ECM_STATUS_HOOKS_REGISTERED__) {
+  globalThis.__ATOW_BT_ECM_STATUS_HOOKS_REGISTERED__ = true;
+  let ecmStatusSyncTimer = null;
+
+  const scheduleECMProtectionStatusSync = () => {
+    if (!game.user?.isGM) return;
+    if (ecmStatusSyncTimer) clearTimeout(ecmStatusSyncTimer);
+    ecmStatusSyncTimer = setTimeout(() => {
+      ecmStatusSyncTimer = null;
+      syncECMProtectionStatuses().catch(error => {
+        console.warn(`${SYSTEM_ID} | ECM protection status refresh failed`, error);
+      });
+    }, 75);
+  };
+
+  Hooks.on("canvasReady", scheduleECMProtectionStatusSync);
+  Hooks.on("createToken", scheduleECMProtectionStatusSync);
+  Hooks.on("deleteToken", scheduleECMProtectionStatusSync);
+  Hooks.on("updateToken", (_tokenDoc, changed) => {
+    if (["x", "y", "elevation", "disposition"].some(key => key in (changed ?? {}))) {
+      scheduleECMProtectionStatusSync();
+    }
+  });
+  Hooks.on("updateActor", (actor, changed) => {
+    if (String(actor?.type ?? "").toLowerCase() !== "mech") return;
+    const changedPaths = Object.keys(foundry.utils.flattenObject(changed ?? {}));
+    if (changedPaths.some(path => path.startsWith("system.crit."))) {
+      scheduleECMProtectionStatusSync();
+    }
+  });
+  for (const hookName of ["createItem", "updateItem", "deleteItem"]) {
+    Hooks.on(hookName, item => {
+      if (String(item?.parent?.type ?? "").toLowerCase() === "mech") {
+        scheduleECMProtectionStatusSync();
+      }
+    });
+  }
+}
+
+// If an active movement enhancer is damaged, its movement bonus ends
+// immediately. The movement limiter consults this state on every token move.
+if (!globalThis.__ATOW_BT_MASC_DAMAGE_HOOK_REGISTERED__) {
+  globalThis.__ATOW_BT_MASC_DAMAGE_HOOK_REGISTERED__ = true;
+  Hooks.on("updateActor", async (actor, changed, options) => {
+    try {
+      if (!game.user?.isGM || options?.atowEnhancerShutdown) return;
+      if (String(actor?.type ?? "").toLowerCase() !== "mech") return;
+
+      const flat = foundry.utils.flattenObject(changed ?? {});
+      const keys = Object.keys(flat);
+      const relevant = keys.some(key => key.startsWith("system.crit.") || key.startsWith("system.structure."));
+      if (!relevant || !game.combat?.started) return;
+      const currentStamp = `${game.combat?.id ?? "no-combat"}:${game.combat?.round ?? 0}:${game.combat?.turn ?? 0}`;
+      const disabled = [];
+      const stateUpdates = {};
+      for (const enhancer of [
+        { flag: "mascState", label: "MASC", operational: () => getMASCState(actor).operational },
+        { flag: "superchargerState", label: "Supercharger", operational: () => getSuperchargerState(actor).operational }
+      ]) {
+        const currentState = actor.getFlag?.(SYSTEM_ID, enhancer.flag) ?? {};
+        const activeNow = currentState.active
+          && currentState.successful
+          && currentState.activationStamp === currentStamp;
+        if (!activeNow || enhancer.operational()) continue;
+        const state = foundry.utils.deepClone(currentState);
+        state.active = false;
+        state.successful = false;
+        state.disabledByDamage = true;
+        stateUpdates[`flags.${SYSTEM_ID}.${enhancer.flag}`] = state;
+        disabled.push(enhancer.label);
+      }
+      if (!disabled.length) return;
+      await actor.update(stateUpdates, { atowEnhancerShutdown: true });
+
+      const activeToken = game.combat?.combatant?.token ?? null;
+      const spent = Math.max(0, Number(activeToken?.getFlag?.(SYSTEM_ID, "mpSpentThisTurn") ?? 0) || 0);
+      const walk = Math.max(0, Number(actor.system?.movement?.walk ?? 0) || 0);
+      const remainingMultiplier = getEnhancedRunMultiplier(actor) ?? 1.5;
+      const recalculatedRun = Math.max(0, Math.ceil(walk * remainingMultiplier));
+      if (activeToken && spent > recalculatedRun) {
+        await activeToken.setFlag(SYSTEM_ID, "movementEndedThisTurn", true);
+      }
+
+      await ChatMessage.create({
+        speaker: ChatMessage.getSpeaker({ actor }),
+        content: `<div class="atow-chat-card">
+          <h3>${foundry.utils.escapeHTML(actor.name)} - ${disabled.join(" and ")} Disabled</h3>
+          <p>The active ${disabled.join(" and ")} installation suffered critical damage. Its movement bonus ends immediately.${spent > recalculatedRun ? " The mech has already exceeded its recalculated Running MP, so its movement ends." : ""}</p>
+        </div>`
+      });
+      ui.notifications?.warn?.(`${actor.name}: ${disabled.join(" and ")} disabled by critical damage.`);
+      actor.sheet?.render?.(false);
+    } catch (err) {
+      console.warn(`${SYSTEM_ID} | Failed to disable damaged movement enhancer`, err);
+    }
+  });
+}
+
 Hooks.on("createItem", async (item, options, _userId) => {
   if (!game.user?.isGM || options?.atowSkillClassification || !isCharacterSkillItem(item)) return;
   const update = getSkillClassificationReferenceUpdate(item);
@@ -150,6 +292,7 @@ Hooks.once("init", async () => {
 
   registerAtowAudioHooks();
   registerAtowTerrainTools(ATOW);
+  registerAToWCompendiumBrowser(ATOW);
   registerCharacterCombatApi(ATOW);
   if (globalThis.socketlib?.registerSystem) tryRegisterSystemSocket();
   Hooks.once("socketlib.ready", tryRegisterSystemSocket);
@@ -160,6 +303,31 @@ Hooks.once("init", async () => {
   CONFIG.Combat.initiative.decimals = 0;
   CONFIG.Combat.initiative.formula = "2d6";
 
+  const hasCommandMechQuirk = (actor) => {
+    if (String(actor?.type ?? "").toLowerCase() !== "mech") return false;
+    return (actor?.items?.contents ?? actor?.items ?? []).some?.((item) => {
+      if (item?.type !== "mechQuirk") return false;
+      const name = String(item.name ?? "").trim().toLowerCase().replace(/[’‘`]/g, "'");
+      return /^command\s+'?mech$/.test(name);
+    }) ?? false;
+  };
+
+  const getCombatantDisposition = (combatant) => {
+    const tokenDoc = combatant?.token?.document ?? combatant?.token ?? null;
+    const value = Number(tokenDoc?.disposition ?? combatant?.actor?.prototypeToken?.disposition ?? 0);
+    return Number.isFinite(value) ? value : 0;
+  };
+
+  const getCommandMechInitiativeBonus = (combat, combatant) => {
+    if (String(combatant?.actor?.type ?? "").toLowerCase() !== "mech") return 0;
+    const disposition = getCombatantDisposition(combatant);
+    const combatants = combat?.combatants?.contents ?? Array.from(combat?.combatants ?? []);
+    const commandMechPresent = combatants.some(other =>
+      getCombatantDisposition(other) === disposition && hasCommandMechQuirk(other?.actor)
+    );
+    return commandMechPresent ? 1 : 0;
+  };
+
   const patchCombatInitiativeRoll = () => {
     const proto = Combat?.prototype;
     if (!proto || proto._atowInitiativePatched) return;
@@ -168,23 +336,35 @@ Hooks.once("init", async () => {
 
     proto.rollInitiative = async function (combatantIds, options = {}) {
       const ids = Array.isArray(combatantIds) ? combatantIds : [combatantIds];
-      if (ids.length === 1) {
-        const combatantId = ids[0];
+      const rollOne = async (combatantId) => {
         const combatant = this.combatants?.get?.(combatantId) ?? this.combatants?.find?.((c) => c.id === combatantId) ?? null;
         const actor = combatant?.actor ?? null;
         const initiative = getCharacterInitiativeDetails(actor);
+        const commandMechBonus = getCommandMechInitiativeBonus(this, combatant);
 
         const nextOptions = { ...(options ?? {}) };
-        if (!nextOptions.formula) nextOptions.formula = initiative.formula;
+        const baseFormula = String(nextOptions.formula || initiative.formula || "2d6");
+        nextOptions.formula = commandMechBonus ? `(${baseFormula}) + ${commandMechBonus}` : baseFormula;
+        const commandLabel = commandMechBonus ? "Command 'Mech +1" : "";
         nextOptions.messageOptions = {
           ...(nextOptions.messageOptions ?? {}),
-          flavor: nextOptions.messageOptions?.flavor ?? `${actor?.name ?? "Combatant"} | ${initiative.label}`
+          flavor: nextOptions.messageOptions?.flavor
+            ?? `${actor?.name ?? "Combatant"} | ${initiative.label}${commandLabel ? `, ${commandLabel}` : ""}`
         };
 
         return original.call(this, combatantId, nextOptions);
-      }
+      };
 
-      return original.call(this, combatantIds, options);
+      if (ids.length === 1) return rollOne(ids[0]);
+
+      // Foundry accepts only one formula for a bulk roll, while AToW formulas
+      // can differ by actor and disposition. Roll each combatant through the
+      // same helper so Roll All preserves every applicable modifier.
+      let result = this;
+      for (const combatantId of ids) {
+        result = await rollOne(combatantId);
+      }
+      return result;
     };
 
     proto._atowInitiativePatched = true;
@@ -201,6 +381,7 @@ Hooks.once("init", async () => {
   CONFIG.Actor.typeLabels.mech = "Mech";
   CONFIG.Actor.typeLabels.vehicle = "Vehicle";
   CONFIG.Actor.typeLabels.wheeledvehicle = "Combat Vehicle";
+  CONFIG.Actor.typeLabels.vtol = "VTOL";
   CONFIG.Actor.typeLabels.dropship = "DropShip";
   CONFIG.Actor.typeLabels.abomination = "Abomination";
   CONFIG.Actor.typeLabels.company = "Company";
@@ -210,6 +391,7 @@ Hooks.once("init", async () => {
   CONFIG.Item.typeLabels.characterTrait = "Trait";
   CONFIG.Item.typeLabels.mechWeapon = "Mech Weapon";
   CONFIG.Item.typeLabels.mechEquipment = "Mech Equipment";
+  CONFIG.Item.typeLabels.mechQuirk = "Mech Design Quirk";
 
   
   CONFIG.Item.typeLabels.characterWeapon = "Character Weapon";
@@ -368,6 +550,7 @@ registerSystemSettings();
       // Narc uses the same target-designator artwork as TAG, but is a separate,
       // persistent status whose attached hit location is tracked by the attack engine.
       mk("narc",          "Narc'd",        icon("tagged")),
+      mk("ecm-protected", "ECM Protected", icon("ecm-protected")),
 
       // Core AToW conditions
       mk("atow-shutdown",  "Shutdown", icon("shutdown")),
@@ -414,7 +597,7 @@ registerSystemSettings();
   registerAToWStatusEffects();
 
   const PERSONAL_SCALE_ACTOR_TYPES = new Set(["character", "npc"]);
-  const MECH_SCALE_ACTOR_TYPES = new Set(["mech", "vehicle", "wheeledvehicle"]);
+  const MECH_SCALE_ACTOR_TYPES = new Set(["mech", "vehicle", "wheeledvehicle", "vtol"]);
 
   // Personal-scale HUD palette:
   // These are the statuses we want to expose for normal characters right now.
@@ -838,9 +1021,9 @@ registerSystemSettings();
   });
 
   Actors.registerSheet(SYSTEM_ID, ATOWCombatVehicleSheet, {
-    types: ["wheeledvehicle"],
+    types: ["wheeledvehicle", "vtol"],
     makeDefault: true,
-    label: "AToW Combat Vehicle Sheet"
+    label: "AToW Combat Vehicle / VTOL Sheet"
   });
 
   Actors.registerSheet(SYSTEM_ID, ATOWDropshipSheet, {
@@ -873,6 +1056,12 @@ registerSystemSettings();
     types: ["mechEquipment"],
     makeDefault: true,
     label: "AToW Mech Equipment Sheet"
+  });
+
+  Items.registerSheet(SYSTEM_ID, AToWMechQuirkSheet, {
+    types: ["mechQuirk"],
+    makeDefault: true,
+    label: "AToW Mech Design Quirk Sheet"
   });
 
   // Register Character Weapon/Armor item sheets
@@ -1970,6 +2159,22 @@ Hooks.once("ready", async () => {
     return legLoss >= 1 ? 5 : 0;
   };
 
+  const getSmallCockpitPSRTNMod = (actor) => actor?.system?.mech?.smallCockpit ? 1 : 0;
+  const getHardenedArmorPSRTNMod = (actor) => isHardenedArmorActive(actor) ? 1 : 0;
+  const getGyroPSRTNMod = (actor) => {
+    const hits = Math.max(0, Math.floor(Number(actor?.system?.critHits?.gyro ?? 0) || 0));
+    if (actor?.system?.mech?.heavyDutyGyro) {
+      if (hits >= 2) return 3;
+      if (hits >= 1) return 1;
+      return 0;
+    }
+    return hits >= 1 ? 3 : 0;
+  };
+  const isGyroDestroyed = (actor) => {
+    const hits = Math.max(0, Math.floor(Number(actor?.system?.critHits?.gyro ?? 0) || 0));
+    return hits >= (actor?.system?.mech?.heavyDutyGyro ? 3 : 2);
+  };
+
   const getActorLegLossCount = (actor) => {
     const flagCount = Number(actor?.getFlag?.(SYSTEM_ID, "legLoss") ?? actor?.flags?.[SYSTEM_ID]?.legLoss ?? 0) || 0;
     const isDestroyed = (locKey) => {
@@ -2119,7 +2324,10 @@ Hooks.once("ready", async () => {
     const actor = tokenDoc.actor;
     const piloting = Number(actor.system?.pilot?.piloting ?? 0) || 0;
     const legLossMod = getLegLossPSRTNMod(actor);
-    const tn = 8 + legLossMod;
+    const smallCockpitMod = getSmallCockpitPSRTNMod(actor);
+    const hardenedArmorMod = getHardenedArmorPSRTNMod(actor);
+    const gyroMod = getGyroPSRTNMod(actor);
+    const tn = 8 + legLossMod + smallCockpitMod + hardenedArmorMod + gyroMod;
     const psr = await (new Roll(`2d6 + ${piloting}`)).evaluate();
     await lockMovementResetForTurn(actor, tokenDoc, "water entry PSR");
     const success = Number(psr?.total ?? 0) >= tn;
@@ -2129,7 +2337,7 @@ Hooks.once("ready", async () => {
     const lines = [
       `<h3>Water Entry PSR</h3>`,
       `<div><b>${title}</b></div>`,
-      `<div><b>Roll:</b> ${psr.total} (2d6 + Piloting ${piloting}) vs <b>TN ${tn}</b>${legLossMod ? ` (leg destroyed +${legLossMod})` : ""} -> <b>${success ? "PASS" : "FALL"}</b></div>`
+      `<div><b>Roll:</b> ${psr.total} (2d6 + Piloting ${piloting}) vs <b>TN ${tn}</b>${legLossMod ? ` (leg destroyed +${legLossMod})` : ""}${smallCockpitMod ? ` (Small Cockpit +${smallCockpitMod})` : ""}${hardenedArmorMod ? ` (Hardened Armor +${hardenedArmorMod})` : ""}${gyroMod ? ` (Gyro +${gyroMod})` : ""} -> <b>${success ? "PASS" : "FALL"}</b></div>`
     ];
 
     if (!success) {
@@ -2776,6 +2984,10 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
 
   const relativeMoveTokenOneStep = async (tokenDoc, { backward = false } = {}) => {
     if (!canUseRelativeMovementKeybind(tokenDoc)) return false;
+    if (isGyroDestroyed(tokenDoc?.actor)) {
+      ui.notifications?.warn?.("A mech with a destroyed gyro cannot move.");
+      return false;
+    }
     if (tokenHasStatus(tokenDoc, "prone")) {
       ui.notifications?.warn?.("A prone mech cannot move normally. Use facing changes or the stand-up action.");
       return false;
@@ -3055,6 +3267,7 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
 
       const mv = _computeBaseMoveFromEngine(mech.engine, mech.tonnage);
       if (!mv) return;
+      if (isHardenedArmorActive(sys)) mv.run = Math.max(0, mv.run - 1);
 
       data.system = data.system ?? {};
       data.system.movement = data.system.movement ?? {};
@@ -3078,6 +3291,7 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
 
       const engineChanging = ("engine" in mechChg) || ("system.mech.engine" in changes);
       const tonnageChanging = ("tonnage" in mechChg) || ("system.mech.tonnage" in changes);
+      const armorTypeChanging = ("armorType" in mechChg) || ("system.mech.armorType" in changes);
 
       const explicitWalk = ("walk" in movementChg) || ("system.movement.walk" in changes);
       const explicitRun = ("run" in movementChg) || ("system.movement.run" in changes);
@@ -3087,7 +3301,7 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
       );
 
       // Only recompute when relevant inputs change, or movement is missing.
-      if (!engineChanging && !tonnageChanging && !movementMissingOnActor) return;
+      if (!engineChanging && !tonnageChanging && !armorTypeChanging && !movementMissingOnActor) return;
 
       // Respect explicit movement updates if someone is intentionally writing them in the same update.
       if (explicitWalk || explicitRun || explicitJump) return;
@@ -3111,6 +3325,13 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
         mv.walk = 1;
         mv.run = 2;
         mv.jump = 0;
+      }
+
+      const nextArmorType = armorTypeChanging
+        ? (("armorType" in mechChg) ? mechChg.armorType : changes["system.mech.armorType"])
+        : actor.system?.mech?.armorType;
+      if (String(nextArmorType ?? "").toLowerCase() === "hardened" && !hasInstalledAdvancedArmorComponents(actor)) {
+        mv.run = Math.max(0, mv.run - 1);
       }
 
       changes.system = changes.system ?? {};
@@ -3137,11 +3358,17 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
         jump: 0
       };
     }
-    const isCombatVehicle = actor?.type === "wheeledvehicle" || actor?.type === "vehicle";
+    const isCombatVehicle = actor?.type === "wheeledvehicle" || actor?.type === "vehicle" || actor?.type === "vtol";
     if (isCombatVehicle) {
       const vehicleMove = sys.vehicle?.movement ?? {};
-      const walk = Number(vehicleMove.cruise ?? vehicleMove.walk ?? vehicleMove.Walk ?? 0) || 0;
-      const run = Number(vehicleMove.flank ?? vehicleMove.run ?? vehicleMove.Run ?? 0) || 0;
+      let walk = Number(vehicleMove.cruise ?? vehicleMove.walk ?? vehicleMove.Walk ?? 0) || 0;
+      let run = Number(vehicleMove.flank ?? vehicleMove.run ?? vehicleMove.Run ?? 0) || 0;
+      if (actor?.type === "vtol") {
+        const rotorHits = Math.max(0, Number(sys.crit?.rotorHits ?? 0) || 0);
+        const crashed = Boolean(sys.crit?.crashed || sys.crit?.rotorsDestroyed || sys.crit?.defeated);
+        walk = crashed ? 0 : Math.max(0, walk - rotorHits);
+        run = crashed ? 0 : Math.ceil(walk * 1.5);
+      }
       return { walk, run, jump: 0 };
     }
 
@@ -3152,10 +3379,14 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
 
     // Heat movement penalty (computed each turn after venting)
     const movePenalty = Number(sys.heat?.effects?.movePenalty ?? 0) || 0;
+    const hardenedArmor = isHardenedArmorActive(actor);
 
     let walk = Math.max(0, baseWalk - movePenalty);
     const computedRun = Math.max(0, Math.ceil(walk * 1.5));
-    let run = (baseRun > 0) ? Math.min(computedRun, baseRun) : computedRun;
+    // Stored Running MP already includes Hardened Armor's -1. Restore the
+    // unmodified cap for recalculation, then apply the penalty once at the end.
+    const runCap = hardenedArmor && baseRun > 0 ? baseRun + 1 : baseRun;
+    let run = (runCap > 0) ? Math.min(computedRun, runCap) : computedRun;
     let jump = baseJump; // (heat jump penalties can be added later if desired)
 
     // Leg loss movement overrides (rest of battle)
@@ -3170,6 +3401,11 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
       jump = 0;
     }
 
+    if (String(actor?.type ?? "").toLowerCase() === "mech") {
+      const enhancedRunMultiplier = getEnhancedRunMultiplier(actor);
+      if (enhancedRunMultiplier) run = Math.max(0, Math.ceil(walk * enhancedRunMultiplier));
+      if (hardenedArmor) run = Math.max(0, run - 1);
+    }
 
     return { walk, run, jump };
   };
@@ -3203,7 +3439,17 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
 
       for (const [_idxKey, slot] of entries) {
         if (!slot) continue;
-        if (!slot.destroyed) continue;
+        if (slot.partOf !== undefined && slot.partOf !== null) continue;
+        const startIndex = Number(_idxKey);
+        const span = Math.max(1, Number(slot?.span ?? 1) || 1);
+        let componentDestroyed = false;
+        for (let offset = 0; offset < span; offset++) {
+          const member = Array.isArray(slots)
+            ? slots[startIndex + offset]
+            : slots[String(startIndex + offset)];
+          componentDestroyed ||= Boolean(member?.destroyed);
+        }
+        if (!componentDestroyed) continue;
 
         const label = String(slot.label ?? "").trim();
         if (label && _isJumpJetText(label)) {
@@ -3521,7 +3767,12 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
         return;
       }
 
-      const destroyedJets = await _countDestroyedJumpJets(actor);
+      // The v2 mech sheet derives Jump MP from intact mounted components.
+      // Older actors without that bookkeeping retain the legacy subtraction.
+      const jumpJetBookkeeping = mv?.jumpJets;
+      const destroyedJets = jumpJetBookkeeping
+        ? 0
+        : await _countDestroyedJumpJets(actor);
       const maxRange = Math.max(0, baseJump - destroyedJets);
       if (maxRange <= 0) {
         ui.notifications?.warn?.("All Jump Jets are destroyed (cannot Jump)." );
@@ -3665,7 +3916,10 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
   const rollStandUpPSR = async (tokenDoc, actor) => {
     const piloting = Number(actor?.system?.pilot?.piloting ?? 0) || 0;
     const legLossMod = getLegLossPSRTNMod(actor);
-    const tn = 8 + legLossMod;
+    const smallCockpitMod = getSmallCockpitPSRTNMod(actor);
+    const hardenedArmorMod = getHardenedArmorPSRTNMod(actor);
+    const gyroMod = getGyroPSRTNMod(actor);
+    const tn = 8 + legLossMod + smallCockpitMod + hardenedArmorMod + gyroMod;
     const roll = await (new Roll(`2d6 + ${piloting}`)).evaluate();
     const success = Number(roll?.total ?? 0) >= tn;
     await ChatMessage.create({
@@ -3675,7 +3929,7 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
         `<div class="atow-chat-card atow-mech-attack">`,
         `<header><b>Stand Up PSR</b></header>`,
         `<div><b>${actor?.name ?? tokenDoc?.name ?? "Mech"}</b></div>`,
-        `<div><b>Roll:</b> ${roll.total} (2d6 + Piloting ${piloting}) vs <b>TN ${tn}</b>${legLossMod ? ` (leg destroyed +${legLossMod})` : ""} -> <b>${success ? "STANDS" : "FAILS"}</b></div>`,
+        `<div><b>Roll:</b> ${roll.total} (2d6 + Piloting ${piloting}) vs <b>TN ${tn}</b>${legLossMod ? ` (leg destroyed +${legLossMod})` : ""}${smallCockpitMod ? ` (Small Cockpit +${smallCockpitMod})` : ""}${hardenedArmorMod ? ` (Hardened Armor +${hardenedArmorMod})` : ""}${gyroMod ? ` (Gyro +${gyroMod})` : ""} -> <b>${success ? "STANDS" : "FAILS"}</b></div>`,
         `<div>${success ? "Prone removed. 2 MP spent and 1 Heat generated." : "The mech remains Prone. 2 MP spent and 1 Heat generated."}</div>`,
         `</div>`
       ].join(""),
@@ -3719,6 +3973,11 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
         flags: { [SYSTEM_ID]: { action: "goProne" } }
       }).catch(() => {});
       return true;
+    }
+
+    if (isGyroDestroyed(actor)) {
+      ui.notifications?.warn?.("A mech with a destroyed gyro cannot stand.");
+      return false;
     }
 
     if (!(await spendPostureMovement(tokenDoc, actor, 2))) return false;
@@ -3784,6 +4043,20 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
     }
 
     switch (normalized) {
+      case "masc":
+        if (!actorDoc || actorDoc.type !== "mech") {
+          ui.notifications?.warn?.("Select or open a mech to activate MASC.");
+          return false;
+        }
+        return await activateMASC(actorDoc, tokenDoc);
+
+      case "supercharger":
+        if (!actorDoc || actorDoc.type !== "mech") {
+          ui.notifications?.warn?.("Select or open a mech to activate its Supercharger.");
+          return false;
+        }
+        return await activateSupercharger(actorDoc, tokenDoc);
+
       case "jump":
         if (!actorDoc || actorDoc.type !== "mech") {
           ui.notifications?.warn?.("Select or open a mech to use this action.");
@@ -3832,7 +4105,7 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
       }
 
       case "dazzle": {
-        if (!actorDoc || !["mech", "wheeledvehicle"].includes(String(actorDoc.type ?? "").toLowerCase())) {
+        if (!actorDoc || !["mech", "wheeledvehicle", "vtol"].includes(String(actorDoc.type ?? "").toLowerCase())) {
           ui.notifications?.warn?.("Select or open a mech or combat vehicle to use Dazzle Mode.");
           return false;
         }
@@ -4229,6 +4502,20 @@ return await mod.promptAndRollWeaponAttack(actorDoc, weapon, {
     const tokenDoc = c?.token;
     rememberActiveEngineHeatTurn(combat);
 
+    const turnActor = tokenDoc?.actor ?? c?.actor ?? null;
+    if (turnActor?.type === "mech") {
+      const enhancerReset = {};
+      for (const flagName of ["mascState", "superchargerState"]) {
+        const state = turnActor.getFlag?.(SYSTEM_ID, flagName) ?? null;
+        if (state?.active && String(state.activationStamp ?? "") !== stamp) {
+          enhancerReset[`flags.${SYSTEM_ID}.${flagName}.active`] = false;
+        }
+      }
+      if (Object.keys(enhancerReset).length) {
+        await turnActor.update(enhancerReset, { atowEnhancerTurnReset: true }).catch(() => {});
+      }
+    }
+
     await clearTaggedEffectsForCombatant(c, combat);
     if (!tokenDoc) return;
 
@@ -4304,6 +4591,11 @@ return await mod.promptAndRollWeaponAttack(actorDoc, weapon, {
       changes.x = tokenDoc.x;
       changes.y = tokenDoc.y;
       ui.notifications?.warn?.("A prone mech cannot move normally. It may only change facing or stand up.");
+    }
+    if (isMove && tokenDoc?.actor?.type === "mech" && isGyroDestroyed(tokenDoc.actor)) {
+      changes.x = tokenDoc.x;
+      changes.y = tokenDoc.y;
+      ui.notifications?.warn?.("A mech with a destroyed gyro cannot move.");
     }
 
     // If movement has been explicitly ended (e.g., after a Jump), disallow further turning or translation.
@@ -5268,11 +5560,17 @@ Hooks.once("ready", () => {
 
   const getMoveSpeeds = (actor) => {
     const sys = actor?.system ?? {};
-    const isCombatVehicle = actor?.type === "wheeledvehicle" || actor?.type === "vehicle";
+    const isCombatVehicle = actor?.type === "wheeledvehicle" || actor?.type === "vehicle" || actor?.type === "vtol";
     if (isCombatVehicle) {
       const vehicleMove = sys.vehicle?.movement ?? {};
-      const walk = Number(vehicleMove.cruise ?? vehicleMove.walk ?? vehicleMove.Walk ?? 0) || 0;
-      const run = Number(vehicleMove.flank ?? vehicleMove.run ?? vehicleMove.Run ?? 0) || 0;
+      let walk = Number(vehicleMove.cruise ?? vehicleMove.walk ?? vehicleMove.Walk ?? 0) || 0;
+      let run = Number(vehicleMove.flank ?? vehicleMove.run ?? vehicleMove.Run ?? 0) || 0;
+      if (actor?.type === "vtol") {
+        const rotorHits = Math.max(0, Number(sys.crit?.rotorHits ?? 0) || 0);
+        const crashed = Boolean(sys.crit?.crashed || sys.crit?.rotorsDestroyed || sys.crit?.defeated);
+        walk = crashed ? 0 : Math.max(0, walk - rotorHits);
+        run = crashed ? 0 : Math.ceil(walk * 1.5);
+      }
       return { walk, run, jump: 0 };
     }
 
@@ -5298,6 +5596,14 @@ Hooks.once("ready", () => {
       walk = 1;
       run = 2;
       jump = 0;
+    }
+
+    if (String(actor?.type ?? "").toLowerCase() === "mech") {
+      const enhancedRunMultiplier = getEnhancedRunMultiplier(actor);
+      if (enhancedRunMultiplier) run = Math.max(0, Math.ceil(walk * enhancedRunMultiplier));
+      if (isHardenedArmorActive(actor) && (enhancedRunMultiplier || legLoss >= 1)) {
+        run = Math.max(0, run - 1);
+      }
     }
 
     return { walk, run, jump };
@@ -5490,6 +5796,15 @@ function registerSystemSettings() {
     default: false
   });
 
+  game.settings.register(SYSTEM_ID, "advancedDeterminingCriticalHits", {
+    name: "Advanced Determining Critical Hits",
+    hint: "Uses the advanced critical-hit table modifier where supported. Narrow/Low Profile glancing blows apply −4 instead of −2 to critical checks.",
+    scope: "world",
+    config: true,
+    type: Boolean,
+    default: false
+  });
+
   game.settings.register(SYSTEM_ID, "rotateTokenArtWithFacing", {
     name: "Rotate Token Art With Facing",
     hint: "If enabled, token artwork rotates when facing changes. If disabled, the system tracks facing separately and shows it with the facing indicator.",
@@ -5584,6 +5899,8 @@ async function preloadHandlebarsTemplates() {
     `systems/${SYSTEM_ID}/templates/vehicle-attack.hbs`,
     `systems/${SYSTEM_ID}/templates/mech-weapon.hbs`,
     `systems/${SYSTEM_ID}/templates/mech-equipment.hbs`,
+    `systems/${SYSTEM_ID}/templates/mech-quirk.hbs`,
+    `systems/${SYSTEM_ID}/templates/compendium-browser.hbs`,
     `systems/${SYSTEM_ID}/templates/character-weapon.hbs`,
     `systems/${SYSTEM_ID}/templates/character-armor.hbs`,
     `systems/${SYSTEM_ID}/templates/character-equipment.hbs`
@@ -5645,7 +5962,7 @@ async function rollCheck({
 } = {}) {
   const useTN = (tn === undefined) ? game.settings.get(SYSTEM_ID, "defaultTN") : tn;
 
-  // Leg loss penalty: +5 TN to Piloting Skill Rolls.
+  // Chassis/cockpit penalties to Piloting Skill Rolls.
   let finalTN = useTN;
   if (finalTN !== null && finalTN !== undefined && actor) {
     const checkText = `${label ?? ""} ${flavor ?? ""}`;
@@ -5659,6 +5976,10 @@ async function rollCheck({
     };
     const legLoss = Math.min(2, Math.max(0, flagLegLoss, (isLegDestroyed("ll") ? 1 : 0) + (isLegDestroyed("rl") ? 1 : 0)));
     if (legLoss >= 1 && isPSR) finalTN = Number(finalTN) + 5;
+    if (actor?.system?.mech?.smallCockpit && isPSR) finalTN = Number(finalTN) + 1;
+    if (isHardenedArmorActive(actor) && isPSR) {
+      finalTN = Number(finalTN) + 1;
+    }
   }
 
   const mod = Number(modifier ?? 0);
