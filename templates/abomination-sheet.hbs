@@ -153,6 +153,43 @@
               {{/each}}
             </div>
           </div>
+
+          <h4 class="abom-ref-subtitle">Ammunition</h4>
+          <div class="abom-ammo-drop drop-zone" data-drop-zone="abomination-ammo">
+            {{#if abominationAmmoRows.length}}
+              <table class="abom-ref-table abom-ammo-table">
+                <thead>
+                  <tr>
+                    <th>Type</th>
+                    <th>Remaining</th>
+                    <th>Capacity</th>
+                    <th>Installed Items</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {{#each abominationAmmoRows as |ammo|}}
+                    <tr>
+                      <td>{{ammo.name}}</td>
+                      <td>
+                        <input name="system.ammoBins.{{ammo.key}}.current" type="number" value="{{ammo.current}}" min="0" max="{{ammo.total}}" />
+                      </td>
+                      <td>{{ammo.total}}</td>
+                      <td class="abom-ammo-items">
+                        {{#each ammo.items as |item|}}
+                          <span class="item abom-ammo-item" data-item-id="{{item.id}}">
+                            <a class="item-edit" title="Open {{item.name}}">{{item.capacity}}</a>
+                            <a class="item-delete" title="Remove {{item.name}}">X</a>
+                          </span>
+                        {{/each}}
+                      </td>
+                    </tr>
+                  {{/each}}
+                </tbody>
+              </table>
+            {{else}}
+              <div class="abom-ammo-empty">Drop mech ammunition here.</div>
+            {{/if}}
+          </div>
         </section>
       </div>
 

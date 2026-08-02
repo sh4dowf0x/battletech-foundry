@@ -3,6 +3,7 @@
 
 import { ATOWCharacterSheet } from "./character-sheet.js";
 import { promptAndRollWeaponAttack } from "./abomination-attack.js";
+import { ensureActorAmmoBins, getAmmoEquipmentProfile } from "./mech-attack.js";
 
 const SYSTEM_ID = "atow-battletech";
 const TEMPLATE = `systems/${SYSTEM_ID}/templates/abomination-sheet.hbs`;
@@ -135,6 +136,34 @@ function buildAbominationMechWeapons(actor) {
   return weapons;
 }
 
+function buildAbominationAmmoRows(actor, totals, bins) {
+  const itemsByKey = new Map();
+  for (const item of actor?.items?.contents ?? []) {
+    if (item?.type !== "mechEquipment") continue;
+    const profile = getAmmoEquipmentProfile(item);
+    if (!profile) continue;
+    if (!itemsByKey.has(profile.key)) itemsByKey.set(profile.key, []);
+    itemsByKey.get(profile.key).push({
+      id: item.id,
+      name: item.name ?? profile.name,
+      capacity: profile.total
+    });
+  }
+
+  return Array.from(totals.entries()).map(([key, row]) => {
+    const total = Math.max(0, Number(row?.total ?? 0) || 0);
+    const storedCurrent = Number(bins?.[key]?.current);
+    const current = Number.isFinite(storedCurrent) ? Math.max(0, Math.min(total, storedCurrent)) : total;
+    return {
+      key,
+      name: String(row?.name ?? key),
+      current,
+      total,
+      items: itemsByKey.get(key) ?? []
+    };
+  }).sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
+}
+
 export class ATOWAbominationSheet extends ATOWCharacterSheet {
   constructor(...args) {
     super(...args);
@@ -191,6 +220,8 @@ export class ATOWAbominationSheet extends ATOWCharacterSheet {
     context.abominationTrackConfig = { trackCount, trackPips };
     context.abominationAliveCount = aliveCount;
     context.abominationMechWeapons = buildAbominationMechWeapons(this.actor);
+    const ammoState = await ensureActorAmmoBins(this.actor);
+    context.abominationAmmoRows = buildAbominationAmmoRows(this.actor, ammoState.totals, ammoState.bins);
     context.hideThirdColumn = this._hideThirdColumn === true;
     context.mobHobbleModifiers = MOB_HOBBLE_MODIFIERS;
     context.mobHitTable = MOB_HIT_TABLE;
@@ -331,6 +362,16 @@ export class ATOWAbominationSheet extends ATOWCharacterSheet {
     if (!el) return super._handleChange?.(event);
 
     const name = String(el.name ?? "").trim();
+    const ammoCurrentMatch = name.match(/^system\.ammoBins\.([a-z0-9-]+)\.current$/i);
+    if (ammoCurrentMatch) {
+      const key = ammoCurrentMatch[1];
+      const total = Math.max(0, Number(this.actor.system?.ammoBins?.[key]?.total ?? 0) || 0);
+      const value = Math.max(0, Math.min(total, Number(el.value ?? 0) || 0));
+      if ("value" in el) el.value = String(value);
+      await this.actor.update({ [`system.ammoBins.${key}.current`]: value });
+      return;
+    }
+
     const explicitNumericFields = new Set([
       "system.pilot.gunnery",
       "system.abomination.groundMp",
@@ -367,7 +408,7 @@ export class ATOWAbominationSheet extends ATOWCharacterSheet {
 
   async _onDrop(event) {
     const zone = event?.target?.closest?.("[data-drop-zone]")?.dataset?.dropZone;
-    if (zone !== "abomination-weapons") return super._onDrop(event);
+    if (!new Set(["abomination-weapons", "abomination-ammo"]).has(zone)) return super._onDrop(event);
     if (!this.isEditable) return;
 
     const data = (() => {
@@ -386,6 +427,21 @@ export class ATOWAbominationSheet extends ATOWCharacterSheet {
 
     const dropped = data.uuid ? await fromUuid(data.uuid) : (data.data ? new Item(data.data) : null);
     if (!dropped) return;
+
+    if (zone === "abomination-ammo") {
+      if (dropped.type !== "mechEquipment" || !getAmmoEquipmentProfile(dropped)) {
+        ui.notifications?.warn?.("Drop a mech ammunition item here, such as Ammo (AC/5) 20.");
+        return;
+      }
+
+      const obj = dropped.toObject();
+      delete obj._id;
+      obj.type = "mechEquipment";
+      await this.actor.createEmbeddedDocuments("Item", [obj]);
+      await ensureActorAmmoBins(this.actor);
+      this.render();
+      return;
+    }
 
     const allowed = new Set(["mechWeapon", "weapon"]);
     if (!allowed.has(dropped.type)) {

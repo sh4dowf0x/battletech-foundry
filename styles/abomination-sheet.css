@@ -292,11 +292,54 @@
   border-color: rgba(223, 123, 62, 0.98);
 }
 
-.atow-abomination-sheet .abom-weapons-drop {
+.atow-abomination-sheet .abom-weapons-drop,
+.atow-abomination-sheet .abom-ammo-drop {
   border: 1px dashed rgba(223, 123, 62, 0.34);
   border-radius: 14px;
   padding: 10px;
   background: rgba(255, 255, 255, 0.025);
+}
+
+.atow-abomination-sheet .abom-ammo-empty {
+  padding: 8px;
+  color: var(--abom-muted);
+  font-size: 0.72rem;
+  font-style: italic;
+  text-align: center;
+}
+
+.atow-abomination-sheet .abom-ammo-table input[type="number"] {
+  width: 62px;
+  height: 24px;
+  text-align: center;
+}
+
+.atow-abomination-sheet .abom-ammo-items {
+  white-space: normal;
+}
+
+.atow-abomination-sheet .abom-ammo-item {
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+  margin: 1px 3px 1px 0;
+  padding: 2px 5px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.atow-abomination-sheet .abom-ammo-item .item-edit,
+.atow-abomination-sheet .abom-ammo-item .item-delete {
+  color: #fff5ec;
+  text-decoration: none;
+}
+
+.atow-abomination-sheet .abom-ammo-item .item-delete {
+  opacity: 0.7;
+}
+
+.atow-abomination-sheet .abom-ammo-item .item-delete:hover {
+  opacity: 1;
 }
 
 .atow-abomination-sheet .abom-we-table {

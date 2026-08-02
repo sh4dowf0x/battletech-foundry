@@ -1,5 +1,5 @@
 // atow-battletech.js (ROOT)
-// version 0.0.15
+// version 0.0.16
 
 import { ATOWCharacterSheet } from "./module/character-sheet.js";
 import { ATOWAbominationSheet } from "./module/abomination-sheet.js";

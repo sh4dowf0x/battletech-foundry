@@ -2989,7 +2989,7 @@ function slugifyAmmoKey(s) {
  * Convert an ammo "type label" to our bin key format.
  * Accepts inputs like: "AC/20", "AC 20", "LRM 20", "SRM-6", "ac-10", etc.
  */
-function ammoKeyFromTypeLabel(typeText) {
+export function ammoKeyFromTypeLabel(typeText) {
   const raw = String(typeText ?? "").trim();
   // Accept both a bare ammo type ("NARC") and the complete crit-slot label
   // ("Ammo (NARC) 6"). Weapon items and mounted-slot fallbacks can supply either.
@@ -3058,6 +3058,32 @@ function ammoKeyFromTypeLabel(typeText) {
   if (t === "narc" || /\bnarc\s+(missile\s+)?(beacon\s+)?pods?\b/i.test(t)) return "narc";
 
   return slugifyAmmoKey(t);
+}
+
+export function getAmmoEquipmentProfile(item) {
+  if (!item) return null;
+  const sys = item?.system ?? {};
+  const itemName = String(item?.name ?? "").trim();
+  const nameMatch = itemName.match(/^\s*ammo\s*\(([^)]+)\)\s*(\d+)\s*(?:\[\s*(LRM|SRM)\s*\])?\s*$/i);
+
+  const explicitType = String(sys.ammoType ?? sys.ammoName ?? sys.ammoLabel ?? "").trim();
+  const typeText = nameMatch
+    ? `${String(nameMatch[1] ?? "").trim()}${nameMatch[3] ? ` [${nameMatch[3]}]` : ""}`
+    : explicitType;
+  const amountFromName = Number(nameMatch?.[2] ?? 0) || 0;
+  const declaredAmount = Number(sys.ammoAmount ?? sys.shots ?? 0) || 0;
+  const amount = declaredAmount > 0 ? declaredAmount : amountFromName;
+  const quantity = Math.max(1, Math.floor(Number(sys.quantity ?? sys.qty ?? sys.count ?? 1) || 1));
+  const key = ammoKeyFromTypeLabel(typeText);
+
+  if (!key || amount <= 0) return null;
+  return {
+    key,
+    name: typeText || itemName || key,
+    amount,
+    quantity,
+    total: amount * quantity
+  };
 }
 
 function getLBXWeaponSize(weaponItem) {
@@ -3401,6 +3427,42 @@ function buildAmmoTotalsFromCritSlots(actorSystem) {
   return totals;
 }
 
+function buildAmmoTotalsFromEmbeddedItems(actor) {
+  const totals = new Map();
+  const items = actor?.items?.contents ?? Array.from(actor?.items ?? []);
+
+  for (const item of items) {
+    if (item?.type !== "mechEquipment") continue;
+    const profile = getAmmoEquipmentProfile(item);
+    if (!profile) continue;
+
+    const previous = totals.get(profile.key);
+    if (previous) previous.total += profile.total;
+    else totals.set(profile.key, {
+      key: profile.key,
+      name: profile.name,
+      total: profile.total
+    });
+  }
+
+  return totals;
+}
+
+function mergeAmmoTotals(target, source) {
+  for (const [key, row] of source.entries()) {
+    const previous = target.get(key);
+    if (previous) previous.total += row.total;
+    else target.set(key, { ...row });
+  }
+  return target;
+}
+
+function buildActorAmmoTotals(actor) {
+  const totals = buildAmmoTotalsFromCritSlots(actor?.system ?? {});
+  if (isAbominationActor(actor)) mergeAmmoTotals(totals, buildAmmoTotalsFromEmbeddedItems(actor));
+  return totals;
+}
+
 function actorHasOperationalAMS(actor) {
   const crit = actor?.system?.crit ?? {};
   for (const loc of Object.values(crit)) {
@@ -3504,15 +3566,19 @@ async function resolveAMSDefense(defenderActor, source = {}) {
  *
  * Returns: { totals: Map, bins: Object }
  */
-async function ensureActorAmmoBins(actor) {
+export async function ensureActorAmmoBins(actor) {
   if (!actor) return { totals: new Map(), bins: {} };
 
-  const totals = buildAmmoTotalsFromCritSlots(actor.system ?? {});
+  const totals = buildActorAmmoTotals(actor);
   const bins = actor.system?.ammoBins ?? {};
 
-  if (!totals.size) return { totals, bins };
-
   const updates = {};
+  if (isAbominationActor(actor)) {
+    for (const key of Object.keys(bins)) {
+      if (!totals.has(key)) updates[`system.ammoBins.-=${key}`] = null;
+    }
+  }
+
   for (const [key, row] of totals.entries()) {
     const total = num(row.total, 0);
     const name = String(row.name ?? key);
@@ -3556,7 +3622,7 @@ function weaponConsumesAmmo(weaponItem, actor, { ammoKey = null } = {}) {
   if (bins?.[key]) return true;
 
   // Otherwise, see if crit slots imply this ammo exists (sheet can display it even before edits)
-  const totals = buildAmmoTotalsFromCritSlots(actor?.system ?? {});
+  const totals = buildActorAmmoTotals(actor);
   return totals.has(key);
 }
 
