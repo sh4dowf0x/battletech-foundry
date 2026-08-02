@@ -3913,6 +3913,12 @@ function weaponIsPulseWeapon(item) {
   return t.includes("pulse");
 }
 
+function getPulseLaserTNModifier(item) {
+  const t = _weaponHeuristicText(item);
+  const isPulseLaser = t.includes("pulse") && t.includes("laser");
+  return isPulseLaser ? -2 : 0;
+}
+
 function weaponIsAreaEffectWeapon(item) {
   const sys = item?.system ?? {};
   if (sys?.areaEffect === true || sys?.aoe === true) return true;
@@ -5711,6 +5717,7 @@ export async function rollWeaponAttack(actor, weaponItem, opts = {}) {
     return { ok: false, blocked: true, reason: "artemisVAmmoNotLinked" };
   }
   const mrmTNMod = weaponRackType === "MRM" ? 1 : 0;
+  const pulseLaserTNMod = getPulseLaserTNModifier(weaponItem);
   const accurateWeaponQuirk = getAccurateWeaponQuirkModifier(actor, weaponItem, opts);
 
   const { band, mod: rangeMod, minPenalty } = calcRangeBandAndMod(weaponItem, distance, { ammoKey });
@@ -5939,11 +5946,11 @@ export async function rollWeaponAttack(actor, weaponItem, opts = {}) {
 
   const totalTN = isArrowIVHomingAttack
     ? 4 + accurateWeaponQuirk.mod + improvedTargetingQuirk.mod
-    : num(baseTN, 8) + rangeMod + attackerMoveMod + targetMoveMod + heatFireMod + statusTNMods.total + envTNMods.mod + losWoodsMods.mod + terrainPartialCoverMod + terrainMod + otherMod + mrmTNMod + accurateWeaponQuirk.mod + improvedTargetingQuirk.mod + tcMod + aimedNetMod;
+    : num(baseTN, 8) + rangeMod + attackerMoveMod + targetMoveMod + heatFireMod + statusTNMods.total + envTNMods.mod + losWoodsMods.mod + terrainPartialCoverMod + terrainMod + otherMod + mrmTNMod + pulseLaserTNMod + accurateWeaponQuirk.mod + improvedTargetingQuirk.mod + tcMod + aimedNetMod;
 
   const tn = isArrowIVHomingAttack
     ? 4 + accurateWeaponQuirk.mod + improvedTargetingQuirk.mod
-    : num(baseTN, 8) + rangeMod + attackerMoveMod + targetMoveMod + heatFireMod + statusTNMods.total + envTNMods.mod + losWoodsMods.mod + terrainPartialCoverMod + terrainMod + otherMod + mrmTNMod + accurateWeaponQuirk.mod + improvedTargetingQuirk.mod + tcMod + aimedNetMod;
+    : num(baseTN, 8) + rangeMod + attackerMoveMod + targetMoveMod + heatFireMod + statusTNMods.total + envTNMods.mod + losWoodsMods.mod + terrainPartialCoverMod + terrainMod + otherMod + mrmTNMod + pulseLaserTNMod + accurateWeaponQuirk.mod + improvedTargetingQuirk.mod + tcMod + aimedNetMod;
 
   const toHit = await (new Roll(isArrowIVHomingAttack ? "2d6" : `2d6 + ${gunnery}`)).evaluate();
   // Missile rack size (LRM/SRM/MRM etc). Used to distinguish missile cluster weapons vs rapid-fire cluster.
@@ -6951,6 +6958,7 @@ const jamInfoLine = (jam && !isAbomChat && !rack && rapidShots > 1)
     `<li>Partial Cover: +${terrainPartialCoverMod}${losCoverMods.details?.length ? ` (${losCoverMods.details.join('; ')})` : ''}</li>`,
     `<li>Terrain: +${terrainMod}</li>`,
     `<li>Weapon Accuracy: +${mrmTNMod}${mrmTNMod ? " (MRM unguided)" : ""}</li>`,
+    `<li>Pulse Laser: ${pulseLaserTNMod >= 0 ? "+" : ""}${pulseLaserTNMod}${pulseLaserTNMod ? " (applied)" : ""}</li>`,
     `<li>Accurate Weapon Quirk: ${accurateWeaponQuirk.mod >= 0 ? "+" : ""}${accurateWeaponQuirk.mod}${accurateWeaponQuirk.applied ? " (applied)" : ""}</li>`,
     `<li>Improved Targeting (${band}): ${improvedTargetingQuirk.mod >= 0 ? "+" : ""}${improvedTargetingQuirk.mod}${improvedTargetingQuirk.applied ? " (applied)" : ""}</li>`,
     `<li>Other: +${otherMod}</li>`,
@@ -8086,6 +8094,7 @@ export async function promptAndRollWeaponAttack(actor, weaponItem, { defaultSide
   const dialogBaseTN = 8;
   const dialogRack = getMissileRack(weaponItem);
   const dialogMRMTNMod = String(dialogRack?.type ?? "").toUpperCase() === "MRM" ? 1 : 0;
+  const dialogPulseLaserTNMod = getPulseLaserTNModifier(weaponItem);
   const dialogAttackerMoveMod = getAutoAttackerMoveMod(actor, attackerTok).mod;
   const dialogTargetMoveMod = autoTargetMove.mod;
   const dialogHeatFireMod = num(actor.system?.heat?.effects?.fireMod, 0);
@@ -8095,6 +8104,7 @@ export async function promptAndRollWeaponAttack(actor, weaponItem, { defaultSide
     + dialogTerrainCoverMod
     + dialogStatusMods.total
     + dialogMRMTNMod
+    + dialogPulseLaserTNMod
     + dialogAttackerMoveMod
     + dialogTargetMoveMod
     + dialogHeatFireMod
@@ -8112,6 +8122,7 @@ export async function promptAndRollWeaponAttack(actor, weaponItem, { defaultSide
     terrainCoverMod: dialogTerrainCoverMod
   });
   if (dialogMRMTNMod) mods.push({ label: "MRM Unguided", value: dialogMRMTNMod });
+  if (dialogPulseLaserTNMod) mods.push({ label: "Pulse Laser", value: dialogPulseLaserTNMod });
   if (dialogAccurateWeapon.applied) mods.push({ label: "Accurate Weapon Quirk", value: dialogAccurateWeapon.mod });
   if (dialogImprovedTargeting.applied) mods.push({ label: `Improved Targeting (${band})`, value: dialogImprovedTargeting.mod });
   if (firingArcInfo.applies && !firingArcInfo.legal) {
@@ -8163,7 +8174,7 @@ export async function promptAndRollWeaponAttack(actor, weaponItem, { defaultSide
     selectedRangeMod: num(selectedAmmoRange.mod, 0),
     selectedRangeBand: selectedAmmoRange.band ?? band,
     improvedTargetingBands: improvedTargetingBands.join(","),
-    baseTNWithoutRange: dialogBaseTN + dialogEnvMods.mod + dialogLosWoodsMods.mod + dialogTerrainCoverMod + dialogStatusMods.total + dialogHeatFireMod + dialogMRMTNMod + dialogAccurateWeapon.mod,
+    baseTNWithoutRange: dialogBaseTN + dialogEnvMods.mod + dialogLosWoodsMods.mod + dialogTerrainCoverMod + dialogStatusMods.total + dialogHeatFireMod + dialogMRMTNMod + dialogPulseLaserTNMod + dialogAccurateWeapon.mod,
     autoAttackerMoveMod: dialogAttackerMoveMod
   });
 

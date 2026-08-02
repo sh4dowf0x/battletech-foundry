@@ -1,5 +1,5 @@
 // atow-battletech.js (ROOT)
-// version 0.0.13
+// version 0.0.14
 
 import { ATOWCharacterSheet } from "./module/character-sheet.js";
 import { ATOWAbominationSheet } from "./module/abomination-sheet.js";
@@ -5437,6 +5437,9 @@ return await mod.promptAndRollWeaponAttack(actorDoc, weapon, {
     // Persistent shutdown state (until you add restart logic)
     let shutdown = Boolean(actor.system?.heat?.shutdown);
     let shutdownInfo = actor.system?.heat?.effects?.shutdown ?? {};
+    let shutdownChatContent = null;
+    let shutdownRoll = null;
+    let shutdownRollFlavor = "";
 
     // If the shutdown was caused by heat, attempt auto-startup at the beginning of the round.
     // Manual shutdown (atow.shutdown flag) is not auto-cleared.
@@ -5450,11 +5453,7 @@ return await mod.promptAndRollWeaponAttack(actorDoc, weapon, {
       if (effects.shutdownAuto) {
         shutdown = true;
         shutdownInfo = { type: "auto", heat: next, avoided: false, avoidTN: null, roll: null, active: true };
-
-        await ChatMessage.create({
-          speaker: ChatMessage.getSpeaker({ actor }),
-          content: `<b>${actor.name}</b> suffers <b>AUTOMATIC SHUTDOWN</b> due to heat (30+).`
-        });
+        shutdownChatContent = `<b>${actor.name}</b> suffers <b>AUTOMATIC SHUTDOWN</b> due to heat (30+).`;
       } else if (effects.shutdownAvoidTN !== null) {
         const roll = await (new Roll("2d6")).evaluate({ async: true });
         const total = roll.total ?? 0;
@@ -5470,13 +5469,10 @@ return await mod.promptAndRollWeaponAttack(actorDoc, weapon, {
         };
 
         if (!avoided) shutdown = true;
-
-        await roll.toMessage({
-          speaker: ChatMessage.getSpeaker({ actor }),
-          flavor: avoided
-            ? `Heat Shutdown Check (avoid on ${effects.shutdownAvoidTN}+): <b>AVOIDED</b>`
-            : `Heat Shutdown Check (avoid on ${effects.shutdownAvoidTN}+): <b>SHUTDOWN</b>`
-        });
+        shutdownRoll = roll;
+        shutdownRollFlavor = avoided
+          ? `Heat Shutdown Check (avoid on ${effects.shutdownAvoidTN}+): <b>AVOIDED</b>`
+          : `Heat Shutdown Check (avoid on ${effects.shutdownAvoidTN}+): <b>SHUTDOWN</b>`;
       }
     } else {
       shutdownInfo = { ...shutdownInfo, heat: next, active: true };
@@ -5496,6 +5492,20 @@ return await mod.promptAndRollWeaponAttack(actorDoc, weapon, {
       },
       "system.heat.shutdown": shutdown
     });
+
+    // Cooling is authoritative at turn start. Publish any shutdown result only
+    // after the cooled heat value and its resulting effects have been committed.
+    if (shutdownChatContent) {
+      await ChatMessage.create({
+        speaker: ChatMessage.getSpeaker({ actor }),
+        content: shutdownChatContent
+      }).catch(err => console.warn(`${SYSTEM_ID} | Failed to post automatic heat shutdown`, err));
+    } else if (shutdownRoll) {
+      await shutdownRoll.toMessage({
+        speaker: ChatMessage.getSpeaker({ actor }),
+        flavor: shutdownRollFlavor
+      }).catch(err => console.warn(`${SYSTEM_ID} | Failed to post heat shutdown check`, err));
+    }
 
     if (next >= 15 && Number(actor.system?.critHits?.lifeSupport ?? 0) > 0) {
       const stamp = getCombatStamp(game.combat);
