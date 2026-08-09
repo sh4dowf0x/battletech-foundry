@@ -4201,14 +4201,18 @@ function _getCombatStamp(combat) {
 
 async function _waitForTurnHeatResolution(actor, combat) {
   const tokenDoc = combat?.combatant?.token ?? null;
-  if (!tokenDoc?.getFlag) return;
-  if (actor?.id && tokenDoc.actor?.id && actor.id !== tokenDoc.actor.id) return;
+  if (!tokenDoc?.getFlag) return false;
+  if (actor?.id && tokenDoc.actor?.id && actor.id !== tokenDoc.actor.id) return false;
   const stamp = _getCombatStamp(combat);
-  for (let i = 0; i < 20; i += 1) {
+  // Foundry does not await async updateCombat listeners. Busy scenes can take
+  // longer than the old 500 ms window to clear statuses and update flags.
+  // Never fall through and test ammo against stale, pre-cooling heat.
+  for (let i = 0; i < 400; i += 1) {
     const resolvedStamp = String(tokenDoc.getFlag(SYSTEM_ID, "heatResolvedStamp") ?? "");
-    if (resolvedStamp === stamp) return;
+    if (resolvedStamp === stamp) return true;
     await new Promise(resolve => setTimeout(resolve, 25));
   }
+  return false;
 }
 
 // Register hooks once (module-scope)
@@ -4230,7 +4234,14 @@ if (!globalThis.__ATOW_BT_SFX_REGISTERED__) {
     if (actor.type && actor.type !== "mech") return;
 
     setTimeout(async () => {
-      await _waitForTurnHeatResolution(actor, combat);
+      const heatResolved = await _waitForTurnHeatResolution(actor, combat);
+      if (!heatResolved) {
+        console.warn(`${SYSTEM_ID} | Skipped heat ammo-explosion check because turn-start cooling did not resolve`, {
+          actor: actor.uuid ?? actor.id,
+          stamp: _getCombatStamp(combat)
+        });
+        return;
+      }
       await maybeResolveAmmoExplosionForActor(actor, combat);
       maybeHandleAmmoExplosionForActor(actor, combat);
     }, 50);

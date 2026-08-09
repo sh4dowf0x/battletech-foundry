@@ -1,5 +1,6 @@
 /* styles/atow-battletech.css */
 @import url("./compendium-browser.css");
+@import url("./galaxy-map.css");
 .atow.sheet.actor.character {
   --atow-gap: 10px;
   --atow-radius: 10px;

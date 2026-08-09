@@ -1,5 +1,5 @@
 // atow-battletech.js (ROOT)
-// version 0.0.16
+// version 0.0.17
 
 import { ATOWCharacterSheet } from "./module/character-sheet.js";
 import { ATOWAbominationSheet } from "./module/abomination-sheet.js";
@@ -36,6 +36,8 @@ import {
 import { registerATOWCharacterAttackSockets } from "./module/character-attack.js";
 import { registerAtowAudioHooks, playActorJumpjetEffect, playActorPowerRestoredAnnouncement, playActorShutdownAnnouncement, playRandomFootstepSequence, playTorsoTwistEffect } from "./module/audio-helper.js";
 import { registerAtowTerrainTools } from "./module/terrain.js";
+import { registerAtowGalaxyMapTools } from "./module/galaxy-map.js";
+import { registerATOWGalaxyTravelSockets, registerAtowGalaxyTravelTools } from "./module/galaxy-travel.js";
 import { registerAToWCompendiumBrowser } from "./module/compendium-browser.js";
 import {
   SKILL_CLASSIFICATION_REFERENCE,
@@ -285,6 +287,7 @@ Hooks.once("init", async () => {
     try {
       const socket = registerATOWAttackSockets();
       registerATOWCharacterAttackSockets(socket);
+      registerATOWGalaxyTravelSockets(socket);
     } catch (err) {
       console.warn(`${SYSTEM_ID} | Failed to register socketlib handlers`, err);
     }
@@ -292,6 +295,8 @@ Hooks.once("init", async () => {
 
   registerAtowAudioHooks();
   registerAtowTerrainTools(ATOW);
+  registerAtowGalaxyMapTools(ATOW);
+  registerAtowGalaxyTravelTools(ATOW);
   registerAToWCompendiumBrowser(ATOW);
   registerCharacterCombatApi(ATOW);
   if (globalThis.socketlib?.registerSystem) tryRegisterSystemSocket();
@@ -849,13 +854,18 @@ registerSystemSettings();
           app?.options?.document ??
           app?.options?.object ??
           null;
-        const root = html instanceof HTMLElement ? html : (Array.isArray(html) ? html[0] : null);
+        const htmlElement = html?.[0] instanceof HTMLElement ? html[0] : null;
+        const appElement = app?.element instanceof HTMLElement ? app.element : (app?.element?.[0] ?? null);
+        const root = html instanceof HTMLElement ? html : (htmlElement ?? appElement);
         if (!scene || !root) return;
 
         // Avoid double insert (tab or section)
-        if (root.querySelector(`.tab[data-tab="${TAB}"], fieldset[data-atow-env="1"]`)) return;
+        if (root.matches?.(`.tab[data-tab="${TAB}"], fieldset[data-atow-env="1"]`) ||
+            root.querySelector?.(`.tab[data-tab="${TAB}"], fieldset[data-atow-env="1"]`)) return;
 
         const env = getEnv(scene);
+        const galaxyEnabledRaw = scene?.getFlag?.(SYSTEM_ID, "galaxyMap")?.enabled ?? scene?.flags?.[SYSTEM_ID]?.galaxyMap?.enabled;
+        const galaxyEnabled = galaxyEnabledRaw === true || galaxyEnabledRaw === 1 || String(galaxyEnabledRaw).toLowerCase() === "true";
         const lighting = env.lighting ?? "day";
         const rain = env.rain ?? "none";
         const fog = env.fog ?? "none";
@@ -864,6 +874,18 @@ registerSystemSettings();
         const planetTemp = env.planetTemp ?? "normal";
 
         const inner = `
+  <h3 class="form-header">Galaxy Map</h3>
+
+  <div class="form-group">
+    <label>Enable Galaxy Map</label>
+    <div class="form-fields">
+      <input type="checkbox" name="flags.${SYSTEM_ID}.galaxyMap.enabled" value="true" data-dtype="Boolean"${galaxyEnabled ? " checked" : ""} />
+    </div>
+    <p class="hint">Adds the GM-only territorial painting tools to this Scene. A hex grid is required.</p>
+  </div>
+
+  <hr/>
+
   <h3 class="form-header">BattleTech Environment</h3>
 
   <div class="form-group">
@@ -972,17 +994,20 @@ registerSystemSettings();
 
           // Default: don't auto-activate; user clicks the tab.
         } else {
-          // No tab UI present: inject a fieldset at the bottom of the form
-          const form = root.querySelector("form");
+          // Foundry V13 renders SceneConfig as separate ApplicationV2 parts.
+          // The hook may receive either the form itself or a wrapper around it,
+          // and there is no legacy .sheet-body container. Put our settings in
+          // the Basics panel, where they remain part of the submitted form.
+          const form = root.matches?.("form") ? root : (root.querySelector?.("form") ?? root.closest?.("form"));
           if (!form) return;
 
           const fs = document.createElement("fieldset");
           fs.dataset.atowEnv = "1";
           fs.style.marginTop = "0.5rem";
-          fs.innerHTML = inner;
+          fs.innerHTML = `<legend>BattleTech</legend>${inner}`;
 
-          // Append at end (safe) - or you can move later into a specific spot.
-          form.appendChild(fs);
+          const basicsPanel = form.querySelector('.tab[data-group="sheet"][data-tab="basics"], .tab[data-tab="basics"]');
+          (basicsPanel ?? form).appendChild(fs);
         }
 
         // Expose API to read environment quickly
@@ -4541,6 +4566,22 @@ return await mod.promptAndRollWeaponAttack(actorDoc, weapon, {
     const tokenDoc = c?.token;
     rememberActiveEngineHeatTurn(combat);
 
+    // Resolve cooling before any other turn-start bookkeeping. Heat-dependent
+    // follow-up hooks (ammo explosions, shutdown audio, etc.) wait for this
+    // stamp and must never observe the previous turn's unsunk heat.
+    if (tokenDoc) {
+      try {
+        const heatResolvedStamp = String(tokenDoc.getFlag(SYSTEM_ID, "heatResolvedStamp") ?? "");
+        const heatActor = tokenDoc.actor ?? c?.actor ?? null;
+        if (heatResolvedStamp !== stamp) {
+          await resolveActorHeatForTurn(heatActor, { tokenDoc });
+          await tokenDoc.setFlag(SYSTEM_ID, "heatResolvedStamp", stamp);
+        }
+      } catch (err) {
+        console.warn(`${SYSTEM_ID} | Failed to resolve turn-start heat`, err);
+      }
+    }
+
     const turnActor = tokenDoc?.actor ?? c?.actor ?? null;
     if (turnActor?.type === "mech") {
       const enhancerReset = {};
@@ -4589,16 +4630,9 @@ return await mod.promptAndRollWeaponAttack(actorDoc, weapon, {
     await resetWeaponFireTrackingForCombatant(c, combat);
 
     try {
-      const heatResolvedStamp = String(tokenDoc.getFlag("atow-battletech", "heatResolvedStamp") ?? "");
-      const stamp = getCombatStamp(combat);
-      const heatActor = tokenDoc.actor ?? c.actor ?? null;
-      if (heatResolvedStamp !== stamp) {
-        await resolveActorHeatForTurn(heatActor, { tokenDoc });
-        await tokenDoc.setFlag("atow-battletech", "heatResolvedStamp", stamp);
-      }
       await storeMovementResetSnapshot(tokenDoc, combat);
     } catch (err) {
-      console.warn(`${SYSTEM_ID} | Failed to resolve turn-start heat`, err);
+      console.warn(`${SYSTEM_ID} | Failed to store turn-start movement snapshot`, err);
     }
   });
 

@@ -1,0 +1,155 @@
+.atow-galaxy-steiner { color: #58a6ff !important; }
+.atow-galaxy-kurita { color: #ef5960 !important; }
+.atow-galaxy-davion { color: #f1cf3d !important; }
+.atow-galaxy-liao { color: #5fc878 !important; }
+.atow-galaxy-marik { color: #a976d8 !important; }
+.atow-galaxy-terran { color: #d4d8de !important; }
+.atow-galaxy-pirate { color: #777e88 !important; }
+.atow-galaxy-erase { color: #d8d8d8 !important; }
+.atow-galaxy-transparency { color: #8ed8ff !important; }
+.atow-galaxy-system-tool { color: #ffffff !important; }
+.atow-galaxy-add-faction { color: #f0c45c !important; }
+.atow-galaxy-custom-faction { color: #f4f4f4 !important; }
+.atow-galaxy-region-tool { color: #ffffff !important; }
+.atow-galaxy-manage-regions { color: #b8d7ff !important; }
+
+.atow-galaxy-system-dialog .form-group {
+  margin-bottom: 0.65rem;
+}
+
+.atow-galaxy-region-manager {
+  display: block;
+  max-height: min(60vh, 520px);
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 0.4rem;
+}
+
+.atow-galaxy-region-head,
+.atow-galaxy-region-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 90px 64px 90px;
+  gap: 0.5rem;
+  align-items: center;
+  margin-bottom: 0.4rem;
+}
+
+.atow-galaxy-region-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 0.25rem 0;
+  background: var(--background, rgba(15, 12, 18, 0.98));
+  color: var(--color-text-subtle, #aaa);
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+
+.atow-galaxy-region-row > input {
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+}
+
+.atow-galaxy-region-row > input[type="color"] {
+  height: 32px;
+  padding: 3px;
+}
+
+.atow-galaxy-region-delete {
+  display: flex;
+  gap: 0.3rem;
+  align-items: center;
+  white-space: nowrap;
+  margin: 0;
+}
+
+.atow-galaxy-route-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.4rem 0.75rem;
+  padding: 0.75rem;
+  border: 1px solid var(--color-border-light-2, #777);
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.atow-galaxy-route-summary strong {
+  color: #55e7ff;
+}
+
+.atow-galaxy-route-legs {
+  max-height: 240px;
+  overflow-y: auto;
+  margin: 0;
+  padding: 0.5rem 0.5rem 0.5rem 2rem;
+}
+
+.atow-galaxy-route-legs li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.75rem;
+  padding: 0.2rem 0;
+}
+
+.atow-galaxy-route-result table {
+  width: 100%;
+}
+
+.atow-galaxy-route-result th,
+.atow-galaxy-route-result td {
+  padding: 0.35rem 0.5rem;
+  text-align: right;
+}
+
+.atow-galaxy-route-result th:first-child,
+.atow-galaxy-route-result td:first-child {
+  text-align: left;
+}
+
+.atow-galaxy-route-result tr.selected {
+  color: #55e7ff;
+  font-weight: 700;
+}
+
+.atow-galaxy-travel-pickers {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.atow-galaxy-system-picker {
+  display: grid;
+  grid-template-rows: auto auto minmax(150px, 1fr) auto;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
+.atow-galaxy-system-picker label {
+  font-weight: 700;
+}
+
+.atow-galaxy-system-picker input,
+.atow-galaxy-system-picker select {
+  width: 100%;
+  min-width: 0;
+}
+
+.atow-galaxy-system-picker select {
+  min-height: 180px;
+}
+
+.atow-galaxy-system-picker small {
+  color: var(--color-text-subtle, #aaa);
+  text-align: right;
+}
+
+.atow-galaxy-steiner,
+.atow-galaxy-kurita,
+.atow-galaxy-davion,
+.atow-galaxy-liao,
+.atow-galaxy-marik,
+.atow-galaxy-terran,
+.atow-galaxy-pirate {
+  filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.95));
+}

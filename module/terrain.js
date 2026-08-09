@@ -27,6 +27,11 @@ function terrainData(scene = canvas?.scene ?? game?.scenes?.active) {
   return foundry.utils.deepClone(scene?.getFlag?.(SYSTEM_ID, TERRAIN_FLAG) ?? {});
 }
 
+function isGalaxyMapScene(scene = canvas?.scene ?? game?.scenes?.active) {
+  const enabled = scene?.getFlag?.(SYSTEM_ID, "galaxyMap")?.enabled;
+  return enabled === true || enabled === 1 || String(enabled).toLowerCase() === "true";
+}
+
 function isEmptyTerrain(entry) {
   if (!entry || typeof entry !== "object") return true;
   return !entry.woods && !entry.waterDepth && !entry.elevation && !entry.rough;
@@ -248,6 +253,7 @@ export function drawTerrainOverlay() {
   if (!overlay) return;
 
   overlay.removeChildren().forEach(c => c.destroy?.({ children: true }));
+  if (isGalaxyMapScene()) return;
   const data = terrainData();
   const cellW = Number(canvas?.grid?.sizeX ?? canvas?.grid?.size ?? 0) || 100;
   const cellH = Number(canvas?.grid?.sizeY ?? canvas?.grid?.size ?? 0) || cellW;
@@ -302,7 +308,7 @@ function queueControlsRender() {
   state.controlsRenderQueued = true;
   window.setTimeout(() => {
     state.controlsRenderQueued = false;
-    ui?.controls?.render?.({ force: true });
+    ui?.controls?.render?.({ reset: true });
   }, 0);
 }
 
@@ -347,7 +353,7 @@ function buildTerrainControl() {
     title: "BattleTech Terrain",
     icon: "fas fa-mountain",
     order: 99,
-    visible: Boolean(game.user?.isGM),
+    visible: Boolean(game.user?.isGM && !isGalaxyMapScene()),
     activeTool: state.brush,
     tools: brushTools,
     onChange: (_event, active) => {
@@ -361,7 +367,7 @@ function buildTerrainControl() {
 }
 
 function registerTerrainSceneControl(controls) {
-  if (!controls || !game.user?.isGM) return;
+  if (!controls || !game.user?.isGM || isGalaxyMapScene()) return;
   const control = buildTerrainControl();
 
   if (Array.isArray(controls)) {
@@ -419,6 +425,7 @@ function bindCanvasEvents() {
 
 function onPointerDown(event) {
   if (!state.enabled || !game.user?.isGM) return;
+  if ((event?.button ?? 0) !== 0) return;
   event?.stopPropagation?.();
   event?.preventDefault?.();
   state.isPainting = true;
@@ -434,6 +441,7 @@ function onPointerMove(event) {
 }
 
 function onPointerUp(event) {
+  if (!state.isPainting || (event?.button ?? 0) !== 0) return;
   event?.stopPropagation?.();
   event?.preventDefault?.();
   state.isPainting = false;
@@ -509,6 +517,7 @@ export function registerAtowTerrainTools(namespace = null) {
   });
 
   Hooks.on("canvasReady", () => {
+    if (isGalaxyMapScene()) setEnabled(false);
     drawTerrainOverlay();
     bindCanvasEvents();
   });
