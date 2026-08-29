@@ -2,7 +2,7 @@
     "id":  "atow-battletech",
     "title":  "BattleTech: A Time of War",
     "description":  "A Foundry VTT system for BattleTech: A Time of War (AToW).",
-    "version":  "0.0.17",
+    "version":  "0.0.18",
     "authors":  [
                     {
                         "name":  "Sh4dowf0x"
@@ -18,7 +18,8 @@
     "styles/atow-battletech.css",
     "styles/mech-sheet-v2.css",
     "styles/compendium-browser.css",
-    "styles/galaxy-map.css"
+    "styles/galaxy-map.css",
+    "styles/battle-map-builder.css"
                ],
     "languages":  [
                       {

@@ -1,0 +1,80 @@
+<section class="atow-terrain-palette-shell">
+  {{#if isBattleMap}}
+    <header class="atow-terrain-palette-header">
+      <div>
+        <span class="atow-terrain-palette-kicker">{{terrainLabel}} Assets</span>
+        <h2>Terrain Palette</h2>
+      </div>
+      <button
+        type="button"
+        class="atow-terrain-paint-toggle {{#if enabled}}active{{/if}}"
+        data-terrain-toggle
+        title="Toggle terrain painting">
+        <i class="fa-solid {{#if enabled}}fa-paintbrush{{else}}fa-pause{{/if}}"></i>
+        {{#if enabled}}Painting Active{{else}}Painting Paused{{/if}}
+      </button>
+    </header>
+
+    <p class="atow-terrain-palette-hint">
+      Select a piece and follow its ghost preview, then left-click to place it. Terrain can stack over hills;
+      press <strong>R</strong> to rotate it. Assets/Props follow the cursor freely and may overlap. Erasing removes
+      the top piece first. Right-click still pans the map.
+    </p>
+
+    <div class="atow-terrain-palette-workspace">
+      <nav class="atow-terrain-category-sidebar" aria-label="Terrain categories">
+        <div class="atow-terrain-category-list">
+          {{#each categories as |category|}}
+            <button
+              type="button"
+              class="atow-terrain-category-button {{#if category.selected}}selected{{/if}}"
+              data-terrain-category="{{category.value}}"
+              title="Show {{category.label}}">
+              <span>{{category.label}}</span>
+              <small>{{category.count}}</small>
+            </button>
+          {{/each}}
+        </div>
+        <button
+          type="button"
+          class="atow-terrain-category-button atow-terrain-sidebar-eraser {{#if eraseSelected}}selected{{/if}}"
+          data-terrain-erase
+          title="Remove terrain pieces from a hex">
+          <i class="fa-solid fa-eraser"></i>
+          <span>Erase</span>
+        </button>
+      </nav>
+
+      <div class="atow-terrain-palette-results">
+        <div class="atow-terrain-results-heading">
+          <strong>{{activeCategory}}</strong>
+          <span>{{pieces.length}} pieces</span>
+        </div>
+        <div class="atow-terrain-palette-grid">
+          {{#each pieces as |piece|}}
+            <button
+              type="button"
+              class="atow-terrain-card {{#if piece.selected}}selected{{/if}}"
+              data-terrain-piece="{{piece.key}}"
+              title="{{piece.description}}">
+              <span class="atow-terrain-card-preview">
+                <img src="{{piece.src}}" alt="{{piece.label}}" loading="lazy" />
+                {{#if piece.selected}}<i class="fa-solid fa-check"></i>{{/if}}
+              </span>
+              <span class="atow-terrain-card-copy">
+                <strong>{{piece.label}}</strong>
+                <small>{{piece.category}}</small>
+              </span>
+            </button>
+          {{/each}}
+        </div>
+      </div>
+    </div>
+  {{else}}
+    <div class="atow-terrain-palette-empty">
+      <i class="fa-solid fa-map"></i>
+      <h2>No Battle Map Open</h2>
+      <p>Activate a scene created by the BattleTech Battle Map Builder.</p>
+    </div>
+  {{/if}}
+</section>

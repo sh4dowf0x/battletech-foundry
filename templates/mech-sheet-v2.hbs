@@ -256,6 +256,52 @@
       {{/each}}
     </div>
     <div class="header-actions">
+      <button
+        type="button"
+        class="header-action-btn"
+        data-header-action="sensors"
+        data-macro-label="Sensors"
+        data-macro-img="icons/svg/target.svg"
+        data-tooltip="Classify mech, vehicle, and abomination contacts within 30 hexes—even through walls; sensor blips are visible only to you"
+        draggable="true">Sensors</button>
+      <button
+        type="button"
+        class="header-action-btn{{#if isSearchlightActive}} is-active{{/if}}"
+        data-header-action="searchlight"
+        data-macro-label="Searchlight"
+        data-macro-img="icons/svg/light.svg"
+        data-tooltip="{{#if isSearchlightActive}}Switch off the active searchlight{{else}}Aim the searchlight at a hex within 30 hexes{{/if}}"
+        draggable="true">Searchlight</button>
+      {{#if hasStealthArmor}}
+      <button
+        type="button"
+        class="header-action-btn{{#if isStealthArmorActive}} is-active{{/if}}"
+        data-header-action="stealth"
+        data-macro-label="{{#if isStealthArmorActive}}Stealth Off{{else}}Stealth On{{/if}}"
+        data-macro-img="systems/atow-battletech/assets/status/stealth-active.svg"
+        data-tooltip="{{#if isStealthArmorOperational}}{{#if isStealthArmorActive}}Stealth Armor active: +10 heat per turn{{else}}Activate Stealth Armor (+10 heat per turn){{/if}}{{else}}Stealth Armor requires 12 intact distributed slots and operational Guardian or Angel ECM{{/if}}"
+        draggable="true">{{#if isStealthArmorActive}}Stealth Active{{else}}Stealth{{/if}}</button>
+      {{/if}}
+      {{#if hasECMSystem}}
+      <button
+        type="button"
+        class="header-action-btn{{#if isECMEnabled}} is-active{{/if}}"
+        data-header-action="ecm"
+        data-macro-label="{{#if isECMEnabled}}ECM Off{{else}}ECM On{{/if}}"
+        data-macro-img="systems/atow-battletech/assets/status/ecm-protected.svg"
+        data-tooltip="{{#if isECMEnabled}}Switch off ECM{{else}}Enable ECM; shutdown leaves it offline until manually re-enabled{{/if}}"
+        draggable="true">ECM</button>
+      {{/if}}
+      {{#if hasC3System}}
+      <button
+        type="button"
+        class="header-action-btn{{#if isC3Enabled}} is-active{{/if}}"
+        data-header-action="c3"
+        data-macro-label="{{#if isC3Enabled}}C3 Off{{else}}C3 On{{/if}}"
+        data-macro-img="icons/svg/target.svg"
+        data-tooltip="{{#if isC3Enabled}}Switch off C3{{else}}Enable C3; shutdown leaves it offline until manually re-enabled{{/if}}"
+        draggable="true">C3</button>
+      {{/if}}
       {{#if hasMASC}}
       <button
         type="button"

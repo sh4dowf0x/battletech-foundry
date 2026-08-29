@@ -1,4 +1,4 @@
-<form class="atow-attack-dialog atow-vehicle-attack-dialog" data-base-tn-without-range="{{baseTNWithoutRange}}" data-auto-attacker-move-mod="{{autoAttackerMoveMod}}" data-range-mod="{{selectedRangeMod}}" data-range-band="{{selectedRangeBand}}" data-improved-targeting-bands="{{improvedTargetingBands}}">
+<form class="atow-attack-dialog atow-vehicle-attack-dialog" data-base-tn-without-range="{{baseTNWithoutRange}}" data-auto-attacker-move-mod="{{autoAttackerMoveMod}}" data-range-mod="{{selectedRangeMod}}" data-range-band="{{selectedRangeBand}}" data-improved-targeting-bands="{{improvedTargetingBands}}" data-stealth-target-active="{{stealthTargetActive}}">
   <header class="attack-card-header">
     <div>
       <div class="attack-kicker">BattleTech Attack</div>
@@ -21,6 +21,31 @@
       <input type="hidden" name="distance" value="{{distance}}"/>
     </div>
   </section>
+
+  {{#if showBuildingTargeting}}
+    <section class="attack-form-grid building-targeting-grid">
+      <label>
+        <span>Building Hex</span>
+        <select name="buildingHexIndex">
+          {{#each buildingHexOptions as |option|}}<option value="{{option.value}}">{{option.label}}</option>{{/each}}
+        </select>
+      </label>
+      <label>
+        <span>Impact Level</span>
+        <select name="buildingLevel">
+          {{#each buildingLevelOptions as |option|}}<option value="{{option.value}}">{{option.label}}</option>{{/each}}
+        </select>
+      </label>
+      <label class="attack-check-line">
+        <input type="checkbox" name="buildingAimed" />
+        <span>Aim at selected level (+2 critical roll on follow-up 6–8)</span>
+      </label>
+      <label class="attack-check-line" title="Attacks made from inside an armored building bypass its armor.">
+        <input type="checkbox" name="buildingFromInside" />
+        <span>Attack originates inside building</span>
+      </label>
+    </section>
+  {{/if}}
 
   <section class="attack-mod-line">
     <strong>Mods:</strong>

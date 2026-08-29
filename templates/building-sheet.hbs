@@ -1,0 +1,187 @@
+<form class="{{cssClass}} building-sheet" autocomplete="off">
+  <header class="building-header sheet-header">
+    <div class="building-title header-left">
+      <input class="building-name" name="name" type="text" value="{{actor.name}}" placeholder="Structure Name" />
+      <div class="building-subtitle">
+        <span>{{building.function}}</span>
+        <span>{{design.hexCount}} Hex{{#if design.multipleHexes}}es{{/if}}</span>
+        <span>{{design.levels}} Level{{#if design.multipleLevels}}s{{/if}}</span>
+        <span>CF {{design.cf}}</span>
+      </div>
+    </div>
+    <div class="building-badge"><i class="fa-solid fa-building"></i> Advanced Building</div>
+  </header>
+
+  <div class="building-body building-three-column">
+    <div class="building-left-center">
+    <div class="building-column building-column-left">
+      <section class="building-panel building-data-panel">
+        <h3>Building Data</h3>
+        <div class="building-field">
+          <label>Function / Description</label>
+          <input name="system.building.function" type="text" value="{{building.function}}" placeholder="Gun emplacement, warehouse, barracks..." />
+        </div>
+        <div class="building-grid building-grid-2">
+          <div class="building-field"><label>Classification</label><select name="system.building.classification">{{#each classifications as |option|}}<option value="{{option.value}}" {{#if option.selected}}selected{{/if}}>{{option.label}}</option>{{/each}}</select></div>
+          <div class="building-field"><label>Building Type</label><select name="system.building.type">{{#each buildingTypes as |option|}}<option value="{{option.value}}" {{#if option.selected}}selected{{/if}}>{{option.label}}</option>{{/each}}</select></div>
+          <div class="building-field"><label>Technology Base</label><select name="system.building.techBase">{{#each techBases as |option|}}<option value="{{option.value}}" {{#if option.selected}}selected{{/if}}>{{option.label}}</option>{{/each}}</select></div>
+          <div class="building-field"><label>Construction Factor</label><input name="system.building.cf" type="number" min="{{design.cfMin}}" max="{{design.cfMax}}" step="1" value="{{design.cf}}" /></div>
+          <div class="building-field"><label>Building Hexes</label><input name="system.building.size.hexes" type="number" min="1" {{#if design.maxHexes}}max="{{design.maxHexes}}"{{/if}} step="1" value="{{design.hexCount}}" /></div>
+          <div class="building-field"><label>Levels per Hex</label><input name="system.building.levels" type="number" min="1" {{#if design.maxLevels}}max="{{design.maxLevels}}"{{/if}} step="1" value="{{design.levels}}" /></div>
+          <div class="building-field"><label>Cost</label><input name="system.building.cost" type="number" min="0" step="1" value="{{building.cost}}" /></div>
+          <div class="building-field"><label>Battle Value</label><input name="system.building.bv" type="number" min="0" step="1" value="{{building.bv}}" /></div>
+        </div>
+        <div class="building-field"><label>Size and Shape</label><textarea name="system.building.size.shapeNotes">{{building.size.shapeNotes}}</textarea></div>
+        <div class="building-field"><label>Design Notes</label><textarea name="system.building.notes">{{building.notes}}</textarea></div>
+        {{#if hasValidationIssues}}
+          <div class="building-validation warning"><strong><i class="fa-solid fa-triangle-exclamation"></i> Invalid Construction</strong><ul>{{#each validationIssues as |issue|}}<li>{{issue}}</li>{{/each}}</ul></div>
+        {{else}}
+          <div class="building-validation valid"><i class="fa-solid fa-circle-check"></i> Building construction is legal.</div>
+        {{/if}}
+      </section>
+
+      {{#if hasCombatWeapons}}
+      <section class="building-panel building-loadout-panel">
+        <h3>Combat Loadout</h3>
+        <div class="building-loadout-table">
+          <div class="building-loadout-row header"><span>Weapon</span><span>Loc</span><span>Dmg</span><span>Range</span></div>
+          {{#each combatWeapons as |weapon|}}
+            <div class="building-loadout-row {{#if weapon.destroyed}}destroyed{{/if}} {{#if weapon.malfunctioned}}malfunctioned{{/if}}" data-item-id="{{weapon.id}}">
+              <button type="button" class="building-loadout-weapon" data-action="attack-component" data-item-id="{{weapon.id}}" title="Click to attack">{{weapon.name}}</button>
+              <span>{{weapon.hexLabel}} / L{{weapon.level}}{{#if weapon.turret}} T{{/if}}</span>
+              <strong>{{weapon.damage}}</strong>
+              <span>{{weapon.rangeLabel}}</span>
+            </div>
+          {{/each}}
+        </div>
+      </section>
+      {{/if}}
+    </div>
+
+    <div class="building-column building-column-middle">
+      <section class="building-panel building-crew-panel">
+        <h3>Crew Data</h3>
+        <div class="building-field"><label>Crew / Unit</label><input name="system.building.crew.name" type="text" value="{{building.crew.name}}" /></div>
+        <div class="building-grid building-grid-2">
+          <div class="building-field"><label>Crew Count</label><input name="system.building.crew.count" type="number" min="0" step="1" value="{{building.crew.count}}" /></div>
+          <div class="building-field"><label>Gunnery Skill</label><input name="system.building.crew.gunnery" type="number" min="0" step="1" value="{{building.crew.gunnery}}" /></div>
+        </div>
+        <div class="building-crew-hit-line">
+          <div><label>Crew Hits</label><small>{{crewHits}} / {{crewMaxHits}}</small></div>
+          <div class="building-crew-track">
+            {{#each crewHitTrack as |hit|}}<span class="building-crew-hit {{#if hit.filled}}filled{{/if}}" data-value="{{hit.n}}">{{hit.n}}</span>{{/each}}
+          </div>
+        </div>
+        <div class="building-field building-max-hits"><label>Maximum Crew Hits</label><input name="system.building.crew.maxHits" type="number" min="1" max="20" step="1" value="{{crewMaxHits}}" /></div>
+      </section>
+
+      <section class="building-panel building-art-panel">
+        <h3>Profile</h3>
+        <img class="building-profile-art" src="{{actor.img}}" data-edit="img" title="Click to change {{actor.name}} artwork" />
+      </section>
+    </div>
+
+      <section class="building-panel building-components" data-drop-zone="building-components">
+        <h3>Installed Components</h3>
+        <div class="building-drop-hint">Drop Mech Weapons, Mech Equipment, or Personal Weapons here.</div>
+        <div class="building-field"><label>Power Source</label><select name="system.building.power.source">{{#each powerSources as |option|}}<option value="{{option.value}}" {{#if option.selected}}selected{{/if}}>{{option.label}}</option>{{/each}}</select></div>
+        <div class="building-component-summary">
+          <span>Components <strong>{{componentSummary.totalComponentTons}} t</strong></span>
+          <span>Amplifiers <strong>{{componentSummary.totalAmplifierTons}} t</strong></span>
+          <span>Heat Sinks <strong>{{componentSummary.totalHeatDissipation}}</strong></span>
+          <span>Unspecified <strong>{{componentSummary.totalUnspecifiedTons}} t</strong></span>
+        </div>
+        <div class="building-component-list">
+          {{#if components.length}}
+            <div class="building-component-row building-component-row-header" aria-hidden="true">
+              <span>Component</span><span>Type</span><span>Hex</span><span>Lvl</span><span>Qty</span><span>Class</span><span>Turret</span><span>Energy</span><span>Mass</span><span></span>
+            </div>
+          {{/if}}
+          {{#each components as |component|}}
+            <div class="building-component-row building-component-row-compact {{#if component.hasIssues}}invalid{{/if}} {{#if component.destroyed}}destroyed{{/if}}" data-item-id="{{component.id}}" draggable="true">
+              <span class="building-component-name" {{#if component.isWeapon}}data-action="attack-component" data-item-id="{{component.id}}" title="Click to attack"{{/if}}><img src="{{component.img}}" alt="" /><span><strong>{{component.name}}</strong>{{#if component.malfunctioned}}<small>Malfunctioning</small>{{else}}{{#if component.destroyed}}<small>Destroyed</small>{{/if}}{{/if}}</span></span>
+              <span class="building-component-type" title="{{component.itemTypeLabel}}">{{component.itemTypeLabel}}</span>
+              <select aria-label="Mounted hex" title="Mounted hex" data-item-id="{{component.id}}" data-component-field="hexIndex">{{#each component.hexOptions as |option|}}<option value="{{option.value}}" {{#if option.selected}}selected{{/if}}>{{option.label}}</option>{{/each}}</select>
+              <select aria-label="Mounted level" title="Mounted level" data-item-id="{{component.id}}" data-component-field="level">{{#each component.levelOptions as |option|}}<option value="{{option.value}}" {{#if option.selected}}selected{{/if}}>{{option.label}}</option>{{/each}}</select>
+              <input aria-label="Quantity" title="Quantity" data-item-id="{{component.id}}" data-component-field="quantity" type="number" min="1" step="1" value="{{component.quantity}}" />
+              <select aria-label="Component class" title="Component class" data-item-id="{{component.id}}" data-component-field="weaponClass">{{#each component.weaponClassOptions as |option|}}<option value="{{option.value}}" {{#if option.selected}}selected{{/if}}>{{option.label}}</option>{{/each}}</select>
+              {{#if component.isWeapon}}<label class="building-compact-check" title="Turret mounted"><input aria-label="Turret mounted" data-item-id="{{component.id}}" data-component-field="turret" type="checkbox" {{checked component.turret}} /></label><label class="building-compact-check" title="Energy weapon"><input aria-label="Energy weapon" data-item-id="{{component.id}}" data-component-field="energyWeapon" type="checkbox" {{checked component.energyWeapon}} /></label>{{else}}<span class="building-component-na">-</span><span class="building-component-na">-</span>{{/if}}
+              <span class="building-component-mass" title="{{component.tonsEach}} tons each">{{component.totalTons}} t</span>
+              <span class="building-component-actions">{{#if component.malfunctioned}}<button type="button" data-action="clear-component-malfunction" data-item-id="{{component.id}}" title="Clear malfunction"><i class="fa-solid fa-wrench"></i></button>{{/if}}<button type="button" data-action="delete-component" data-item-id="{{component.id}}" title="Remove component"><i class="fa-solid fa-trash"></i></button></span>
+              {{#if component.hasIssues}}<div class="building-component-issues">{{#each component.issues as |issue|}}<span>{{issue}}</span>{{/each}}</div>{{/if}}
+            </div>
+          {{/each}}
+          {{#unless components.length}}<div class="building-component-empty"><i class="fa-solid fa-box-open"></i> No components installed.</div>{{/unless}}
+        </div>
+        <details class="building-capacity-details">
+          <summary>Per-Hex Capacity</summary>
+          {{#each componentSummary.hexUsage as |usage|}}
+            <div class="building-capacity-row {{#if usage.hasIssues}}invalid{{/if}}"><strong>{{usage.id}}</strong><span>{{usage.usedTons}} / {{usage.capacity}} t</span><label>Unspecified <input name="system.building.hexes.{{usage.index}}.unspecifiedTons" type="number" min="0" step="0.1" value="{{usage.unspecifiedTons}}" /></label></div>
+          {{/each}}
+        </details>
+      </section>
+    </div>
+
+    <div class="building-column building-column-right">
+      <section class="building-panel building-durability-panel">
+        <h3>Armor &amp; Structure</h3>
+        <div class="building-grid building-grid-2 building-armor-setup">
+          <div class="building-field"><label>Armor Tons / Hex</label><input name="system.building.armor.tonsPerHex" type="number" min="0" max="{{design.maxArmorTonsPerHex}}" step="1" value="{{design.armorTonsPerHex}}" {{#unless design.canInstallArmor}}disabled{{/unless}} /></div>
+          <div class="building-mini-stat"><span>Armor Factor / Hex</span><strong>{{design.armorFactorPerHex}}</strong></div>
+          <div class="building-mini-stat"><span>Protection / Ton</span><strong>{{design.armorPointsPerTon}}</strong></div>
+          <div class="building-mini-stat"><span>Total Armor</span><strong>{{design.armorTotalTonnage}} t</strong></div>
+        </div>
+        <div class="building-armor-note {{#unless design.canInstallArmor}}warning{{/unless}}">{{armorRestrictionNote}}</div>
+        <label class="building-expanded-toggle"><input name="system.building.expandedCF" type="checkbox" {{checked expandedCF}} /><span><strong>Expanded Construction Factor</strong><small>Track armor and CF at every level.</small></span></label>
+
+        {{#unless expandedCF}}
+        <div class="building-damage-grid">
+          {{#each hexes as |hex|}}
+            <div class="building-damage-card {{#if hex.collapsed}}collapsed{{/if}}">
+              <div class="building-damage-card-header"><input name="system.building.hexes.{{hex.index}}.id" type="text" value="{{hex.id}}" /><span class="building-hex-status">{{#if hex.collapsed}}Collapsed{{else}}{{#if hex.crit.gunnersKilled}}Gunners Killed{{else}}{{#if hex.crit.turretLocked}}Turret Locked{{else}}{{#if hex.crit.turretJammed}}Turret Jammed{{else}}{{#if hex.armorDestroyed}}Armor Destroyed{{else}}Operational{{/if}}{{/if}}{{/if}}{{/if}}{{/if}}</span>{{#if hex.crit.turretJammed}}<button type="button" data-action="clear-turret-jam" data-hex-index="{{hex.index}}"><i class="fa-solid fa-wrench"></i></button>{{/if}}</div>
+              {{#if ../design.armorFactorPerHex}}<div class="building-track"><div class="building-track-label"><span>Armor{{#if hex.armorPipsGrouped}} (x{{hex.armorPipScale}}){{/if}}</span><strong>{{hex.armorRemaining}} / {{../design.armorFactorPerHex}}</strong></div><div class="building-pip-grid">{{#each hex.armorPips as |pip|}}<span class="building-damage-pip armor {{#if pip.filled}}filled{{else}}{{#if pip.partial}}partial{{/if}}{{/if}}" data-track="armorDamage" data-hex-index="{{hex.index}}" data-pip="{{pip.n}}" data-pip-start="{{pip.start}}" title="Armor damage {{pip.label}}"></span>{{/each}}</div></div>{{else}}<div class="building-no-armor">No building armor</div>{{/if}}
+              <div class="building-track"><div class="building-track-label"><span>Construction Factor{{#if hex.cfPipsGrouped}} (x{{hex.cfPipScale}}){{/if}}</span><strong>{{hex.cfRemaining}} / {{../design.cf}}</strong></div><div class="building-pip-grid">{{#each hex.cfPips as |pip|}}<span class="building-damage-pip cf {{#if pip.filled}}filled{{else}}{{#if pip.partial}}partial{{/if}}{{/if}}" data-track="cfDamage" data-hex-index="{{hex.index}}" data-pip="{{pip.n}}" data-pip-start="{{pip.start}}" title="CF damage {{pip.label}}"></span>{{/each}}</div></div>
+            </div>
+          {{/each}}
+        </div>
+        {{else}}
+        <div class="building-damage-grid expanded">
+          {{#each hexes as |hex|}}
+            <div class="building-expanded-hex {{#if hex.collapsed}}collapsed{{/if}}">
+              <div class="building-expanded-hex-title"><input name="system.building.hexes.{{hex.index}}.id" type="text" value="{{hex.id}}" /><span>{{hex.levels.length}} Levels</span></div>
+              {{#each hex.levels as |level|}}
+                <div class="building-damage-card level {{#if level.collapsed}}collapsed{{/if}}">
+                  <div class="building-damage-card-header"><strong>Level {{level.level}}</strong><span class="building-hex-status">{{#if level.collapsed}}Collapsed{{else}}{{#if level.crit.gunnersKilled}}Gunners Killed{{else}}{{#if level.crit.turretLocked}}Turret Locked{{else}}{{#if level.crit.turretJammed}}Turret Jammed{{else}}{{#if level.armorDestroyed}}Armor Destroyed{{else}}Operational{{/if}}{{/if}}{{/if}}{{/if}}{{/if}}</span>{{#if level.crit.turretJammed}}<button type="button" data-action="clear-turret-jam" data-hex-index="{{hex.index}}" data-level-index="{{level.index}}"><i class="fa-solid fa-wrench"></i></button>{{/if}}</div>
+                  {{#if ../../design.armorFactorPerHex}}<div class="building-track"><div class="building-track-label"><span>Armor{{#if level.armorPipsGrouped}} (x{{level.armorPipScale}}){{/if}}</span><strong>{{level.armorRemaining}} / {{../../design.armorFactorPerHex}}</strong></div><div class="building-pip-grid">{{#each level.armorPips as |pip|}}<span class="building-damage-pip armor {{#if pip.filled}}filled{{else}}{{#if pip.partial}}partial{{/if}}{{/if}}" data-track="armorDamage" data-hex-index="{{hex.index}}" data-level-index="{{level.index}}" data-pip="{{pip.n}}" data-pip-start="{{pip.start}}"></span>{{/each}}</div></div>{{else}}<div class="building-no-armor">No building armor</div>{{/if}}
+                  <div class="building-track"><div class="building-track-label"><span>Construction Factor{{#if level.cfPipsGrouped}} (x{{level.cfPipScale}}){{/if}}</span><strong>{{level.cfRemaining}} / {{../../design.cf}}</strong></div><div class="building-pip-grid">{{#each level.cfPips as |pip|}}<span class="building-damage-pip cf {{#if pip.filled}}filled{{else}}{{#if pip.partial}}partial{{/if}}{{/if}}" data-track="cfDamage" data-hex-index="{{hex.index}}" data-level-index="{{level.index}}" data-pip="{{pip.n}}" data-pip-start="{{pip.start}}"></span>{{/each}}</div></div>
+                </div>
+              {{/each}}
+            </div>
+          {{/each}}
+        </div>
+        {{/unless}}
+      </section>
+
+      <section class="building-panel building-rules-panel">
+        <h3>Classification Rules</h3>
+        <div class="building-rule-grid">
+          <div><span>Legal CF</span><strong>{{design.cfMin}} to {{design.cfMax}}</strong></div>
+          <div><span>Maximum Size</span><strong>{{design.maxHexesLabel}} / {{design.maxLevelsLabel}}</strong><small>Hexes / Levels</small></div>
+          <div><span>MP Cost</span><strong>{{design.mpCostLabel}}</strong></div>
+          <div><span>Piloting / Driving</span><strong>{{design.skillModLabel}}</strong></div>
+          <div><span>Damage to Building</span><strong>{{design.damageBuildingLabel}}</strong></div>
+          <div><span>Damage to Units</span><strong>{{design.damageUnitsLabel}}</strong></div>
+        </div>
+        <div class="building-subheading">Structural Capacity</div>
+        <div class="building-capacity-lines">
+          <div><span>CF Scale</span><strong>{{#if design.capitalScale}}Capital{{else}}Standard{{/if}}</strong></div>
+          <div><span>Internal / Hex</span><strong>{{design.internalCapacityPerHex}} t</strong></div>
+          <div><span>Available / Hex</span><strong>{{design.equipmentCapacityAfterArmorPerHex}} t</strong></div>
+          <div><span>Total Available</span><strong>{{design.equipmentCapacityAfterArmorTotal}} t</strong></div>
+        </div>
+        <div class="building-rule-note"><i class="fa-solid fa-calculator"></i> {{design.capacityRule}}</div>
+        {{#if capacityWarning}}<div class="building-rule-note warning"><i class="fa-solid fa-triangle-exclamation"></i> {{capacityWarning}}</div>{{/if}}
+      </section>
+    </div>
+  </div>
+</form>

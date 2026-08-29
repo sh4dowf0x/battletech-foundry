@@ -78,6 +78,30 @@
   color: #55e7ff;
 }
 
+.atow-galaxy-company-moved {
+  margin-top: 0.65rem;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid rgba(85, 231, 255, 0.7);
+  border-radius: 5px;
+  background: rgba(25, 116, 133, 0.22);
+  color: #d8fbff;
+}
+
+.atow-galaxy-company-moved i {
+  margin-right: 0.35rem;
+  color: #55e7ff;
+}
+
+.atow-galaxy-move-company .form-fields {
+  justify-content: flex-start;
+}
+
+.atow-galaxy-move-company label.checkbox {
+  flex: 1;
+  justify-content: flex-start;
+  white-space: normal;
+}
+
 .atow-galaxy-route-legs {
   max-height: 240px;
   overflow-y: auto;

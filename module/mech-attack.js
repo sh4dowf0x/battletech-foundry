@@ -4,6 +4,9 @@
 // UI-agnostic core, with an optional UI prompt helper at the bottom.
 
 import { enqueueActorAudioCues, playActorMechExplosionEffect } from "./audio-helper.js";
+import { applyBuildingDamage, getBuildingTargetOptions, isBuildingActor } from "./building-combat.js";
+import { isTokenBattlefieldIlluminated } from "./searchlight.js";
+import { getOperationalECMName, getStealthArmorTargetModifier, isStealthArmorActive } from "./mech-stealth.js";
 
 const SYSTEM_ID = "atow-battletech";// ------------------------------------------------------------
 const VEHICLE_ATTACK_TEMPLATE = `systems/${SYSTEM_ID}/templates/vehicle-attack.hbs`;
@@ -219,6 +222,12 @@ function hasWeaponFiredThisTurn(actor, weaponItem, opts = {}) {
 
 async function markWeaponFiredThisTurn(actor, weaponItem, opts = {}) {
   if (!game.combat?.started) return;
+  if (["wheeledvehicle", "vehicle"].includes(String(actor?.type ?? "").toLowerCase())) {
+    for (const doc of getWeaponFireTrackerTargets(actor, opts)) {
+      await doc.setFlag?.(SYSTEM_ID, "vehicleFiredThisTurn", true).catch?.(() => {});
+      await doc.setFlag?.(SYSTEM_ID, "vehicleFiredStamp", getCombatTurnStamp()).catch?.(() => {});
+    }
+  }
   if (!isWeaponFireLimitEnforced()) return;
   const target = getWeaponFireTrackerTarget(actor, opts);
   if (!target?.setFlag) return;
@@ -323,6 +332,12 @@ async function _gmApplyDamageToVehicleActor(actorUuid, hitLoc, damage, opts = {}
   const targetActor = await _resolveActorFromUuid(actorUuid);
   if (!targetActor) return { ok: false, reason: "No target actor" };
   return applyDamageToVehicleActor(targetActor, hitLoc, damage, opts);
+}
+
+async function _gmApplyDamageToBuildingActor(actorUuid, damage, opts = {}) {
+  const targetActor = await _resolveActorFromUuid(actorUuid);
+  if (!targetActor) return { ok: false, reason: "No target actor" };
+  return applyBuildingDamage(targetActor, damage, opts);
 }
 
 async function _gmApplyDamageToDropshipActor(actorUuid, hitLoc, damage, opts = {}) {
@@ -651,6 +666,31 @@ async function applyActorStatusAuto(targetActor, statusId, active = true) {
   return socket.executeAsGM("gmApplyActorStatus", targetActor.uuid, statusId, active);
 }
 
+export async function syncVehicleCriticalStatuses(actor) {
+  const actorType = String(actor?.type ?? "").toLowerCase();
+  if (!actor || !["wheeledvehicle", "vehicle", "vtol"].includes(actorType)) return { ok: false, reason: "Not a combat vehicle" };
+
+  const crit = actor.system?.crit ?? {};
+  const stabilizers = crit.location ?? {};
+  const rules = [
+    ["atow-immobile", Boolean(crit.engineHit || crit.motiveMajor) || Math.max(0, Number(crit.motiveHits ?? 0) || 0) >= 4],
+    ["vehicle-crew-stunned", Math.max(0, Number(crit.crewStunnedTurns ?? 0) || 0) > 0],
+    ["vehicle-motive-damage", Math.max(0, Number(crit.motiveHits ?? 0) || 0) > 0 || (Array.isArray(crit.motiveEvents) && crit.motiveEvents.length > 0)],
+    ["vehicle-sensor-damage", Math.max(0, Number(crit.sensorHits ?? 0) || 0) > 0],
+    ["vehicle-engine-hit", Boolean(crit.engineHit) || (actorType === "vtol" && Math.max(0, Number(crit.engineHits ?? 0) || 0) > 0)],
+    ["vehicle-turret-disabled", Boolean(crit.turretJammed || crit.turretLocked)],
+    ["vehicle-stabilizer-damage", Boolean(
+      Object.values(stabilizers).some(Boolean)
+      || Math.max(0, Number(crit.flightStabilizerHits ?? 0) || 0) > 0
+    )]
+  ];
+
+  for (const [statusId, active] of rules) {
+    await applyActorStatusAuto(actor, statusId, active).catch(() => {});
+  }
+  return { ok: true, statuses: Object.fromEntries(rules) };
+}
+
 async function addHeatToActorAuto(targetActor, amount) {
   if (!targetActor) return { ok: false, reason: "No target actor" };
   if (game.user?.isGM || targetActor.isOwner) {
@@ -680,6 +720,14 @@ async function applyDamageToVehicleActorAuto(targetActor, hitLoc, damage, opts =
   const socket = getATOWSocket();
   if (!socket) return { ok: false, reason: "AToW socket is not ready" };
   return socket.executeAsGM("gmApplyDamageToVehicleActor", targetActor.uuid, hitLoc, damage, opts);
+}
+
+async function applyDamageToBuildingActorAuto(targetActor, damage, opts = {}) {
+  if (!targetActor) return { ok: false, reason: "No target actor" };
+  if (game.user?.isGM) return _gmApplyDamageToBuildingActor(targetActor.uuid, damage, opts);
+  const socket = getATOWSocket();
+  if (!socket) return { ok: false, reason: "AToW socket is not ready" };
+  return socket.executeAsGM("gmApplyDamageToBuildingActor", targetActor.uuid, damage, opts);
 }
 
 async function applyDamageToDropshipActorAuto(targetActor, hitLoc, damage, opts = {}) {
@@ -713,6 +761,7 @@ export function registerATOWAttackSockets() {
 
   if (!socket.functions?.has?.("gmApplyDamageToTargetActor")) socket.register("gmApplyDamageToTargetActor", _gmApplyDamageToTargetActor);
   if (!socket.functions?.has?.("gmApplyDamageToVehicleActor")) socket.register("gmApplyDamageToVehicleActor", _gmApplyDamageToVehicleActor);
+  if (!socket.functions?.has?.("gmApplyDamageToBuildingActor")) socket.register("gmApplyDamageToBuildingActor", _gmApplyDamageToBuildingActor);
   if (!socket.functions?.has?.("gmApplyDamageToDropshipActor")) socket.register("gmApplyDamageToDropshipActor", _gmApplyDamageToDropshipActor);
   if (!socket.functions?.has?.("gmApplyDamageToAbominationActor")) socket.register("gmApplyDamageToAbominationActor", _gmApplyDamageToAbominationActor);
   if (!socket.functions?.has?.("gmResolveAmmoExplosionEvent")) socket.register("gmResolveAmmoExplosionEvent", _gmResolveAmmoExplosionEvent);
@@ -1729,7 +1778,14 @@ function isVehicleActor(actor) {
 
 function vehicleHasTurret(actor) {
   if (String(actor?.type ?? "").toLowerCase() === "vtol") return false;
-  return num(actor?.system?.armor?.turret?.max, 0) > 0;
+  // Actors created before vehicle options existed are turreted by default.
+  return actor?.system?.vehicle?.options?.turret !== false;
+}
+
+function _isVehicleDirectFireEnergyWeapon(weaponItem) {
+  const name = String(weaponItem?.name ?? "").toLowerCase();
+  const rules = String(weaponItem?.system?.specialRules ?? "").toLowerCase();
+  return /\b(?:laser|ppc|flamer|plasma(?:\s+cannon)?|energy weapon)\b/.test(`${name} ${rules}`);
 }
 
 function isDropshipActor(actor) {
@@ -1872,6 +1928,9 @@ async function rollVehicleHitLocation(attackSide = "front", { hasTurret = true, 
   }
 
   const critTrigger = (roll.total === 2 || roll.total === 12 || (dir === "side" && roll.total === 8));
+  // Dagger-marked ground-vehicle results prompt a Motive System Damage roll,
+  // even when the attack does not penetrate armor. VTOLs use rotor damage.
+  const motiveTrigger = !isVTOL && [3, 4, 5, 9].includes(Number(roll.total));
   const critTableLoc = (loc === "left" || loc === "right") ? "side" : loc;
 
   return {
@@ -1879,8 +1938,17 @@ async function rollVehicleHitLocation(attackSide = "front", { hasTurret = true, 
     loc,
     display: loc,
     critTrigger,
+    motiveTrigger,
     critTableLoc
   };
+}
+
+function getVehicleLocationDamageEffects(locResult) {
+  if (!locResult) return null;
+  const trigger = Boolean(locResult.critTrigger);
+  const motiveTrigger = Boolean(locResult.motiveTrigger);
+  if (!trigger && !motiveTrigger) return null;
+  return { trigger, motiveTrigger, tableLoc: locResult.critTableLoc };
 }
 
 const VEHICLE_CRIT_TABLE = {
@@ -1972,20 +2040,27 @@ function _vehicleIsICEOrFuelCell(actor) {
   return /\bice\b/.test(t) || t.includes("internal combustion") || t.includes("fuel cell") || t.includes("fuel-cell");
 }
 
-const VTOL_DEFEAT_IN_PROGRESS = new Set();
+const VEHICLE_DEFEAT_IN_PROGRESS = new Set();
 
-export async function markVTOLDefeated(actor, { reason = "VTOL destroyed", killCrew = false, crashed = true } = {}) {
-  if (!actor || String(actor.type ?? "").toLowerCase() !== "vtol") return { ok: false, reason: "Not a VTOL" };
+export async function markVehicleDefeated(actor, {
+  reason = "Combat Vehicle destroyed",
+  killCrew = false,
+  crashed = false,
+  explode = true,
+  tint = true
+} = {}) {
+  const actorType = String(actor?.type ?? "").toLowerCase();
+  if (!actor || !["wheeledvehicle", "vehicle", "vtol"].includes(actorType)) return { ok: false, reason: "Not a combat vehicle" };
   const defeatKey = String(actor.uuid ?? actor.id ?? "");
-  if (VTOL_DEFEAT_IN_PROGRESS.has(defeatKey)) {
+  if (VEHICLE_DEFEAT_IN_PROGRESS.has(defeatKey)) {
     return { ok: true, defeated: true, newlyDefeated: false, reason, killCrew, crashed };
   }
-  VTOL_DEFEAT_IN_PROGRESS.add(defeatKey);
+  VEHICLE_DEFEAT_IN_PROGRESS.add(defeatKey);
 
   const alreadyDefeated = Boolean(actor.system?.crit?.defeated);
   const updates = {
     "system.crit.defeated": true,
-    "system.crit.defeatReason": String(reason ?? "VTOL destroyed")
+    "system.crit.defeatReason": String(reason ?? "Combat Vehicle destroyed")
   };
   if (crashed) updates["system.crit.crashed"] = true;
   if (killCrew) {
@@ -1993,7 +2068,7 @@ export async function markVTOLDefeated(actor, { reason = "VTOL destroyed", killC
     updates["system.crew.commanderHit"] = 2;
     updates["system.crit.crewKilled"] = true;
   }
-  await actor.update(updates, { atowVTOLDefeat: true }).catch(() => {});
+  await actor.update(updates, { atowVehicleDefeat: true, atowVTOLDefeat: actorType === "vtol" }).catch(() => {});
 
   await applyActorStatusAuto(actor, CONFIG?.specialStatusEffects?.DEFEATED ?? "defeated", true).catch(() => {});
   if (killCrew) await applyActorStatusAuto(actor, "dead", true).catch(() => {});
@@ -2015,13 +2090,15 @@ export async function markVTOLDefeated(actor, { reason = "VTOL destroyed", killC
   }
 
   const tokens = actor.getActiveTokens?.(true, true) ?? actor.getActiveTokens?.() ?? [];
-  for (const token of tokens) {
-    const doc = token?.document ?? token;
-    const tintUpdate = doc?.texture !== undefined ? { "texture.tint": "#292929" } : { tint: "#292929" };
-    if (typeof doc?.update === "function") await doc.update(tintUpdate).catch(() => {});
+  if (tint) {
+    for (const token of tokens) {
+      const doc = token?.document ?? token;
+      const tintUpdate = doc?.texture !== undefined ? { "texture.tint": "#292929" } : { tint: "#292929" };
+      if (typeof doc?.update === "function") await doc.update(tintUpdate).catch(() => {});
+    }
   }
 
-  if (!alreadyDefeated) {
+  if (!alreadyDefeated && explode) {
     await playActorMechExplosionEffect(actor, { volume: 1.0 }).catch(() => {});
     try {
       if (globalThis.Sequencer?.EffectManager && globalThis.Sequence) {
@@ -2036,25 +2113,30 @@ export async function markVTOLDefeated(actor, { reason = "VTOL destroyed", killC
             .file("jb2a.smoke.plumes")
             .attachTo(token)
             .persist()
-            .name(`atow-vtol-destroyed-${actor.id}-${token.id}`)
+            .name(`atow-vehicle-destroyed-${actor.id}-${token.id}`)
             .scaleToObject(1.6)
             .aboveLighting()
             .play();
         }
       }
     } catch (err) {
-      console.warn("AToW Battletech | VTOL destruction VFX failed", err);
+      console.warn("AToW Battletech | Combat Vehicle destruction VFX failed", err);
     }
   }
 
-  VTOL_DEFEAT_IN_PROGRESS.delete(defeatKey);
+  VEHICLE_DEFEAT_IN_PROGRESS.delete(defeatKey);
   return { ok: true, defeated: true, newlyDefeated: !alreadyDefeated, reason, killCrew, crashed };
+}
+
+export async function markVTOLDefeated(actor, { reason = "VTOL destroyed", killCrew = false, crashed = true } = {}) {
+  if (!actor || String(actor.type ?? "").toLowerCase() !== "vtol") return { ok: false, reason: "Not a VTOL" };
+  return markVehicleDefeated(actor, { reason, killCrew, crashed, explode: true, tint: true });
 }
 
 function _vehicleTypeModifier(actor) {
   const t = String(actor?.system?.vehicle?.movement?.type ?? "").toLowerCase();
   if (t.includes("hover") || t.includes("hydrofoil")) return 3;
-  if (t.includes("vtol")) return 4;
+  if (t.includes("wige") || t.includes("wing-in-ground") || t.includes("wing in ground")) return 4;
   if (t.includes("wheeled")) return 2;
   return 0; // tracked/naval/unknown
 }
@@ -2062,7 +2144,7 @@ function _vehicleTypeModifier(actor) {
 function _motiveAttackDirectionModifier(attackSide) {
   const side = String(attackSide ?? "front").toLowerCase();
   if (side === "rear") return 1;
-  if (side === "left" || side === "right") return 2;
+  if (side === "left" || side === "right" || side === "side") return 2;
   return 0;
 }
 
@@ -2073,25 +2155,190 @@ async function _rollMotiveSystemDamage(actor, attackSide) {
   const total = baseTotal + mod;
 
   let severity = 0;
+  let resultKey = "none";
   let effect = "No effect";
   if (total >= 12) {
     severity = 4;
+    resultKey = "major";
     effect = "Major damage: no movement for the rest of the game (immobile)";
   } else if (total >= 10) {
     severity = 3;
+    resultKey = "heavy";
     effect = "Heavy damage: half Cruising MP (round up), +3 Driving Skill";
   } else if (total >= 8) {
     severity = 2;
+    resultKey = "moderate";
     effect = "Moderate damage: -1 Cruising MP, +2 Driving Skill";
   } else if (total >= 6) {
     severity = 1;
+    resultKey = "minor";
     effect = "Minor damage: +1 Driving Skill";
   }
 
-  return { roll, baseTotal, mod, total, severity, effect };
+  const crit = actor?.system?.crit ?? {};
+  const updates = {};
+  const events = Array.isArray(crit.motiveEvents) ? [...crit.motiveEvents] : [];
+  const modifierByResult = { minor: 1, moderate: 2, heavy: 3, major: 0, none: 0 };
+  const flagByResult = {
+    minor: "motiveMinor",
+    moderate: "motiveModerate",
+    heavy: "motiveHeavy",
+    major: "motiveMajor"
+  };
+  const resultFlag = flagByResult[resultKey];
+  const firstDrivingResult = Boolean(resultFlag) && !Boolean(crit[resultFlag]);
+  const drivingAdded = firstDrivingResult ? modifierByResult[resultKey] : 0;
+  const currentDrivingMod = Math.max(0, Number(crit.motiveDrivingMod ?? 0) || 0);
+
+  if (resultKey !== "none") {
+    events.push(resultKey);
+    updates[`system.crit.${resultFlag}`] = true;
+    updates["system.crit.motiveEvents"] = events;
+    updates["system.crit.motiveHits"] = Math.max(Math.max(0, Number(crit.motiveHits ?? 0) || 0), severity);
+    updates["system.crit.motiveDrivingMod"] = Math.min(6, currentDrivingMod + drivingAdded);
+    await actor.update(updates);
+    await syncVehicleCriticalStatuses(actor);
+  }
+
+  let defeatResult = null;
+  if (resultKey === "major") {
+    await applyActorStatusAuto(actor, "atow-immobile", true).catch(() => {});
+
+    const movementType = String(actor?.system?.vehicle?.movement?.type ?? "").toLowerCase();
+    if (movementType.includes("hover")) {
+      const token = actor.getActiveTokens?.(true, true)?.[0] ?? actor.getActiveTokens?.()?.[0] ?? null;
+      const point = token ? getTokenCenter(token) : null;
+      const terrain = point ? getTerrainAtPointForAttack(point) : null;
+      if ((Number(terrain?.waterDepth ?? 0) || 0) >= 1) {
+        defeatResult = await markVehicleDefeated(actor, {
+          reason: "Hovercraft rendered immobile over water: vehicle sank",
+          explode: false,
+          tint: true
+        });
+      }
+    }
+  }
+
+  return {
+    roll,
+    baseTotal,
+    mod,
+    total,
+    severity,
+    resultKey,
+    effect,
+    drivingAdded,
+    drivingMod: Math.min(6, currentDrivingMod + drivingAdded),
+    repeatedDrivingModifier: resultKey !== "none" && modifierByResult[resultKey] > 0 && !firstDrivingResult,
+    defeatResult
+  };
 }
 
-async function applyVehicleCritical(targetActor, critTableLoc, { attackSide = "front", loc = null } = {}) {
+function _normalizeVehicleWeaponLocation(value) {
+  const raw = String(value ?? "").trim().toLowerCase();
+  if (/\bturret\b/.test(raw)) return "turret";
+  if (/\bfront\b|\bfore\b|\bnose\b/.test(raw)) return "front";
+  if (/\brear\b|\bback\b|\baft\b/.test(raw)) return "rear";
+  if (/\bleft\b|\bport\b/.test(raw)) return "left";
+  if (/\bright\b|\bstarboard\b/.test(raw)) return "right";
+  return ["front", "rear", "left", "right", "turret"].includes(raw) ? raw : "";
+}
+
+function _vehicleWeaponsInLocation(actor, loc, { operationalOnly = true } = {}) {
+  const weapons = Array.from(actor?.items ?? []).filter(item => ["mechWeapon", "weapon"].includes(item?.type));
+  const eligible = weapons.filter(item => {
+    if (operationalOnly && (item.system?.destroyed || item.system?.vehicleMalfunctioned)) return false;
+    return _normalizeVehicleWeaponLocation(item.system?.loc) === loc;
+  });
+  if (eligible.length) return eligible;
+
+  // Legacy vehicles may not have mount locations assigned yet. Restrict the
+  // compatibility fallback to unassigned weapons rather than another arc.
+  return weapons.filter(item => {
+    if (operationalOnly && (item.system?.destroyed || item.system?.vehicleMalfunctioned)) return false;
+    return !_normalizeVehicleWeaponLocation(item.system?.loc);
+  });
+}
+
+function _vehicleAmmoDamagePerShot(key) {
+  const k = String(key ?? "").toLowerCase();
+  if (!k || /(?:^|-)(?:gauss|light-gauss|hag-\d+)(?:-|$)/.test(k)) return 0;
+  let m = k.match(/^(?:ac|lbx)-(\d+)/);
+  if (m) return Number(m[1]);
+  m = k.match(/^lrm-(\d+)/);
+  if (m) return Number(m[1]);
+  m = k.match(/^mrm-(\d+)/);
+  if (m) return Number(m[1]);
+  m = k.match(/^srm-(\d+)/);
+  if (m) return Number(m[1]) * 2;
+  m = k.match(/^mml-(\d+)(?:-(lrm|srm))?/);
+  if (m) return Number(m[1]) * (m[2] === "srm" ? 2 : 1);
+  m = k.match(/^atm-(\d+)(?:-(er|he))?/);
+  if (m) return Number(m[1]) * (m[2] === "he" ? 3 : (m[2] === "er" ? 1 : 2));
+  if (k === "mg") return 2;
+  if (k === "ams") return 2;
+  if (k === "plasma-rifle") return 10;
+  if (k.startsWith("arrow-iv")) return 20;
+  if (k === "narc") return 2;
+  return 0;
+}
+
+function _vehicleHasCASE(actor) {
+  return Array.from(actor?.items ?? []).some(item => {
+    if (item?.system?.destroyed) return false;
+    return /(^|\b)case(?:\s*ii)?(\b|$)/i.test(String(item?.name ?? ""));
+  });
+}
+
+function _vehicleAmmoExplosionData(actor) {
+  const bins = actor?.system?.ammoBins ?? {};
+  let damage = 0;
+  let shots = 0;
+  const updates = {};
+  const binsLost = [];
+  for (const [key, bin] of Object.entries(bins)) {
+    const current = Math.max(0, Number(bin?.current ?? bin?.total ?? 0) || 0);
+    if (current <= 0) continue;
+    updates[`system.ammoBins.${key}.current`] = 0;
+    binsLost.push(`${String(bin?.name ?? key)} (${current})`);
+    const perShot = _vehicleAmmoDamagePerShot(key);
+    if (perShot > 0) {
+      shots += current;
+      damage += current * perShot;
+    }
+  }
+  return { damage, shots, updates, binsLost };
+}
+
+async function _applyDirectVehicleStructureDamage(actor, loc, damage, { reason = "Internal explosion" } = {}) {
+  const tonnage = Math.max(0, Number(actor?.system?.vehicle?.tonnage ?? 0) || 0);
+  const isVTOL = String(actor?.type ?? "").toLowerCase() === "vtol";
+  const max = isVTOL
+    ? Math.max(1, Math.ceil(tonnage / 10))
+    : (tonnage > 0 ? Math.max(1, Math.floor(tonnage / 10)) : 0);
+  const current = Math.max(0, Number(actor?.system?.structure?.[loc]?.dmg ?? 0) || 0);
+  const applied = Math.min(Math.max(0, Number(damage ?? 0) || 0), Math.max(0, max - current));
+  const next = Math.min(max, current + applied);
+  if (max > 0) await actor.update({ [`system.structure.${loc}.dmg`]: next });
+  let defeatResult = null;
+  if (max > 0 && next >= max) {
+    defeatResult = isVTOL
+      ? await markVTOLDefeated(actor, { reason, crashed: true })
+      : await markVehicleDefeated(actor, { reason, explode: true });
+  }
+  let criticalResult = null;
+  if (applied > 0) {
+    const tableLoc = (loc === "left" || loc === "right") ? "side" : loc;
+    criticalResult = await applyVehicleCritical(actor, tableLoc, {
+      attackSide: loc,
+      loc,
+      sourceDamage: Number(damage ?? 0) || 0
+    });
+  }
+  return { damage: Number(damage ?? 0) || 0, applied, next, max, defeatResult, criticalResult };
+}
+
+export async function applyVehicleCritical(targetActor, critTableLoc, { attackSide = "front", loc = null, sourceDamage = 0 } = {}) {
   const isVTOL = String(targetActor?.type ?? "").toLowerCase() === "vtol";
   const allowedTables = isVTOL ? ["front", "rear", "side", "rotor", "turret"] : ["front", "rear", "side", "turret"];
   const tableKey = allowedTables.includes(critTableLoc) ? critTableLoc : "front";
@@ -2105,44 +2352,114 @@ async function applyVehicleCritical(targetActor, critTableLoc, { attackSide = "f
   let motive = null;
   let fatalReason = "";
   let fatalKillsCrew = false;
+  let fatalExplodes = false;
+  let selectedWeapon = null;
+  let ammoExplosion = null;
+  let pendingStructureExplosion = null;
 
   const crew = targetActor.system?.crew ?? {};
   const crit = targetActor.system?.crit ?? {};
   const tonnage = Number(targetActor.system?.vehicle?.tonnage ?? 0) || 0;
   const structMax = isVTOL
     ? Math.max(1, Math.ceil(tonnage / 10))
-    : Math.max(0, Math.floor(tonnage / 10));
+    : (tonnage > 0 ? Math.max(1, Math.floor(tonnage / 10)) : 0);
 
   const bump = (path, cur, max) => {
     const next = clampInt(Number(cur ?? 0) + 1, 0, max, 0);
     updates[path] = next;
   };
 
+  const stagedBoolean = (path, current) => Object.prototype.hasOwnProperty.call(updates, path)
+    ? Boolean(updates[path])
+    : Boolean(current);
+
+  const applyCrewStunned = () => {
+    const commanderHit = stagedBoolean("system.crit.commanderHit", crit.commanderHit);
+    const driverHit = stagedBoolean("system.crit.driverHit", crit.driverHit);
+    if (commanderHit && driverHit) {
+      updates["system.crit.crewKilled"] = true;
+      updates["system.crew.driverHit"] = 2;
+      updates["system.crew.commanderHit"] = 2;
+      fatalReason = "Crew killed after Commander Hit, Driver Hit, and Crew Stunned";
+      fatalKillsCrew = true;
+      notes.push("Crew Stunned escalated to Crew Killed");
+      return;
+    }
+    const current = Math.max(0, Number(crit.crewStunnedTurns ?? 0) || 0);
+    updates["system.crit.crewStunnedTurns"] = current + 1;
+    updates["system.crit.crewStunnedAppliedStamp"] = game.combat?.started
+      ? `${game.combat.id}:${game.combat.round ?? 0}:${game.combat.turn ?? 0}`
+      : "outside-combat";
+    notes.push("Crew stunned for the following turn");
+  };
+
+  const affectWeapon = async ({ destroyed = false } = {}) => {
+    const candidates = _vehicleWeaponsInLocation(targetActor, loc, { operationalOnly: true });
+    if (!candidates.length) {
+      notes.push(`No operational weapon assigned to ${String(loc ?? tableKey).toUpperCase()}`);
+      return null;
+    }
+    let choiceRoll = null;
+    let chosenBy = "Random automation";
+    if (destroyed) {
+      choiceRoll = await (new Roll("1d6")).evaluate();
+      chosenBy = Number(choiceRoll.total ?? 0) <= 3 ? "Target controller" : "Attacking player";
+    }
+    const weapon = candidates[Math.floor(Math.random() * candidates.length)];
+    selectedWeapon = { id: weapon.id, name: weapon.name, loc, destroyed, choiceRoll, chosenBy };
+    await weapon.update({ [destroyed ? "system.destroyed" : "system.vehicleMalfunctioned"]: true });
+    notes.push(`${weapon.name} ${destroyed ? `destroyed (choice roll ${choiceRoll?.total ?? "?"}: ${chosenBy}; selected randomly)` : "malfunctioned"}`);
+    if (destroyed) {
+      const explosiveDamage = _getGaussWeaponExplosionDamage(weapon.name);
+      if (explosiveDamage > 0) {
+        pendingStructureExplosion = {
+          loc,
+          damage: explosiveDamage,
+          reason: `${weapon.name} explosion`
+        };
+        notes.push(`${weapon.name} explodes for ${explosiveDamage} internal damage`);
+      }
+    }
+    return weapon;
+  };
+
   switch (resultKey) {
     case "pilotHit":
     case "driverHit":
-      bump("system.crew.driverHit", crew.driverHit, 2);
+      if (crit.driverHit) applyCrewStunned();
+      else {
+        updates["system.crit.driverHit"] = true;
+        bump("system.crew.driverHit", crew.driverHit, 2);
+        notes.push("+2 to all Driving Skill Rolls");
+      }
       break;
     case "copilotHit":
     case "commanderHit":
-      bump("system.crew.commanderHit", crew.commanderHit, 2);
+      if (crit.commanderHit) applyCrewStunned();
+      else {
+        updates["system.crit.commanderHit"] = true;
+        bump("system.crew.commanderHit", crew.commanderHit, 2);
+        notes.push("+1 to all to-hit and Driving Skill Rolls");
+      }
       break;
     case "crewKilled":
+      updates["system.crit.crewKilled"] = true;
       updates["system.crew.driverHit"] = 2;
       updates["system.crew.commanderHit"] = 2;
       notes.push("Crew killed");
-      if (isVTOL) {
-        fatalReason = "Pilot and co-pilot killed";
-        fatalKillsCrew = true;
-      }
+      fatalReason = isVTOL ? "Pilot and co-pilot killed" : "Vehicle crew killed";
+      fatalKillsCrew = true;
       break;
     case "sensors":
-      bump("system.crit.sensorHits", crit.sensorHits, 2);
+      bump("system.crit.sensorHits", crit.sensorHits, 4);
+      notes.push((Number(crit.sensorHits ?? 0) + 1) >= 4 ? "Sensors destroyed: weapons cannot fire" : "+1 to all to-hit rolls");
       break;
     case "engineHit":
       updates["system.crit.engineHit"] = true;
+      updates["system.crit.turretLocked"] = true;
       if (isVTOL) bump("system.crit.engineHits", crit.engineHits, 3);
       if (isVTOL) fatalReason = "Engine hit: lift lost";
+      else notes.push("Vehicle immobile; direct-fire energy and pulse weapons disabled; turret locked");
       break;
     case "rotorDamage":
       bump("system.crit.rotorHits", crit.rotorHits, 100);
@@ -2177,19 +2494,27 @@ async function applyVehicleCritical(targetActor, critTableLoc, { attackSide = "f
         notes.push(`${String(stabilizerLoc ?? tableKey).toUpperCase()} weapon stabilizer hit`);
         break;
       }
-      const left = Boolean(crit.stabilizerLeft);
-      const right = Boolean(crit.stabilizerRight);
-      if (!left) updates["system.crit.stabilizerLeft"] = true;
-      else if (!right) updates["system.crit.stabilizerRight"] = true;
-      motive = await _rollMotiveSystemDamage(targetActor, attackSide);
-      if (motive.severity > 0) {
-        const current = Number(crit.motiveHits ?? 0) || 0;
-        updates["system.crit.motiveHits"] = Math.max(current, motive.severity);
+      const stabilizerLoc = _normalizeVehicleLocation(loc) ?? tableKey;
+      if (["front", "rear", "left", "right", "turret"].includes(stabilizerLoc)) {
+        updates[`system.crit.location.${stabilizerLoc}`] = true;
+        notes.push(`${String(stabilizerLoc).toUpperCase()} weapon stabilizer damaged`);
       }
       break;
     }
     case "turretJam":
+      if (crit.turretLocked) notes.push("Turret already locked; no further effect");
+      else if (Math.max(0, Number(crit.turretJamHits ?? 0) || 0) >= 1) {
+        updates["system.crit.turretJammed"] = false;
+        updates["system.crit.turretLocked"] = true;
+        notes.push("Second Turret Jam becomes Turret Locks");
+      } else {
+        updates["system.crit.turretJammed"] = true;
+        updates["system.crit.turretJamHits"] = 1;
+        notes.push("Turret jammed in its current facing");
+      }
+      break;
     case "turretLocks":
+      updates["system.crit.turretJammed"] = false;
       updates["system.crit.turretLocked"] = true;
       break;
     case "turretBlownOff": {
@@ -2198,48 +2523,89 @@ async function applyVehicleCritical(targetActor, critTableLoc, { attackSide = "f
       updates["system.armor.turret.dmg"] = clampInt(armorMax, 0, armorMax, 0);
       updates["system.structure.turret.dmg"] = clampInt(structMax, 0, structMax, 0);
       notes.push("Turret blown off");
+      fatalReason = "Turret blown off";
+      fatalExplodes = true;
       break;
     }
-    case "ammunition":
-      if (_vehicleHasAmmo(targetActor)) notes.push("Ammunition hit");
-      else {
-        notes.push("Ammunition hit (no ammo carried): treated as Weapon Destroyed");
+    case "ammunition": {
+      const explosion = _vehicleAmmoExplosionData(targetActor);
+      if (explosion.damage <= 0) {
+        notes.push("No explosive ammunition carried: treated as Weapon Destroyed");
+        await affectWeapon({ destroyed: true });
+        break;
+      }
+      Object.assign(updates, explosion.updates);
+      const caseProtected = _vehicleHasCASE(targetActor);
+      ammoExplosion = { ...explosion, caseProtected, loc };
+      if (caseProtected) {
+        const rearMax = Math.max(0, Number(targetActor.system?.armor?.rear?.max ?? 0) || 0);
+        const rearDmg = Math.max(0, Number(targetActor.system?.armor?.rear?.dmg ?? 0) || 0);
+        const rearApplied = Math.min(explosion.damage, Math.max(0, rearMax - rearDmg));
+        updates["system.armor.rear.dmg"] = Math.min(rearMax, rearDmg + rearApplied);
+        ammoExplosion.rearArmorApplied = rearApplied;
+        ammoExplosion.excessIgnored = Math.max(0, explosion.damage - rearApplied);
+        applyCrewStunned();
+        notes.push(`CASE vents ${explosion.damage} damage through rear armor; excess ignored`);
+      } else {
+        pendingStructureExplosion = { loc, damage: explosion.damage, reason: "Ammunition explosion" };
+        notes.push(`All ammunition explodes for ${explosion.damage} internal damage`);
       }
       break;
+    }
     case "fuelTank":
       if (_vehicleIsFusion(targetActor)) {
         updates["system.crit.engineHit"] = true;
+        updates["system.crit.turretLocked"] = true;
         if (isVTOL) bump("system.crit.engineHits", crit.engineHits, 3);
         notes.push("Fuel Tank hit (fusion): treated as Engine Hit");
         if (isVTOL) fatalReason = "Fusion engine hit: lift lost";
-      } else if (isVTOL && _vehicleIsICEOrFuelCell(targetActor)) {
+      } else if (_vehicleIsICEOrFuelCell(targetActor)) {
         updates["system.crit.fuelTankHit"] = true;
         updates["system.crew.driverHit"] = 2;
         updates["system.crew.commanderHit"] = 2;
         notes.push("Fuel tank explosion: vehicle destroyed and crew killed");
         fatalReason = "Fuel tank explosion";
         fatalKillsCrew = true;
+        fatalExplodes = true;
       } else {
-        notes.push("Fuel Tank hit");
+        notes.push("Fuel Tank result has no effect without an ICE/fuel-cell engine; verify engine type");
       }
       break;
     case "weaponMalfunction":
-      notes.push("Weapon malfunction");
+      await affectWeapon({ destroyed: false });
       break;
     case "weaponDestroyed":
-      notes.push("Weapon destroyed");
+      await affectWeapon({ destroyed: true });
       break;
     case "cargoInfantry":
-      notes.push("Cargo/Infantry hit");
+      updates["system.crit.cargoDestroyed"] = true;
+      updates["system.crit.lastCargoInfantryDamage"] = Math.max(0, Number(sourceDamage ?? 0) || 0);
+      notes.push(`Cargo destroyed; carried infantry suffers ${Math.max(0, Number(sourceDamage ?? 0) || 0)} damage (apply to the selected carried unit)`);
       break;
     case "crewStunned":
-      notes.push("Crew stunned");
+      applyCrewStunned();
       break;
     default:
       break;
   }
 
   if (Object.keys(updates).length) await targetActor.update(updates);
+  await syncVehicleCriticalStatuses(targetActor);
+  if (updates["system.crit.engineHit"] === true) {
+    await applyActorStatusAuto(targetActor, "atow-immobile", true).catch(() => {});
+  }
+  if (ammoExplosion) await _playAtowSfx(AMMO_EXPLOSION_SFX, { volume: 1.0 });
+  let defeatResult = null;
+  if (pendingStructureExplosion) {
+    const explosionResult = await _applyDirectVehicleStructureDamage(
+      targetActor,
+      pendingStructureExplosion.loc,
+      pendingStructureExplosion.damage,
+      { reason: pendingStructureExplosion.reason }
+    );
+    if (ammoExplosion) ammoExplosion.structureResult = explosionResult;
+    if (explosionResult.defeatResult) defeatResult = explosionResult.defeatResult;
+  }
   if (isVTOL && !fatalReason) {
     const pilotHits = Number(targetActor.system?.crew?.driverHit ?? 0) || 0;
     const copilotHits = Number(targetActor.system?.crew?.commanderHit ?? 0) || 0;
@@ -2249,9 +2615,15 @@ async function applyVehicleCritical(targetActor, critTableLoc, { attackSide = "f
     }
   }
 
-  let defeatResult = null;
-  if (isVTOL && fatalReason) {
-    defeatResult = await markVTOLDefeated(targetActor, { reason: fatalReason, killCrew: fatalKillsCrew, crashed: true });
+  if (fatalReason && !defeatResult) {
+    defeatResult = isVTOL
+      ? await markVTOLDefeated(targetActor, { reason: fatalReason, killCrew: fatalKillsCrew, crashed: true })
+      : await markVehicleDefeated(targetActor, {
+          reason: fatalReason,
+          killCrew: fatalKillsCrew,
+          explode: fatalExplodes,
+          tint: fatalExplodes
+        });
   }
 
   return {
@@ -2261,6 +2633,8 @@ async function applyVehicleCritical(targetActor, critTableLoc, { attackSide = "f
     resultKey,
     notes,
     motive,
+    selectedWeapon,
+    ammoExplosion,
     crashed: Boolean(updates["system.crit.crashed"] || defeatResult?.defeated),
     defeatResult
   };
@@ -2274,9 +2648,10 @@ async function applyDamageToVehicleActor(targetActor, hitLoc, damage, { attackSi
 
   const tonnage = Number(targetActor.system?.vehicle?.tonnage ?? 0) || 0;
   const isVTOL = String(targetActor?.type ?? "").toLowerCase() === "vtol";
+  const alreadyDefeated = Boolean(targetActor.system?.crit?.defeated);
   const structMax = isVTOL
     ? Math.max(1, Math.ceil(tonnage / 10))
-    : Math.max(0, Math.floor(tonnage / 10));
+    : (tonnage > 0 ? Math.max(1, Math.floor(tonnage / 10)) : 0);
 
   const incomingDamage = Math.max(0, num(damage, 0));
   // VTOL rotor hits deliver Damage Value / 10, rounded up. This reduced
@@ -2309,9 +2684,9 @@ async function applyDamageToVehicleActor(targetActor, hitLoc, damage, { attackSi
   let fatalReason = "";
   const nextStructureDamage = clampInt(structDmg + structApplied, 0, structMax, 0);
 
-  if (isVTOL && ["front", "left", "right", "rear"].includes(loc) && nextStructureDamage >= structMax) {
+  if (["front", "left", "right", "rear", "turret"].includes(loc) && structMax > 0 && nextStructureDamage >= structMax) {
     fatalReason = `${loc.charAt(0).toUpperCase()}${loc.slice(1)} internal structure destroyed`;
-    crashed = true;
+    crashed = isVTOL;
   }
 
   if (isVTOL && loc === "rotor" && effectiveDamage > 0) {
@@ -2338,20 +2713,27 @@ async function applyDamageToVehicleActor(targetActor, hitLoc, damage, { attackSi
   if (Object.keys(updates).length) {
     await targetActor.update(updates);
   }
-  let defeatResult = null;
-  if (isVTOL && fatalReason) {
-    defeatResult = await markVTOLDefeated(targetActor, { reason: fatalReason, crashed: true });
+
+  // Only dagger-marked ground-vehicle hit-location results check motive damage.
+  const motive = (!isVTOL && !alreadyDefeated && crit?.motiveTrigger && (armorApplied + structApplied) > 0)
+    ? await _rollMotiveSystemDamage(targetActor, attackSide)
+    : null;
+  let defeatResult = motive?.defeatResult ?? null;
+  if (fatalReason) {
+    defeatResult = isVTOL
+      ? await markVTOLDefeated(targetActor, { reason: fatalReason, crashed: true })
+      : await markVehicleDefeated(targetActor, { reason: fatalReason, explode: true });
   }
 
   const vehicleCrits = [];
   if (crit?.trigger) {
-    const throughArmorCrit = await applyVehicleCritical(targetActor, crit.tableLoc, { attackSide, loc });
+    const throughArmorCrit = await applyVehicleCritical(targetActor, crit.tableLoc, { attackSide, loc, sourceDamage: incomingDamage });
     vehicleCrits.push({ ...throughArmorCrit, source: "Through Armor" });
   }
 
-  if (isVTOL && structApplied > 0) {
+  if (structApplied > 0) {
     const internalTableLoc = (loc === "left" || loc === "right") ? "side" : loc;
-    const internalCrit = await applyVehicleCritical(targetActor, internalTableLoc, { attackSide, loc });
+    const internalCrit = await applyVehicleCritical(targetActor, internalTableLoc, { attackSide, loc, sourceDamage: incomingDamage });
     vehicleCrits.push({ ...internalCrit, source: "Internal Structure Damage" });
   }
 
@@ -2359,7 +2741,7 @@ async function applyDamageToVehicleActor(targetActor, hitLoc, damage, { attackSi
   const criticalDefeat = vehicleCrits.find(entry => entry?.defeatResult?.defeated)?.defeatResult ?? null;
   if (criticalDefeat) {
     defeatResult = criticalDefeat;
-    crashed = true;
+    crashed = isVTOL;
   }
 
   return {
@@ -2369,6 +2751,7 @@ async function applyDamageToVehicleActor(targetActor, hitLoc, damage, { attackSi
     effectiveDamage,
     rotorDamageReduced: isVTOL && loc === "rotor",
     rotorMpLossApplied,
+    motive,
     crashed,
     defeated: Boolean(defeatResult?.defeated),
     defeatReason: defeatResult?.reason ?? fatalReason,
@@ -2673,6 +3056,19 @@ function _aboutFaceFacingStringToDeg(dir) {
 function _getSystemTorsoFacingDeg(token) {
   try {
     const raw = token?.document?.getFlag?.(SYSTEM_ID, "torsoFacing");
+    if (raw === null || raw === undefined || String(raw).trim() === "") return null;
+    const deg = Number(raw);
+    if (Number.isFinite(deg)) return normalizeDeg(deg);
+  } catch (_) {
+    // ignore
+  }
+  return null;
+}
+
+function _getSystemTurretFacingDeg(token) {
+  try {
+    const raw = token?.document?.getFlag?.(SYSTEM_ID, "turretFacing");
+    if (raw === null || raw === undefined || String(raw).trim() === "") return null;
     const deg = Number(raw);
     if (Number.isFinite(deg)) return normalizeDeg(deg);
   } catch (_) {
@@ -2690,14 +3086,33 @@ function _getSystemTorsoFacingDeg(token) {
 function getTokenFacingDeg(token) {
   if (!token?.document) return null;
 
-  // 0) Prefer torso facing when present; incoming hit arcs use the twisted torso.
-  const torsoFacing = _getSystemTorsoFacingDeg(token);
-  if (torsoFacing !== null) return torsoFacing;
+  // Ground-vehicle hull arcs must use the identical authoritative value used
+  // by the orange facing indicator in atow-battletech.js.
+  const actorType = String(token?.actor?.type ?? "").toLowerCase();
+  if (["wheeledvehicle", "vehicle", "vtol"].includes(actorType)) {
+    try {
+      const apiFacing = game?.[SYSTEM_ID]?.api?.getTokenFacingDegrees?.(token.document);
+      if (apiFacing !== null && apiFacing !== undefined && Number.isFinite(Number(apiFacing))) {
+        return normalizeDeg(Number(apiFacing));
+      }
+    } catch (_) {
+      // Continue through compatibility fallbacks below.
+    }
+  }
+
+  // Mech incoming arcs follow torso twist. Vehicle incoming arcs always use
+  // hull facing; their independent turret direction is only a firing arc.
+  if (actorType === "mech") {
+    const torsoFacing = _getSystemTorsoFacingDeg(token);
+    if (torsoFacing !== null) return torsoFacing;
+  }
 
   // 1) Prefer the system's native leg facing flag when present.
   try {
     const nativeFacing = token.document.getFlag?.(SYSTEM_ID, "facing");
-    if (Number.isFinite(Number(nativeFacing))) return normalizeDeg(Number(nativeFacing));
+    if (nativeFacing !== null && nativeFacing !== undefined && Number.isFinite(Number(nativeFacing))) {
+      return normalizeDeg(Number(nativeFacing));
+    }
   } catch (_) {
     // ignore
   }
@@ -2708,11 +3123,15 @@ function getTokenFacingDeg(token) {
   try {
     const af = _getAboutFaceFlags(token);
     const afDir = af?.direction ?? token.document.getFlag?.("about-face", "direction");
-    if (Number.isFinite(Number(afDir))) return normalizeDeg(Number(afDir));
+    if (afDir !== null && afDir !== undefined && Number.isFinite(Number(afDir))) {
+      return normalizeDeg(Number(afDir));
+    }
 
     const afFacingStr = af?.facingDirection ?? token.document.getFlag?.("about-face", "facingDirection");
     const afDeg = _aboutFaceFacingStringToDeg(afFacingStr);
-    if (Number.isFinite(Number(afDeg))) return normalizeDeg(Number(afDeg));
+    if (afDeg !== null && afDeg !== undefined && Number.isFinite(Number(afDeg))) {
+      return normalizeDeg(Number(afDeg));
+    }
   } catch (_) {
     // ignore
   }
@@ -2743,8 +3162,10 @@ function getTokenFacingDeg(token) {
  * (flat-top vs pointy-top) and any Foundry internal direction mapping.
  */
 function getTokenFacingDir(token) {
-  const torsoDeg = _getSystemTorsoFacingDeg(token);
-  if (torsoDeg !== null) return getFacingDirFromDeg(token, torsoDeg);
+  if (String(token?.actor?.type ?? "").toLowerCase() === "mech") {
+    const torsoDeg = _getSystemTorsoFacingDeg(token);
+    if (torsoDeg !== null) return getFacingDirFromDeg(token, torsoDeg);
+  }
 
   // If About Face (or another module) stores a snapped direction index, use it directly.
   // This avoids 0°-reference mismatches that can cause "rear/side" to trigger too often.
@@ -2781,55 +3202,33 @@ function getFacingDirFromDeg(token, deg) {
  * Determine which side of the TARGET is being attacked from, using target facing.
  * Returns: { side, facingDeg, bearingDeg, relDeg } or null if cannot determine.
  */
-function getTargetSideFromFacing(attackerToken, targetToken) {
+function getTargetSideFromFacing(attackerToken, targetToken, { facingDegOverride = null } = {}) {
   if (!attackerToken || !targetToken) return null;
 
-  const facingDeg = getTokenFacingDeg(targetToken);
+  // Number(null) is 0, so checking only Number.isFinite would silently force
+  // every ordinary target to face east instead of reading its hull facing.
+  const hasFacingOverride = facingDegOverride !== null
+    && facingDegOverride !== undefined
+    && String(facingDegOverride).trim() !== ""
+    && Number.isFinite(Number(facingDegOverride));
+  const facingDeg = hasFacingOverride
+    ? normalizeDeg(Number(facingDegOverride))
+    : getTokenFacingDeg(targetToken);
   if (facingDeg === null) return null;
   const attackerCenter = getTokenCenter(attackerToken);
   const targetCenter = getTokenCenter(targetToken);
   if (!attackerCenter || !targetCenter) return null;
 
-  // If we have a hex grid, use direction indices for exact BattleTech hex-side arcs.
-  // Arc mapping (per your screenshot):
-  // - FRONT: 3 hex sides (180°) => delta 0, 1, 5
-  // - REAR:  1 hex side (centered behind) => delta 3
-  // - RIGHT: 1 hex side (rear-right) => delta 2
-  // - LEFT:  1 hex side (rear-left) => delta 4
-  try {
-    const grid = canvas?.grid;
-    const origin = targetCenter;
-    const attackerPt = attackerCenter;
-    if (grid?.getDirection && origin && attackerPt) {
-      const facingDir = getTokenFacingDir(targetToken);
-      const attackerDir = grid.getDirection(origin, attackerPt);
-      if (Number.isFinite(facingDir) && Number.isFinite(attackerDir)) {
-        const delta = ((attackerDir - facingDir) % 6 + 6) % 6;
-
-        // Keep the old debug fields (bearing/relDeg) for chat output/diagnostics.
-        const dx0 = attackerPt.x - origin.x;
-        const dy0 = attackerPt.y - origin.y;
-        const bearingDeg = normalizeDeg(Math.atan2(dy0, dx0) * 180 / Math.PI);
-        const relDeg = normalizeDeg((bearingDeg - facingDeg) - FACING_OFFSET_DEG);
-
-        let side;
-        if (delta === 0 || delta === 1 || delta === 5) side = "front";
-        else if (delta === 3) side = "rear";
-        else if (delta === 2) side = "right";
-        else side = "left"; // delta === 4
-
-        return { side, facingDeg, bearingDeg, relDeg, facingDir, attackerDir, delta };
-      }
-    }
-  } catch (_) {
-    // fall through to degree-based fallback
-  }
-
   const dx = attackerCenter.x - targetCenter.x;
   const dy = attackerCenter.y - targetCenter.y;
+  if (Math.hypot(dx, dy) < 1) {
+    return { side: "front", facingDeg, bearingDeg: facingDeg, relDeg: 0 };
+  }
   const bearingDeg = normalizeDeg(Math.atan2(dy, dx) * 180 / Math.PI);
 
-  // Degree-based fallback that matches the 6-hex-side arcs.
+  // Use the same clockwise canvas angle as the visible facing arrow. Foundry's
+  // grid.getDirection value is not guaranteed to be a sequential 0..5 index,
+  // so subtracting those values can invert front and rear on some hex layouts.
   // FRONT = 180° (±90°), then the remaining hemisphere is split into 3 equal 60° wedges.
   // NOTE: In hex terms, each "side" is effectively a 60° wedge.
   const relDeg = normalizeDeg((bearingDeg - facingDeg) - FACING_OFFSET_DEG);
@@ -2923,14 +3322,15 @@ function isActorDazzleModeActive(actor) {
   }
 }
 
-function getEnvironmentTNMods(weaponItem, scene = canvas?.scene ?? game?.scenes?.active) {
+function getEnvironmentTNMods(weaponItem, scene = canvas?.scene ?? game?.scenes?.active, targetToken = null) {
   const env = getSceneEnvironment(scene);
 
   let mod = 0;
   const details = [];
 
   // Lighting: applies to all attacks
-  switch (String(env.lighting ?? "day")) {
+  const targetIlluminated = targetToken ? isTokenBattlefieldIlluminated(targetToken, scene) : false;
+  switch (targetIlluminated ? "day" : String(env.lighting ?? "day")) {
     case "dusk":
       mod += 1; details.push("Dusk/Dawn +1"); break;
     case "fullmoon":
@@ -2940,6 +3340,7 @@ function getEnvironmentTNMods(weaponItem, scene = canvas?.scene ?? game?.scenes?
     default:
       break;
   }
+  if (targetIlluminated && String(env.lighting ?? "day") !== "day") details.push("Target illuminated: darkness ignored");
 
   // Rain: applies to all attacks
   switch (String(env.rain ?? "none")) {
@@ -2993,7 +3394,10 @@ export function ammoKeyFromTypeLabel(typeText) {
   const raw = String(typeText ?? "").trim();
   // Accept both a bare ammo type ("NARC") and the complete crit-slot label
   // ("Ammo (NARC) 6"). Weapon items and mounted-slot fallbacks can supply either.
-  const installedAmmoLabel = raw.match(/^\s*ammo\s*\(([^)]+)\)\s*\d+\s*(?:\[\s*(LRM|SRM)\s*\])?\s*$/i);
+  const installedAmmoLabel = raw.match(/^\s*ammo\s*\(([^)]+)\)\s*\d+\s*(?:\[\s*(LRM|SRM)\s*\])?\s*$/i)
+    // Tolerate legacy/mistyped LB-X labels which omit the closing parenthesis,
+    // for example: "Ammo (LB 20-X AC Cluster 5".
+    ?? raw.match(/^\s*ammo\s*\((.+?\b(?:slug|cluster))\s*\)?\s*\d+\s*$/i);
   const installedAmmoType = installedAmmoLabel
     ? `${String(installedAmmoLabel[1] ?? "").trim()}${installedAmmoLabel[2] ? ` [${installedAmmoLabel[2]}]` : ""}`
     : raw;
@@ -3064,7 +3468,8 @@ export function getAmmoEquipmentProfile(item) {
   if (!item) return null;
   const sys = item?.system ?? {};
   const itemName = String(item?.name ?? "").trim();
-  const nameMatch = itemName.match(/^\s*ammo\s*\(([^)]+)\)\s*(\d+)\s*(?:\[\s*(LRM|SRM)\s*\])?\s*$/i);
+  const nameMatch = itemName.match(/^\s*ammo\s*\(([^)]+)\)\s*(\d+)\s*(?:\[\s*(LRM|SRM)\s*\])?\s*$/i)
+    ?? itemName.match(/^\s*ammo\s*\((.+?\b(?:slug|cluster))\s*\)?\s*(\d+)\s*$/i);
 
   const explicitType = String(sys.ammoType ?? sys.ammoName ?? sys.ammoLabel ?? "").trim();
   const typeText = nameMatch
@@ -3086,13 +3491,25 @@ export function getAmmoEquipmentProfile(item) {
   };
 }
 
-function getLBXWeaponSize(weaponItem) {
-  const name = String(weaponItem?.name ?? "").trim().toLowerCase();
+const LBX_AC_CALIBERS = new Set([2, 5, 10, 20]);
+
+export function getLBXACProfile(weaponItemOrName) {
+  const name = String(typeof weaponItemOrName === "string" ? weaponItemOrName : weaponItemOrName?.name ?? "").trim().toLowerCase();
   let m = name.match(/\blb\s*(\d+)\s*-\s*x\s*ac\b/i);
-  if (m?.[1]) return Number(m[1]);
+  let caliber = m?.[1] ? Number(m[1]) : null;
   m = name.match(/\blbx\b[^\d]*(\d+)\b/i);
-  if (m?.[1]) return Number(m[1]);
-  return null;
+  if (!Number.isFinite(caliber) && m?.[1]) caliber = Number(m[1]);
+  if (!LBX_AC_CALIBERS.has(caliber)) return null;
+  return {
+    caliber,
+    slugAmmoKey: slugifyAmmoKey(`lbx-${caliber}`),
+    clusterAmmoKey: slugifyAmmoKey(`lbx-${caliber}-cluster`),
+    shotsPerTon: ({ 2: 45, 5: 20, 10: 10, 20: 5 })[caliber]
+  };
+}
+
+function getLBXWeaponSize(weaponItem) {
+  return getLBXACProfile(weaponItem)?.caliber ?? null;
 }
 
 function isLBXWeapon(weaponItem) {
@@ -3463,6 +3880,18 @@ function buildActorAmmoTotals(actor) {
   return totals;
 }
 
+function isInfiniteAmmoAbominationWeapon(actor, weaponItem) {
+  if (!isAbominationActor(actor)) return false;
+  // Abomination-mounted Medium AntiMech Rifles represent an intrinsic weapon
+  // supply and may fire indefinitely. Ignore punctuation so both "AntiMech"
+  // and "Anti-Mech" item spellings receive the same rules treatment.
+  const normalizedName = String(weaponItem?.name ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "");
+  return normalizedName === "mediumantimechrifle";
+}
+
 function actorHasOperationalAMS(actor) {
   const crit = actor?.system?.crit ?? {};
   for (const loc of Object.values(crit)) {
@@ -3610,6 +4039,8 @@ export async function ensureActorAmmoBins(actor) {
 function weaponConsumesAmmo(weaponItem, actor, { ammoKey = null } = {}) {
   const sys = weaponItem?.system ?? {};
 
+  if (isInfiniteAmmoAbominationWeapon(actor, weaponItem)) return false;
+
   // Explicit override
   if (sys.usesAmmo === false) return false;
   if (sys.usesAmmo === true) return true;
@@ -3634,6 +4065,9 @@ function weaponConsumesAmmo(weaponItem, actor, { ammoKey = null } = {}) {
  */
 async function spendAmmoIfApplicable(actor, weaponItem, amount = 1, { ammoKey = null } = {}) {
   if (!actor || !weaponItem) return { ok: true, spent: 0, key: null };
+  if (isInfiniteAmmoAbominationWeapon(actor, weaponItem)) {
+    return { ok: true, spent: 0, key: null, infinite: true };
+  }
 
   const key = ammoKey ? ammoKeyFromTypeLabel(ammoKey) : getAmmoKeyForWeapon(weaponItem);
   if (!key) return { ok: true, spent: 0, key: null };
@@ -4098,14 +4532,7 @@ function measurePointDistance(fromPoint, toPoint) {
 const ECM_RADIUS_HEXES = 6;
 
 function _getOperationalECMName(actor) {
-  if (!isMechActor(actor)) return null;
-  for (const slot of _iterCritStartSlots(actor)) {
-    if (slot.destroyed) continue;
-    const label = String(slot.label ?? "").trim();
-    if (/\bguardian\s+ecm\b/i.test(label)) return "Guardian ECM";
-    if (/\becm\s+suite\b/i.test(label)) return "ECM Suite";
-  }
-  return null;
+  return getOperationalECMName(actor);
 }
 
 function _tokensAreFriendly(a, b) {
@@ -4154,10 +4581,18 @@ function getEnemyECMInterference(attackerToken, targetToken) {
 
     const center = getTokenCenter(token);
     if (!center) continue;
-    const lineDistance = _distanceFromPointToAttackLineHexes(center, start, end);
-    const targetDistance = measurePointDistance(center, end);
-    const blocksArtemis = Number.isFinite(lineDistance) && lineDistance <= ECM_RADIUS_HEXES;
-    const blocksNarc = Number.isFinite(targetDistance) && targetDistance <= ECM_RADIUS_HEXES;
+    const stealthPersonalECM = isStealthArmorActive(token?.actor);
+    const sourceTokenId = String(token?.document?.id ?? token?.id ?? "");
+    const targetTokenId = String(targetToken?.document?.id ?? targetToken?.id ?? "");
+    const isTargetCarrier = Boolean(sourceTokenId && targetTokenId && sourceTokenId === targetTokenId);
+    const lineDistance = stealthPersonalECM ? (isTargetCarrier ? 0 : Infinity) : _distanceFromPointToAttackLineHexes(center, start, end);
+    const targetDistance = stealthPersonalECM ? (isTargetCarrier ? 0 : Infinity) : measurePointDistance(center, end);
+    const blocksArtemis = stealthPersonalECM
+      ? isTargetCarrier
+      : Number.isFinite(lineDistance) && lineDistance <= ECM_RADIUS_HEXES;
+    const blocksNarc = stealthPersonalECM
+      ? isTargetCarrier
+      : Number.isFinite(targetDistance) && targetDistance <= ECM_RADIUS_HEXES;
     if (!blocksArtemis && !blocksNarc) continue;
 
     artemisBlocked ||= blocksArtemis;
@@ -4165,6 +4600,7 @@ function getEnemyECMInterference(attackerToken, targetToken) {
     sources.push({
       tokenName: String(token.name ?? token.document?.name ?? token.actor?.name ?? "ECM source"),
       ecmName,
+      stealthPersonalECM,
       blocksArtemis,
       blocksNarc,
       lineDistance,
@@ -4239,7 +4675,12 @@ export async function syncECMProtectionStatuses() {
         // can return no distance on some grid implementations.
         const tokenId = String(token?.document?.id ?? token?.id ?? "");
         const sourceId = String(source?.document?.id ?? source?.id ?? "");
-        if (source === token || (tokenId && sourceId && tokenId === sourceId)) return true;
+        const sameCarrier = source === token || (tokenId && sourceId && tokenId === sourceId);
+        if (sameCarrier) return true;
+
+        // Active Stealth Armor reconfigures its ECM as a personal hostile
+        // field. It protects the carrier but does not shield nearby allies.
+        if (isStealthArmorActive(source?.actor)) return false;
 
         const distance = measureTokenDistance(source, token);
         return Number.isFinite(distance) && distance <= ECM_RADIUS_HEXES;
@@ -5222,14 +5663,65 @@ function getAllowedFiringArcsForWeapon(actor, weaponItem, opts = {}) {
   return { mount, rearMounted, allowed };
 }
 
+function getVehicleAllowedFiringArcsForWeapon(actor, weaponItem, opts = {}) {
+  const locKey = _normalizeVehicleWeaponLocation(opts?.weaponMountLoc ?? weaponItem?.system?.loc);
+  const labels = {
+    front: "Front",
+    rear: "Rear",
+    left: "Left Side",
+    right: "Right Side",
+    turret: "Turret"
+  };
+  const mount = {
+    locKey,
+    locLabel: labels[locKey] ?? "Unassigned",
+    index: null,
+    mountId: String(weaponItem?.id ?? ""),
+    rearMounted: locKey === "rear"
+  };
+  const allowedByLocation = {
+    front: ["front"],
+    rear: ["rear"],
+    left: ["front", "left"],
+    right: ["front", "right"],
+    turret: ["front"]
+  };
+  return {
+    mount,
+    rearMounted: locKey === "rear",
+    allowed: allowedByLocation[locKey] ?? [],
+    turretMounted: locKey === "turret"
+  };
+}
+
 function formatArcList(arcs = []) {
   return arcs.map(a => String(a ?? "").toUpperCase()).join("/");
 }
 
 function getWeaponFiringArcInfo(actor, weaponItem, opts = {}, attackerToken = null, targetToken = null) {
-  if (!isMechActor(actor) || !attackerToken || !targetToken) return { applies: false, legal: true };
-  const { mount, rearMounted, allowed } = getAllowedFiringArcsForWeapon(actor, weaponItem, opts);
-  const arc = getTargetSideFromFacing(targetToken, attackerToken);
+  if (!attackerToken || !targetToken) return { applies: false, legal: true };
+
+  const actorType = String(actor?.type ?? "").toLowerCase();
+  const isGroundVehicle = ["wheeledvehicle", "vehicle"].includes(actorType);
+  if (!isMechActor(actor) && !isGroundVehicle) return { applies: false, legal: true };
+
+  const arcConfig = isGroundVehicle
+    ? getVehicleAllowedFiringArcsForWeapon(actor, weaponItem, opts)
+    : getAllowedFiringArcsForWeapon(actor, weaponItem, opts);
+  const { mount, rearMounted, allowed } = arcConfig;
+
+  // Preserve compatibility for legacy vehicle weapons until a mounting
+  // location is chosen on the combat loadout table.
+  if (isGroundVehicle && !mount.locKey) {
+    return { applies: false, legal: true, mount, allowed: [], allowedLabel: "Unassigned" };
+  }
+
+  const turretFacing = isGroundVehicle && arcConfig.turretMounted
+    ? (_getSystemTurretFacingDeg(attackerToken) ?? getTokenFacingDeg(attackerToken))
+    : null;
+  const arc = getTargetSideFromFacing(targetToken, attackerToken, {
+    facingDegOverride: turretFacing
+  });
   const side = arc?.side ?? "front";
   const legal = allowed.includes(side);
   return {
@@ -5239,6 +5731,8 @@ function getWeaponFiringArcInfo(actor, weaponItem, opts = {}, attackerToken = nu
     arc,
     mount,
     rearMounted,
+    turretMounted: Boolean(arcConfig.turretMounted),
+    facingSource: arcConfig.turretMounted ? "turret" : "hull",
     allowed,
     allowedLabel: formatArcList(allowed)
   };
@@ -5342,7 +5836,7 @@ function hasInstalledAdvancedArmorCrits(actor) {
       const label = String(typeof slot === "string" ? slot : slot.label ?? "")
         .toLowerCase()
         .replace(/[^a-z0-9]+/g, "");
-      if (/ferrofibrous|ferrolamellor|laserreflective|reactivearmor|^reactive$|vehicularstealth/.test(label)) return true;
+      if (/ferrofibrous|ferrolamellor|laserreflective|reactivearmor|^reactive$|vehicularstealth|stealtharmor|^stealth$/.test(label)) return true;
     }
   }
   return false;
@@ -5694,10 +6188,68 @@ export async function rollWeaponAttack(actor, weaponItem, opts = {}) {
   const pilot = actor.system?.pilot ?? {};
   const crew = actor.system?.crew ?? {};
   const isVehicleAttacker = isVehicleActor(actor);
+  const isBuildingAttacker = isBuildingActor(actor);
   const hasSkillOverride = Number.isFinite(Number(opts.skillValue));
-  const baseGunnery = isVehicleAttacker ? num(crew.gunnery, 0) : num(pilot.gunnery, 0);
+  const baseGunnery = (isVehicleAttacker || isBuildingAttacker) ? num(crew.gunnery, 0) : num(pilot.gunnery, 0);
   const gunnery = hasSkillOverride ? num(opts.skillValue, 0) : baseGunnery;
   const skillLabel = (opts.skillLabel && String(opts.skillLabel).trim()) ? String(opts.skillLabel).trim() : "Gunnery";
+
+  if (isVehicleAttacker) {
+    const vehicleCrit = actor.system?.crit ?? {};
+    if (vehicleCrit.defeated || vehicleCrit.crewKilled) {
+      ui?.notifications?.warn?.("This combat vehicle is defeated and cannot fire weapons.");
+      return { ok: false, blocked: true, reason: "vehicleDefeated" };
+    }
+    const attackPhaseStamp = game.combat?.started
+      ? `${game.combat.id}:${game.combat.round ?? 0}:${game.combat.turn ?? 0}`
+      : "";
+    if (attackPhaseStamp && vehicleCrit.weaponAttackPhaseUsedStamp === attackPhaseStamp) {
+      ui?.notifications?.warn?.("This combat vehicle spent its Weapon Attack Phase clearing a malfunction and cannot fire.");
+      return { ok: false, blocked: true, reason: "vehicleWeaponPhaseUsed" };
+    }
+    if (Math.max(0, Number(vehicleCrit.crewStunnedTurns ?? 0) || 0) > 0) {
+      ui?.notifications?.warn?.("This combat vehicle's crew is stunned and cannot fire weapons this turn.");
+      return { ok: false, blocked: true, reason: "vehicleCrewStunned" };
+    }
+    if (Math.max(0, Number(vehicleCrit.sensorHits ?? 0) || 0) >= 4) {
+      ui?.notifications?.warn?.("This combat vehicle has suffered four sensor hits and cannot fire weapons.");
+      return { ok: false, blocked: true, reason: "vehicleSensorsDestroyed" };
+    }
+    if (weaponItem.system?.vehicleMalfunctioned) {
+      ui?.notifications?.warn?.(`${weaponItem.name} is malfunctioning and must be repaired before it can fire.`);
+      return { ok: false, blocked: true, reason: "vehicleWeaponMalfunction" };
+    }
+    if (vehicleCrit.engineHit && _isVehicleDirectFireEnergyWeapon(weaponItem)) {
+      ui?.notifications?.warn?.(`${weaponItem.name} cannot fire because the vehicle's engine has been hit.`);
+      return { ok: false, blocked: true, reason: "vehicleEngineEnergyLockout" };
+    }
+  }
+
+  if (isBuildingAttacker) {
+    const building = actor.system?.building ?? {};
+    const mount = weaponItem.system?.buildingMount ?? {};
+    const hexIndex = Math.max(0, Math.floor(num(mount.hexIndex, 0)));
+    const level = Math.max(1, Math.floor(num(mount.level, 1)));
+    const hex = building.hexes?.[hexIndex] ?? {};
+    const track = building.expandedCF ? (hex.levels?.[level - 1] ?? {}) : hex;
+    const crit = track.crit ?? {};
+    if (building.defeated || hex.collapsed || track.collapsed) {
+      ui?.notifications?.warn?.("This building location has collapsed and cannot fire weapons.");
+      return { ok: false, blocked: true, reason: "buildingCollapsed" };
+    }
+    if (mount.destroyed || mount.malfunctioned) {
+      ui?.notifications?.warn?.(`${weaponItem.name} is ${mount.destroyed ? "destroyed" : "malfunctioning"} and cannot fire.`);
+      return { ok: false, blocked: true, reason: mount.destroyed ? "buildingWeaponDestroyed" : "buildingWeaponMalfunction" };
+    }
+    if (crit.gunnersKilled || Math.max(0, num(crit.gunnersStunnedTurns, 0)) > 0) {
+      ui?.notifications?.warn?.(crit.gunnersKilled ? "The gunners at this location were killed." : "The gunners at this location are stunned.");
+      return { ok: false, blocked: true, reason: crit.gunnersKilled ? "buildingGunnersKilled" : "buildingGunnersStunned" };
+    }
+    if (mount.turret && crit.turretJammed) {
+      ui?.notifications?.warn?.("This weapon's turret is jammed and must be cleared before it can fire.");
+      return { ok: false, blocked: true, reason: "buildingTurretJammed" };
+    }
+  }
 
   const baseTN = (opts.tn ?? getDefaultTN(8));
   const attackerToken = opts.attackerToken ?? getAttackerToken(actor);
@@ -5706,6 +6258,7 @@ export async function rollWeaponAttack(actor, weaponItem, opts = {}) {
   const isAbomTarget = isAbominationActor(targetActor);
   const isVehicleTarget = isVehicleActor(targetActor);
   const isDropshipTarget = isDropshipActor(targetActor);
+  const isBuildingTarget = isBuildingActor(targetActor);
   const hasVehicleTurret = isVehicleTarget && vehicleHasTurret(targetActor);
 
   if (!targetToken) {
@@ -5788,6 +6341,7 @@ export async function rollWeaponAttack(actor, weaponItem, opts = {}) {
 
   const { band, mod: rangeMod, minPenalty } = calcRangeBandAndMod(weaponItem, distance, { ammoKey });
   const improvedTargetingQuirk = getImprovedTargetingQuirkModifier(actor, band);
+  const stealthArmorTargeting = getStealthArmorTargetModifier(targetActor, band);
 
   // Heat-based fire modifier and shutdown (computed at turn start)
   const heatFireMod = isVehicleAttacker ? 0 : num(actor.system?.heat?.effects?.fireMod, 0);
@@ -5822,11 +6376,20 @@ export async function rollWeaponAttack(actor, weaponItem, opts = {}) {
         }
       })();
 
+  const vehicleCrit = isVehicleAttacker ? (actor.system?.crit ?? {}) : {};
+  const vehicleWeaponLoc = _normalizeVehicleWeaponLocation(weaponItem.system?.loc);
+  const vehicleCommanderMod = isVehicleAttacker && vehicleCrit.commanderHit ? 1 : 0;
+  const vehicleSensorMod = isVehicleAttacker ? Math.min(4, Math.max(0, Number(vehicleCrit.sensorHits ?? 0) || 0)) : 0;
+  const vehicleStabilizerMod = isVehicleAttacker && vehicleWeaponLoc && vehicleCrit.location?.[vehicleWeaponLoc]
+    ? attackerMoveMod
+    : 0;
+  const vehicleCriticalTNMod = vehicleCommanderMod + vehicleSensorMod + vehicleStabilizerMod;
+
   const autoTargetMove = getAutoTargetMoveData(targetToken);
   const targetHexesUsed = Number.isFinite(opts.targetHexes) ? num(opts.targetHexes, 0) : autoTargetMove.moved;
 
   const statusTNMods = getStatusTNMods(attackerToken, targetToken);
-  const envTNMods = getEnvironmentTNMods(weaponItem, canvas?.scene ?? game?.scenes?.active);
+  const envTNMods = getEnvironmentTNMods(weaponItem, canvas?.scene ?? game?.scenes?.active, targetToken);
   const losWoodsMods = getLineOfSightWoodsMods(attackerToken, targetToken);
   const losCoverMods = getLineOfSightCoverMods(attackerToken, targetToken);
   if (losWoodsMods.blocked) {
@@ -6011,12 +6574,12 @@ export async function rollWeaponAttack(actor, weaponItem, opts = {}) {
   const aimedModStr = (aimedNetMod >= 0) ? `+${aimedNetMod}` : `${aimedNetMod}`;
 
   const totalTN = isArrowIVHomingAttack
-    ? 4 + accurateWeaponQuirk.mod + improvedTargetingQuirk.mod
-    : num(baseTN, 8) + rangeMod + attackerMoveMod + targetMoveMod + heatFireMod + statusTNMods.total + envTNMods.mod + losWoodsMods.mod + terrainPartialCoverMod + terrainMod + otherMod + mrmTNMod + pulseLaserTNMod + accurateWeaponQuirk.mod + improvedTargetingQuirk.mod + tcMod + aimedNetMod;
+    ? 4 + accurateWeaponQuirk.mod + improvedTargetingQuirk.mod + stealthArmorTargeting.mod
+    : num(baseTN, 8) + rangeMod + attackerMoveMod + targetMoveMod + heatFireMod + statusTNMods.total + envTNMods.mod + losWoodsMods.mod + terrainPartialCoverMod + terrainMod + otherMod + mrmTNMod + pulseLaserTNMod + accurateWeaponQuirk.mod + improvedTargetingQuirk.mod + stealthArmorTargeting.mod + tcMod + aimedNetMod + vehicleCriticalTNMod;
 
   const tn = isArrowIVHomingAttack
-    ? 4 + accurateWeaponQuirk.mod + improvedTargetingQuirk.mod
-    : num(baseTN, 8) + rangeMod + attackerMoveMod + targetMoveMod + heatFireMod + statusTNMods.total + envTNMods.mod + losWoodsMods.mod + terrainPartialCoverMod + terrainMod + otherMod + mrmTNMod + pulseLaserTNMod + accurateWeaponQuirk.mod + improvedTargetingQuirk.mod + tcMod + aimedNetMod;
+    ? 4 + accurateWeaponQuirk.mod + improvedTargetingQuirk.mod + stealthArmorTargeting.mod
+    : num(baseTN, 8) + rangeMod + attackerMoveMod + targetMoveMod + heatFireMod + statusTNMods.total + envTNMods.mod + losWoodsMods.mod + terrainPartialCoverMod + terrainMod + otherMod + mrmTNMod + pulseLaserTNMod + accurateWeaponQuirk.mod + improvedTargetingQuirk.mod + stealthArmorTargeting.mod + tcMod + aimedNetMod + vehicleCriticalTNMod;
 
   const toHit = await (new Roll(isArrowIVHomingAttack ? "2d6" : `2d6 + ${gunnery}`)).evaluate();
   // Missile rack size (LRM/SRM/MRM etc). Used to distinguish missile cluster weapons vs rapid-fire cluster.
@@ -6226,6 +6789,10 @@ const glancingCriticalModifier = glancingBlow ? getGlancingCriticalCheckModifier
           });
           continue;
         }
+        if (isBuildingTarget) {
+          packets.push({ hits: packet.hits, loc: "building", roll: { total: null }, tacFrom2: false, damage: packet.damage, damageCluster: packet.damageCluster, floating: null });
+          continue;
+        }
         if (isVehicleTarget) {
           const locRes = await rollVehicleHitLocation(side, { hasTurret: hasVehicleTurret, targetActor });
           packets.push({
@@ -6233,7 +6800,7 @@ const glancingCriticalModifier = glancingBlow ? getGlancingCriticalCheckModifier
             loc: locRes.loc,
             roll: locRes.roll,
             tacFrom2: false,
-            vehicleCrit: locRes.critTrigger ? { trigger: true, tableLoc: locRes.critTableLoc } : null,
+            vehicleCrit: getVehicleLocationDamageEffects(locRes),
             damage: packet.damage,
             damageCluster: packet.damageCluster,
             floating: null
@@ -6329,6 +6896,10 @@ const glancingCriticalModifier = glancingBlow ? getGlancingCriticalCheckModifier
           });
           continue;
         }
+        if (isBuildingTarget) {
+          packets.push({ hits: packet.hits, loc: "building", roll: { total: null }, tacFrom2: false, damage: packet.damage, damageCluster: packet.damageCluster, floating: null });
+          continue;
+        }
         if (isVehicleTarget) {
           const locRes = await rollVehicleHitLocation(side, { hasTurret: hasVehicleTurret, targetActor });
           packets.push({
@@ -6336,7 +6907,7 @@ const glancingCriticalModifier = glancingBlow ? getGlancingCriticalCheckModifier
             loc: locRes.loc,
             roll: locRes.roll,
             tacFrom2: false,
-            vehicleCrit: locRes.critTrigger ? { trigger: true, tableLoc: locRes.critTableLoc } : null,
+            vehicleCrit: getVehicleLocationDamageEffects(locRes),
             damage: packet.damage,
             damageCluster: packet.damageCluster,
             floating: null
@@ -6431,6 +7002,10 @@ const glancingCriticalModifier = glancingBlow ? getGlancingCriticalCheckModifier
         });
         continue;
       }
+      if (isBuildingTarget) {
+        packets.push({ hits: 1, loc: "building", roll: { total: null }, tacFrom2: false, damage: baseDamage, floating: null });
+        continue;
+      }
       if (isVehicleTarget) {
           const locRes = await rollVehicleHitLocation(side, { hasTurret: hasVehicleTurret, targetActor });
         packets.push({
@@ -6438,7 +7013,7 @@ const glancingCriticalModifier = glancingBlow ? getGlancingCriticalCheckModifier
           loc: locRes.loc,
           roll: locRes.roll,
           tacFrom2: false,
-          vehicleCrit: locRes.critTrigger ? { trigger: true, tableLoc: locRes.critTableLoc } : null,
+          vehicleCrit: getVehicleLocationDamageEffects(locRes),
           damage: baseDamage,
           floating: null
         });
@@ -6500,7 +7075,7 @@ const glancingCriticalModifier = glancingBlow ? getGlancingCriticalCheckModifier
 
   let locResult = null;
   let tacSingle = false;
-  const shouldResolveHitLocation = (hit || isArrowIVHomingAttack) && (opts.showLocation || opts.applyDamage || isNarcAttack) && !cluster && !isAbomTarget && !isTagAttack;
+  const shouldResolveHitLocation = (hit || isArrowIVHomingAttack) && (opts.showLocation || opts.applyDamage || isNarcAttack) && !cluster && !isAbomTarget && !isBuildingTarget && !isTagAttack;
   if (shouldResolveHitLocation) {
     if (isVehicleTarget) {
       locResult = await rollVehicleHitLocation(side, { hasTurret: hasVehicleTurret, targetActor });
@@ -6537,7 +7112,7 @@ const glancingCriticalModifier = glancingBlow ? getGlancingCriticalCheckModifier
   // TAC + optional Floating Criticals (non-cluster):
   // - Standard TAC: if the hit-location table roll was 2, we make an extra TAC critical check on that location.
   // - Floating Criticals (optional): if TAC is possible (original roll was 2), reroll location; apply TAC/criticals to the rerolled location.
-  if (hit && locResult && !cluster && !isVehicleTarget && !isDropshipTarget && !isArrowIVHomingAttack) {
+  if (hit && locResult && !cluster && !isVehicleTarget && !isDropshipTarget && !isBuildingTarget && !isArrowIVHomingAttack) {
     const fromHitLocationTable = !locResult.aim || locResult.aim.used === false;
     if (fromHitLocationTable && (locResult.roll?.total ?? 0) === 2) {
       tacSingle = true;
@@ -6674,6 +7249,31 @@ if (isNarcAttack && hit && locResult?.loc && !locResult.partialCoverBlocked) {
   }
 }
 
+  const buildingTarget = opts.buildingTarget ?? {};
+  const buildingImpact = {
+    hexIndex: Math.max(0, Math.floor(num(buildingTarget.hexIndex, 0))),
+    level: Math.max(1, Math.floor(num(buildingTarget.level, 1))),
+    aimed: Boolean(buildingTarget.aimed),
+    aimedSuccess: false,
+    aimRoll: null
+  };
+  if (isBuildingTarget && hit && buildingImpact.aimed && !buildingTarget.fromInside) {
+    buildingImpact.aimRoll = await (new Roll("2d6")).evaluate();
+    buildingImpact.aimedSuccess = [6, 7, 8].includes(Number(buildingImpact.aimRoll.total ?? 0));
+    if (!buildingImpact.aimedSuccess && targetActor.system?.building?.expandedCF) {
+      const levelCount = Math.max(1, Math.floor(num(targetActor.system?.building?.levels, 1)));
+      buildingImpact.level = 1 + Math.floor(Math.random() * levelCount);
+    }
+  }
+
+  const buildingDamageOptions = () => ({
+    hexIndex: buildingImpact.hexIndex,
+    level: buildingImpact.level,
+    fromInside: Boolean(buildingTarget.fromInside),
+    criticalModifier: buildingImpact.aimedSuccess ? 2 : 0,
+    damageScale: String(weaponItem.system?.buildingMount?.weaponClass ?? "").toLowerCase() === "capital" ? "capital" : "standard"
+  });
+
 // ---- Automatic Damage Application (first pass) ----
 // If enabled, apply damage to the targeted mech immediately after resolving the hit location.
   let damageApplied = null;
@@ -6701,6 +7301,8 @@ if (isNarcAttack && hit && locResult?.loc && !locResult.partialCoverBlocked) {
               if (r?.ok) p.abomIndex = r.hitAbomination;
             } else if (isVehicleTarget) {
               r = await applyDamageToVehicleActorAuto(targetActor, p.loc, p.damage, { attackSide: side, crit: p.vehicleCrit });
+            } else if (isBuildingTarget) {
+              r = await applyDamageToBuildingActorAuto(targetActor, p.damage, buildingDamageOptions());
             } else if (isDropshipTarget) {
               r = await applyDamageToDropshipActorAuto(targetActor, p.loc, p.damage);
             } else {
@@ -6736,13 +7338,15 @@ if (isNarcAttack && hit && locResult?.loc && !locResult.partialCoverBlocked) {
             r = await applyDamageToAbominationActorAuto(targetActor, damage);
           } else if (isVehicleTarget) {
             let loc = locResult?.loc ?? null;
-            let crit = locResult?.critTrigger ? { trigger: true, tableLoc: locResult.critTableLoc } : null;
+            let crit = getVehicleLocationDamageEffects(locResult);
             if (!loc) {
               const fallback = await rollVehicleHitLocation(side, { hasTurret: hasVehicleTurret, targetActor });
               loc = fallback.loc;
-              if (fallback.critTrigger) crit = { trigger: true, tableLoc: fallback.critTableLoc };
+              crit = getVehicleLocationDamageEffects(fallback);
             }
             r = await applyDamageToVehicleActorAuto(targetActor, loc, damage, { attackSide: side, crit });
+          } else if (isBuildingTarget) {
+            r = await applyDamageToBuildingActorAuto(targetActor, damage, buildingDamageOptions());
           } else if (isDropshipTarget) {
             let loc = locResult?.loc ?? null;
             if (!loc) loc = (await rollDropshipHitLocation(side))?.loc;
@@ -6852,7 +7456,7 @@ const clusterNote = cluster
     : "";
 
   const ecmSourcesLine = (ecmBlocksSelectedArtemis || ecmBlocksSelectedNarc) && ecmInterference.sources.length
-    ? `<div><b>Enemy ECM:</b> ${ecmInterference.sources.map(source => `${htmlEscape(source.tokenName)} (${htmlEscape(source.ecmName)})`).join(", ")}; 6-hex bubble.</div>`
+    ? `<div><b>Enemy ECM:</b> ${ecmInterference.sources.map(source => `${htmlEscape(source.tokenName)} (${htmlEscape(source.ecmName)}${source.stealthPersonalECM ? ", Stealth mode" : ", 6-hex bubble"})`).join(", ")}.</div>`
     : "";
 
   const specialMissileAmmoInfoLine = selectedMissileAmmoVariant === MISSILE_AMMO_VARIANTS.INFERNO
@@ -7016,6 +7620,7 @@ const jamInfoLine = (jam && !isAbomChat && !rack && rapidShots > 1)
     `<li>Attacker movement: +${attackerMoveMod}${(String(opts.attackerMoveMode ?? 'auto').toLowerCase() === 'auto') ? ` (auto: ${autoMove.mode.toUpperCase()}, moved ${autoMove.moved})` : ''}</li>`,
     `<li>Target movement: +${targetMoveMod}${Number.isFinite(opts.targetHexes) ? ` (entered: ${opts.targetHexes})` : ` (auto: moved ${autoTargetMove.moved})`}</li>`,
     `<li>Heat: +${heatFireMod}</li>`,
+    `${isVehicleAttacker ? `<li>Vehicle critical damage: +${vehicleCriticalTNMod} (Commander +${vehicleCommanderMod}, Sensors +${vehicleSensorMod}, Stabilizer +${vehicleStabilizerMod})</li>` : ""}`,
     `<li>Targeting Computer: ${tcModStr}</li>`,
     `<li>Aimed Shot: ${aimedEnabled ? aimedModStr : "+0"}${(aimedDetails.length) ? ` (${aimedDetails.join('; ')})` : ``}${(!aimedEnabled && aimedDisabledReason) ? ` (${aimedDisabledReason})` : ""}</li>`,
     `<li>Statuses: +${statusTNMods.total}${statusTNMods.details?.length ? ` (${statusTNMods.details.join('; ')})` : ''}</li>`,
@@ -7027,6 +7632,7 @@ const jamInfoLine = (jam && !isAbomChat && !rack && rapidShots > 1)
     `<li>Pulse Laser: ${pulseLaserTNMod >= 0 ? "+" : ""}${pulseLaserTNMod}${pulseLaserTNMod ? " (applied)" : ""}</li>`,
     `<li>Accurate Weapon Quirk: ${accurateWeaponQuirk.mod >= 0 ? "+" : ""}${accurateWeaponQuirk.mod}${accurateWeaponQuirk.applied ? " (applied)" : ""}</li>`,
     `<li>Improved Targeting (${band}): ${improvedTargetingQuirk.mod >= 0 ? "+" : ""}${improvedTargetingQuirk.mod}${improvedTargetingQuirk.applied ? " (applied)" : ""}</li>`,
+    `<li>Target Stealth Armor (${band}): +${stealthArmorTargeting.mod}${stealthArmorTargeting.applied ? " (active)" : ""}</li>`,
     `<li>Other: +${otherMod}</li>`,
     `</ul>`,
     `${weaponLine}`,
@@ -7139,7 +7745,12 @@ const jamInfoLine = (jam && !isAbomChat && !rack && rapidShots > 1)
       `<li><b>Table:</b> ${String(crit.table ?? "?").toUpperCase()}${source} — Roll ${crit.roll?.total ?? "?"} — ${label}</li>`
     ];
     if (crit.notes?.length) lines.push(`<li><b>Notes:</b> ${crit.notes.join(", ")}</li>`);
-    if (crit.defeatResult?.defeated) lines.push(`<li><b>VTOL Defeated:</b> ${crit.defeatResult.reason}</li>`);
+    if (crit.defeatResult?.defeated) lines.push(`<li><b>Vehicle Defeated:</b> ${crit.defeatResult.reason}</li>`);
+    if (crit.selectedWeapon?.name) lines.push(`<li><b>Weapon:</b> ${htmlEscape(crit.selectedWeapon.name)} — ${crit.selectedWeapon.destroyed ? "Destroyed" : "Malfunctioned"}</li>`);
+    if (crit.ammoExplosion) {
+      const a = crit.ammoExplosion;
+      lines.push(`<li><b>Ammunition Explosion:</b> ${a.damage} damage${a.caseProtected ? `; CASE applied ${a.rearArmorApplied ?? 0} to rear armor and ignored ${a.excessIgnored ?? 0}` : " directly to internal structure"}</li>`);
+    }
     if (crit.motive) {
       const m = crit.motive;
       lines.push(`<li><b>Motive Damage:</b> Roll ${m.baseTotal} + ${m.mod} = ${m.total} — ${m.effect}</li>`);
@@ -7151,6 +7762,14 @@ const jamInfoLine = (jam && !isAbomChat && !rack && rapidShots > 1)
     const items = (Array.isArray(crits) ? crits : []).filter(Boolean);
     if (!items.length) return "";
     return items.map(renderVehicleCrit).filter(Boolean).join("");
+  };
+
+  const renderMotiveDamage = (motive) => {
+    if (!motive) return "";
+    const repeatNote = motive.repeatedDrivingModifier
+      ? " The Driving modifier for this result was already applied; its movement penalty still applies."
+      : "";
+    return `<div><b>Motive System:</b> Roll ${motive.baseTotal} + ${motive.mod} = ${motive.total} — ${motive.effect}. Driving modifier now +${motive.drivingMod}.${repeatNote}</div>`;
   };
 
 
@@ -7173,9 +7792,15 @@ const jamInfoLine = (jam && !isAbomChat && !rack && rapidShots > 1)
           if (r.rotorMpLossApplied) {
             parts.push(`<div><b>Rotor Movement Damage:</b> -${r.rotorMpLossApplied} Cruising MP; Flank MP recalculates from remaining Cruise MP.</div>`);
           }
-          if (r.crashed) parts.push(`<div><b>VTOL DEFEATED:</b> ${r.defeatReason || "Lift lost; vehicle crashed."}</div>`);
+          const motiveHtml = renderMotiveDamage(r.motive);
+          if (motiveHtml) parts.push(motiveHtml);
+          if (r.defeated || r.crashed) parts.push(`<div><b>VEHICLE DEFEATED:</b> ${r.defeatReason || "Vehicle destroyed."}</div>`);
           const vehicleCritHtml = renderVehicleCrits(r.vehicleCrits ?? (r.vehicleCrit ? [r.vehicleCrit] : []));
           if (vehicleCritHtml) parts.push(vehicleCritHtml);
+        } else if (isBuildingTarget) {
+          parts.push(`<div><b>Building Damage:</b> ${r.effectiveDamage} to ${r.hexId}${r.level ? `, Level ${r.level}` : ""} — Armor ${r.armorApplied}, CF ${r.cfApplied}; threshold ${r.threshold}.</div>`);
+          if (r.critical) parts.push(`<div><b>Building Critical:</b> ${r.critical.result} (${r.critical.total})</div>`);
+          if (r.collapseEvents?.length) parts.push(`<div><b>Collapse:</b> ${r.collapseEvents.join("; ")}</div>`);
         } else if (isDropshipTarget) {
           parts.push(`<div><b>Damage Applied:</b> ${damage} to ${String(r.loc).toUpperCase()} — Armor ${r.armorApplied}, SI ${r.structureApplied}${r.overflow ? ` (Overflow ${r.overflow})` : ""}</div>`);
         } else {
@@ -7203,6 +7828,8 @@ const jamInfoLine = (jam && !isAbomChat && !rack && rapidShots > 1)
           parts.push(`<div><b>Ferro-Lamellor:</b> Reduced the attack by ${ferroReduction} total damage across its hit packets.</div>`);
         }
         if (isVehicleTarget) {
+          const defeatedResult = (damageApplied.results ?? []).map(p => p?.result).find(r => r?.defeated || r?.crashed);
+          if (defeatedResult) parts.push(`<div><b>VEHICLE DEFEATED:</b> ${defeatedResult.defeatReason || "Vehicle destroyed."}</div>`);
           const rotorPackets = (damageApplied.results ?? []).map(p => p?.result).filter(r => r?.rotorDamageReduced);
           if (rotorPackets.length) {
             const incoming = rotorPackets.reduce((sum, r) => sum + Number(r?.incomingDamage ?? 0), 0);
@@ -7213,9 +7840,23 @@ const jamInfoLine = (jam && !isAbomChat && !rack && rapidShots > 1)
             const defeatedPacket = rotorPackets.find(r => r?.defeated || r?.crashed);
             if (defeatedPacket) parts.push(`<div><b>VTOL DEFEATED:</b> ${defeatedPacket.defeatReason || "Lift lost; vehicle crashed."}</div>`);
           }
+          const motiveResults = (damageApplied.results ?? []).map(packet => packet?.result?.motive).filter(Boolean);
+          if (motiveResults.length) {
+            parts.push(`<div><b>Motive System Checks:</b> ${motiveResults.length}</div>`);
+            for (const motive of motiveResults) parts.push(renderMotiveDamage(motive));
+          }
           const vehicleCrits = (damageApplied.results ?? []).flatMap(p => p?.result?.vehicleCrits ?? (p?.result?.vehicleCrit ? [p.result.vehicleCrit] : []));
           const vehicleCritHtml = renderVehicleCrits(vehicleCrits);
           if (vehicleCritHtml) parts.push(vehicleCritHtml);
+        } else if (isBuildingTarget) {
+          const buildingResults = (damageApplied.results ?? []).map(packet => packet?.result).filter(Boolean);
+          const armor = buildingResults.reduce((sum, result) => sum + Number(result.armorApplied ?? 0), 0);
+          const cf = buildingResults.reduce((sum, result) => sum + Number(result.cfApplied ?? 0), 0);
+          parts.push(`<div><b>Building Damage:</b> Armor ${armor}, CF ${cf} across ${buildingResults.length} grouping(s).</div>`);
+          const criticals = buildingResults.map(result => result.critical).filter(Boolean);
+          if (criticals.length) parts.push(`<div><b>Building Criticals:</b> ${criticals.map(critical => `${critical.result} (${critical.total})`).join(", ")}</div>`);
+          const collapseEvents = buildingResults.flatMap(result => result.collapseEvents ?? []);
+          if (collapseEvents.length) parts.push(`<div><b>Collapse:</b> ${collapseEvents.join("; ")}</div>`);
         } else if (!isDropshipTarget) {
           const allCritEvents = (damageApplied.results ?? []).flatMap(p => p?.result?.critEvents ?? []);
           const critHtml = renderCritEvents(allCritEvents);
@@ -7702,7 +8343,7 @@ export async function rollMeleeWeaponAttack(actor, weaponItem, opts = {}) {
     try {
       let r;
       if (isVehicleTarget) {
-        const crit = locResult?.critTrigger ? { trigger: true, tableLoc: locResult.critTableLoc } : null;
+        const crit = getVehicleLocationDamageEffects(locResult);
         r = await applyDamageToVehicleActorAuto(targetActor, locResult.loc, damage, { attackSide: side, crit });
       } else {
         r = await applyDamageToTargetActorAuto(targetActor, locResult.loc, damage, { side, tac: tacMelee, tacLoc: locResult.loc });
@@ -8030,17 +8671,18 @@ function buildAttackDialogMods({ statusMods, envMods, losWoodsMods, losCoverMods
   return { mods, blockedNotes };
 }
 
-function enrichAmmoSelectionOptionsForDialog(options, weaponItem, distance, baseTNWithoutRange, improvedTargetingBands = []) {
+function enrichAmmoSelectionOptionsForDialog(options, weaponItem, distance, baseTNWithoutRange, improvedTargetingBands = [], stealthTargetActor = null) {
   const improvedBands = new Set((improvedTargetingBands ?? []).map(band => String(band).toLowerCase()));
   return (Array.isArray(options) ? options : []).map(opt => {
     const range = calcRangeBandAndMod(weaponItem, distance, { ammoKey: opt?.key });
     const improvedTargetingMod = improvedBands.has(String(range.band ?? "").toLowerCase()) ? -1 : 0;
+    const stealthTargetMod = getStealthArmorTargetModifier(stealthTargetActor, range.band).mod;
     return {
       ...opt,
       rangeBand: range.band,
       rangeMod: num(range.mod, 0),
       improvedTargetingMod,
-      totalTN: num(baseTNWithoutRange, 0) + num(range.mod, 0) + improvedTargetingMod
+      totalTN: num(baseTNWithoutRange, 0) + num(range.mod, 0) + improvedTargetingMod + stealthTargetMod
     };
   });
 }
@@ -8079,10 +8721,15 @@ function bindAttackDialogTNUpdater(html) {
     const rangeBand = selected?.dataset?.rangeBand ?? form.dataset.rangeBand ?? null;
     const improvedBands = new Set(String(form.dataset.improvedTargetingBands ?? "").split(",").filter(Boolean));
     const improvedTargetingMod = improvedBands.has(String(rangeBand ?? "").toLowerCase()) ? -1 : 0;
+    const stealthTargetActive = String(form.dataset.stealthTargetActive ?? "").toLowerCase() === "true";
+    const normalizedBand = String(rangeBand ?? "").toLowerCase();
+    const stealthTargetMod = stealthTargetActive
+      ? (normalizedBand.includes("medium") ? 1 : ((normalizedBand.includes("long") || normalizedBand.includes("extreme")) ? 2 : 0))
+      : 0;
     const base = num(form.dataset.baseTnWithoutRange, 8);
     const targetMoveMod = targetMoveModForHexes(targetHexesInput?.value ?? 0);
     const otherMod = num(otherModInput?.value, 0);
-    const total = base + rangeMod + improvedTargetingMod + attackerMoveMod() + targetMoveMod + otherMod;
+    const total = base + rangeMod + improvedTargetingMod + stealthTargetMod + attackerMoveMod() + targetMoveMod + otherMod;
     if (totalEl) totalEl.textContent = String(total);
     if (bandEl && rangeBand) bandEl.textContent = rangeBand;
   };
@@ -8147,10 +8794,11 @@ export async function promptAndRollWeaponAttack(actor, weaponItem, { defaultSide
   const selectedAmmoKey = ammoSelection.defaultKey ?? getAmmoKeyForWeapon(weaponItem);
   const { band } = targetToken ? calcRangeBandAndMod(weaponItem, distance, { ammoKey: selectedAmmoKey }) : { band: "Indirect" };
   const dialogImprovedTargeting = getImprovedTargetingQuirkModifier(actor, band);
+  const dialogStealthTargeting = getStealthArmorTargetModifier(targetToken?.actor, band);
 
   const autoTargetMove = targetToken ? getAutoTargetMoveData(targetToken) : { moved: 0, mod: 0 };
   const dialogStatusMods = targetToken ? getStatusTNMods(attackerTok, targetToken) : { total: 0, details: [] };
-  const dialogEnvMods = getEnvironmentTNMods(weaponItem);
+  const dialogEnvMods = getEnvironmentTNMods(weaponItem, canvas?.scene ?? game?.scenes?.active, targetToken);
   const dialogLosWoodsMods = targetToken ? getLineOfSightWoodsMods(attackerTok, targetToken) : { mod: 0, blocked: false, details: [] };
   const dialogLosCoverMods = targetToken ? getLineOfSightCoverMods(attackerTok, targetToken) : { partialCover: false, blocked: false, mod: 0, targetWaterDepth: 0, details: [] };
   const targetHasStatusPartialCover = targetToken ? tokenHasStatus(targetToken, "partial-cover") : false;
@@ -8164,6 +8812,14 @@ export async function promptAndRollWeaponAttack(actor, weaponItem, { defaultSide
   const dialogAttackerMoveMod = getAutoAttackerMoveMod(actor, attackerTok).mod;
   const dialogTargetMoveMod = autoTargetMove.mod;
   const dialogHeatFireMod = num(actor.system?.heat?.effects?.fireMod, 0);
+  const dialogVehicleCrit = isVehicleActor(actor) ? (actor.system?.crit ?? {}) : {};
+  const dialogVehicleWeaponLoc = _normalizeVehicleWeaponLocation(weaponItem.system?.loc);
+  const dialogVehicleCommanderMod = isVehicleActor(actor) && dialogVehicleCrit.commanderHit ? 1 : 0;
+  const dialogVehicleSensorMod = isVehicleActor(actor) ? Math.min(4, Math.max(0, Number(dialogVehicleCrit.sensorHits ?? 0) || 0)) : 0;
+  const dialogVehicleStabilizerMod = isVehicleActor(actor) && dialogVehicleWeaponLoc && dialogVehicleCrit.location?.[dialogVehicleWeaponLoc]
+    ? dialogAttackerMoveMod
+    : 0;
+  const dialogVehicleCriticalMod = dialogVehicleCommanderMod + dialogVehicleSensorMod + dialogVehicleStabilizerMod;
   const dialogBaseWithoutRange = dialogBaseTN
     + dialogEnvMods.mod
     + dialogLosWoodsMods.mod
@@ -8174,9 +8830,10 @@ export async function promptAndRollWeaponAttack(actor, weaponItem, { defaultSide
     + dialogAttackerMoveMod
     + dialogTargetMoveMod
     + dialogHeatFireMod
-    + dialogAccurateWeapon.mod;
+    + dialogAccurateWeapon.mod
+    + dialogVehicleCriticalMod;
   const dialogRangeMod = num(calcRangeBandAndMod(weaponItem, distance, { ammoKey: selectedAmmoKey }).mod, 0);
-  const dialogTN = dialogBaseWithoutRange + dialogRangeMod + dialogImprovedTargeting.mod;
+  const dialogTN = dialogBaseWithoutRange + dialogRangeMod + dialogImprovedTargeting.mod + dialogStealthTargeting.mod;
 
   const isSpecialDesignationAttack = isTAGWeapon(weaponItem) || isArrowIVSystemWeapon(weaponItem);
   const rapidFireRating = isSpecialDesignationAttack ? 1 : getRapidFireRating(weaponItem);
@@ -8190,7 +8847,11 @@ export async function promptAndRollWeaponAttack(actor, weaponItem, { defaultSide
   if (dialogMRMTNMod) mods.push({ label: "MRM Unguided", value: dialogMRMTNMod });
   if (dialogPulseLaserTNMod) mods.push({ label: "Pulse Laser", value: dialogPulseLaserTNMod });
   if (dialogAccurateWeapon.applied) mods.push({ label: "Accurate Weapon Quirk", value: dialogAccurateWeapon.mod });
+  if (dialogVehicleCommanderMod) mods.push({ label: "Commander Hit", value: dialogVehicleCommanderMod });
+  if (dialogVehicleSensorMod) mods.push({ label: `Sensor Hits (${dialogVehicleSensorMod})`, value: dialogVehicleSensorMod });
+  if (dialogVehicleStabilizerMod) mods.push({ label: `${String(dialogVehicleWeaponLoc).toUpperCase()} Stabilizer`, value: dialogVehicleStabilizerMod });
   if (dialogImprovedTargeting.applied) mods.push({ label: `Improved Targeting (${band})`, value: dialogImprovedTargeting.mod });
+  if (dialogStealthTargeting.applied) mods.push({ label: `Target Stealth Armor (${band})`, value: dialogStealthTargeting.mod });
   if (firingArcInfo.applies && !firingArcInfo.legal) {
     const mountLabel = firingArcInfo.rearMounted ? "Rear-mounted" : `${firingArcInfo.mount?.locLabel ?? "Unknown"} mounted`;
     blockedNotes.push(`${mountLabel} weapon cannot fire into the ${String(firingArcInfo.side ?? "unknown").toUpperCase()} arc. Allowed: ${firingArcInfo.allowedLabel}.`);
@@ -8205,10 +8866,13 @@ export async function promptAndRollWeaponAttack(actor, weaponItem, { defaultSide
     weaponItem,
     distance,
     dialogBaseWithoutRange,
-    improvedTargetingBands
+    improvedTargetingBands,
+    targetToken?.actor
   );
   const selectedAmmoRange = targetToken ? calcRangeBandAndMod(weaponItem, distance, { ammoKey: selectedAmmoKey }) : { band: "Indirect", mod: 0 };
   const dialogSnubNosePPCProfile = targetToken ? getSnubNosePPCProfile(weaponItem, distance) : null;
+  const buildingTargetOptions = getBuildingTargetOptions(targetToken?.actor);
+  const showBuildingTargeting = isBuildingActor(targetToken?.actor);
 
   ensureAttackDialogHandlebarsHelpers();
   const dialogHtml = await renderTemplate(VEHICLE_ATTACK_TEMPLATE, {
@@ -8240,8 +8904,13 @@ export async function promptAndRollWeaponAttack(actor, weaponItem, { defaultSide
     selectedRangeMod: num(selectedAmmoRange.mod, 0),
     selectedRangeBand: selectedAmmoRange.band ?? band,
     improvedTargetingBands: improvedTargetingBands.join(","),
+    stealthTargetActive: dialogStealthTargeting.applied,
     baseTNWithoutRange: dialogBaseTN + dialogEnvMods.mod + dialogLosWoodsMods.mod + dialogTerrainCoverMod + dialogStatusMods.total + dialogHeatFireMod + dialogMRMTNMod + dialogPulseLaserTNMod + dialogAccurateWeapon.mod,
-    autoAttackerMoveMod: dialogAttackerMoveMod
+    autoAttackerMoveMod: dialogAttackerMoveMod,
+    showBuildingTargeting,
+    buildingHexOptions: buildingTargetOptions.hexes,
+    buildingLevelOptions: buildingTargetOptions.levels,
+    buildingExpandedCF: buildingTargetOptions.expanded
   });
 
 
@@ -8272,7 +8941,13 @@ export async function promptAndRollWeaponAttack(actor, weaponItem, { defaultSide
               ammoKey: String(fd.get("ammoKey") ?? selectedAmmoKey ?? ""),
               weaponFireKey,
               weaponMountLoc,
-              weaponRearMounted
+              weaponRearMounted,
+              buildingTarget: showBuildingTargeting ? {
+                hexIndex: num(fd.get("buildingHexIndex"), 0),
+                level: num(fd.get("buildingLevel"), 1),
+                aimed: fd.get("buildingAimed") === "on",
+                fromInside: fd.get("buildingFromInside") === "on"
+              } : null
             };
             if (isArrowIVAttack && fd.get("arrowIVIndirect") === "on") {
               const result = await scheduleArrowIVIndirectAttack(actor, weaponItem, { ...opts, attackerToken: attackerTok });
@@ -8609,7 +9284,7 @@ export async function rollPunchAttack(actor, opts = {}) {
       try {
         let r;
         if (isVehicleTarget) {
-          const crit = locResult?.critTrigger ? { trigger: true, tableLoc: locResult.critTableLoc } : null;
+          const crit = getVehicleLocationDamageEffects(locResult);
           r = await applyDamageToVehicleActorAuto(targetActor, locResult.loc, damage, { attackSide: side, crit });
         } else {
           r = await applyDamageToTargetActorAuto(targetActor, locResult.loc, damage, { side });
@@ -8953,7 +9628,7 @@ export async function rollKickAttack(actor, opts = {}) {
       try {
         let r;
         if (isVehicleTarget) {
-          const crit = locResult?.critTrigger ? { trigger: true, tableLoc: locResult.critTableLoc } : null;
+          const crit = getVehicleLocationDamageEffects(locResult);
           r = await applyDamageToVehicleActorAuto(targetActor, locResult.loc, damage, { attackSide: side, crit });
         } else {
           r = await applyDamageToTargetActorAuto(targetActor, locResult.loc, damage, { side });

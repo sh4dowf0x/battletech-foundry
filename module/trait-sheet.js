@@ -1,6 +1,12 @@
 // module/trait-sheet.js
 // Item sheet for Trait items (type: "trait")
 
+import {
+  getNaturalAptitudeKind,
+  getNaturalAptitudeSelectedSkill,
+  getNaturalAptitudeSkillChoices
+} from "./natural-aptitude.js";
+
 const SYSTEM_ID = "atow-battletech";
 const TEMPLATE = `systems/${SYSTEM_ID}/templates/trait-sheet.hbs`;
 
@@ -67,6 +73,19 @@ export class ATOWTraitSheet extends HandlebarsApplicationMixin(ItemSheetV2) {
       xp,
       threshold,
       active
+    };
+
+    const naturalAptitudeKind = getNaturalAptitudeKind(item);
+    const selectedSkill = getNaturalAptitudeSelectedSkill(item);
+    context.naturalAptitude = {
+      enabled: Boolean(naturalAptitudeKind),
+      kind: naturalAptitudeKind,
+      categoryLabel: naturalAptitudeKind === "advanced" ? "Advanced" : "Basic",
+      selectedSkill,
+      skillChoices: getNaturalAptitudeSkillChoices(item).map(choice => ({
+        ...choice,
+        selected: choice.value === selectedSkill.toLowerCase()
+      }))
     };
 
     return context;

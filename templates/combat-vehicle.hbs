@@ -135,12 +135,18 @@
                 </div>
 
                 {{#each vehicleWeapons as |w|}}
-                  <div class="cv-we-row" data-item-id="{{w._id}}" data-item-uuid="{{w.itemUuid}}" draggable="true">
+                  <div class="cv-we-row {{#if w.isDestroyed}}is-destroyed{{else}}{{#if w.isMalfunctioned}}is-malfunctioned{{/if}}{{/if}}" data-item-id="{{w._id}}" data-item-uuid="{{w.itemUuid}}" draggable="true">
                     <div class="cv-we-col type">{{w.name}}</div>
-                    <div class="cv-we-col loc">{{w.system.loc}}</div>
+                    <div class="cv-we-col loc">
+                      <select class="cv-weapon-location" data-item-id="{{w._id}}" aria-label="{{w.name}} location" title="Weapon mounting location">
+                        <option value="">—</option>
+                        {{selectOptions ../weaponLocationOptions selected=w.locationKey}}
+                      </select>
+                    </div>
                     <div class="cv-we-col dmg">{{w.system.damage}}</div>
                     <div class="cv-we-col range">{{w.system.range.min}}/{{w.system.range.short}}/{{w.system.range.medium}}/{{w.system.range.long}}</div>
                     <div class="cv-we-col ctrl">
+                      {{#if w.isDestroyed}}<span class="cv-weapon-state" title="Destroyed">DEST</span>{{else}}{{#if w.isMalfunctioned}}<button type="button" class="cv-weapon-state cv-clear-malfunction" data-action="clear-vehicle-weapon-malfunction" data-item-id="{{w._id}}" title="Spend the Weapon Attack Phase to clear this malfunction"><i class="fas fa-wrench"></i></button>{{/if}}{{/if}}
                       <a class="item-delete" title="Delete">X</a>
                     </div>
                   </div>
@@ -313,10 +319,21 @@
             {{else}}
             <div class="cv-crit-grid">
               <div class="cv-crit-col">
+                {{#if hasTurret}}
                 <label class="cv-check">
                   <input type="checkbox" name="system.crit.turretLocked" {{checked system.crit.turretLocked}} />
                   <span>Turret Locked</span>
                 </label>
+                <div class="cv-inline">
+                  <label class="cv-check">
+                    <input type="checkbox" name="system.crit.turretJammed" {{checked system.crit.turretJammed}} />
+                    <span>Turret Jammed</span>
+                  </label>
+                  {{#if system.crit.turretJammed}}
+                    <button type="button" class="cv-small-action" data-action="clear-vehicle-turret-jam" title="Spend the Weapon Attack Phase to clear the turret jam"><i class="fas fa-wrench"></i> Clear</button>
+                  {{/if}}
+                </div>
+                {{/if}}
 
                 <div class="cv-field">
                   <label>Sensor Hits</label>
@@ -330,7 +347,7 @@
                 </div>
 
                 <div class="cv-field">
-                  <label>Motive Hits</label>
+                  <label>Motive Severity</label>
                   <div class="cv-track">
                     {{#each critTracks.motive as |p|}}
                       <span class="cv-track-box {{#if p.filled}}filled{{/if}}" data-track="crit.motiveHits" data-value="{{p.n}}">
@@ -338,6 +355,11 @@
                       </span>
                     {{/each}}
                   </div>
+                </div>
+
+                <div class="cv-field">
+                  <label>Driving Modifier</label>
+                  <input name="system.crit.motiveDrivingMod" type="number" value="{{system.crit.motiveDrivingMod}}" min="0" max="6" readonly />
                 </div>
               </div>
 
@@ -348,21 +370,12 @@
                 </label>
 
                 <div class="cv-field">
-                  <label>Stabilizers</label>
-                  <div class="cv-inline cv-inline-checks">
-                    <label class="cv-check">
-                      <input type="checkbox" name="system.crit.stabilizerLeft" {{checked system.crit.stabilizerLeft}} />
-                      <span>Left</span>
-                    </label>
-                    <label class="cv-check">
-                      <input type="checkbox" name="system.crit.stabilizerRight" {{checked system.crit.stabilizerRight}} />
-                      <span>Right</span>
-                    </label>
-                  </div>
+                  <label>Crew Stunned Turns</label>
+                  <input name="system.crit.crewStunnedTurns" type="number" value="{{system.crit.crewStunnedTurns}}" min="0" />
                 </div>
 
                 <div class="cv-field">
-                  <label>Location Hits</label>
+                  <label>Weapon Stabilizers</label>
                   <div class="cv-inline cv-inline-checks">
                     <label class="cv-check">
                       <input type="checkbox" name="system.crit.location.front" {{checked system.crit.location.front}} />
@@ -380,10 +393,12 @@
                       <input type="checkbox" name="system.crit.location.right" {{checked system.crit.location.right}} />
                       <span>Right</span>
                     </label>
-                    <label class="cv-check">
-                      <input type="checkbox" name="system.crit.location.turret" {{checked system.crit.location.turret}} />
-                      <span>Turret</span>
-                    </label>
+                    {{#if hasTurret}}
+                      <label class="cv-check">
+                        <input type="checkbox" name="system.crit.location.turret" {{checked system.crit.location.turret}} />
+                        <span>Turret</span>
+                      </label>
+                    {{/if}}
                   </div>
                 </div>
               </div>
@@ -393,38 +408,20 @@
         </div>
 
         <div class="cv-col cv-col-right">
+          {{#unless isVTOL}}
+          <section class="cv-panel cv-vehicle-options">
+            <h3>Vehicle Options</h3>
+            <div class="cv-vehicle-options-row">
+              <label class="cv-check" title="Disable for vehicles that do not mount a turret.">
+                <input type="checkbox" name="system.vehicle.options.turret" {{checked hasTurret}} />
+                <span>Turret</span>
+              </label>
+            </div>
+          </section>
+          {{/unless}}
+
           <section class="cv-panel cv-panel-crit-grid">
             <h3>Armor Diagram</h3>
-
-            <div class="cv-armor-controls">
-              <div class="cv-armor-control">
-                <label>Front</label>
-                <input class="cv-armor-max" name="system.armor.front.max" type="number" value="{{armor.front.max}}" min="0" />
-              </div>
-              <div class="cv-armor-control">
-                <label>Left</label>
-                <input class="cv-armor-max" name="system.armor.left.max" type="number" value="{{armor.left.max}}" min="0" />
-              </div>
-              <div class="cv-armor-control">
-                <label>Right</label>
-                <input class="cv-armor-max" name="system.armor.right.max" type="number" value="{{armor.right.max}}" min="0" />
-              </div>
-              <div class="cv-armor-control">
-                <label>Rear</label>
-                <input class="cv-armor-max" name="system.armor.rear.max" type="number" value="{{armor.rear.max}}" min="0" />
-              </div>
-              {{#if isVTOL}}
-                <div class="cv-armor-control">
-                  <label>Rotors</label>
-                  <input class="cv-armor-max" name="system.armor.rotor.max" type="number" value="{{armor.rotor.max}}" min="0" />
-                </div>
-              {{else}}
-                <div class="cv-armor-control">
-                  <label>Turret</label>
-                  <input class="cv-armor-max" name="system.armor.turret.max" type="number" value="{{armor.turret.max}}" min="0" />
-                </div>
-              {{/if}}
-            </div>
 
             {{#if isVTOL}}
               <div class="cv-vtol-structure-summary">
@@ -434,6 +431,7 @@
 
             <div class="cv-armor-diagram{{#if isVTOL}} cv-vtol-diagram{{/if}}">
               <div class="cv-armor-loc cv-armor-front">
+                <input class="cv-armor-diagram-input" name="system.armor.front.max" type="number" value="{{armor.front.max}}" min="0" aria-label="Front armor" title="Front armor" />
                 <div class="cv-armor-pips">
                   {{#each armor.front.pips as |p|}}
                     <span class="cv-armor-pip {{#if p.filled}}filled{{/if}}" data-loc="front" data-pip="{{p.n}}"></span>
@@ -442,6 +440,7 @@
               </div>
 
               <div class="cv-armor-loc cv-armor-left">
+                <input class="cv-armor-diagram-input" name="system.armor.left.max" type="number" value="{{armor.left.max}}" min="0" aria-label="Left armor" title="Left armor" />
                 <div class="cv-armor-pips">
                   {{#each armor.left.pips as |p|}}
                     <span class="cv-armor-pip {{#if p.filled}}filled{{/if}}" data-loc="left" data-pip="{{p.n}}"></span>
@@ -451,6 +450,7 @@
 
               {{#if isVTOL}}
                 <div class="cv-armor-loc cv-armor-rotor-left">
+                  <input class="cv-armor-diagram-input" name="system.armor.rotor.max" type="number" value="{{armor.rotor.max}}" min="0" aria-label="Rotor armor" title="Rotor armor" />
                   <div class="cv-armor-pips">
                     {{#each armor.rotor.leftPips as |p|}}
                       <span class="cv-armor-pip {{#if p.filled}}filled{{/if}}" data-loc="rotor" data-pip="{{p.n}}"></span>
@@ -465,16 +465,20 @@
                   </div>
                 </div>
               {{else}}
+                {{#if hasTurret}}
                 <div class="cv-armor-loc cv-armor-turret">
+                  <input class="cv-armor-diagram-input" name="system.armor.turret.max" type="number" value="{{armor.turret.max}}" min="0" aria-label="Turret armor" title="Turret armor" />
                   <div class="cv-armor-pips">
                     {{#each armor.turret.pips as |p|}}
                       <span class="cv-armor-pip {{#if p.filled}}filled{{/if}}" data-loc="turret" data-pip="{{p.n}}"></span>
                     {{/each}}
                   </div>
                 </div>
+                {{/if}}
               {{/if}}
 
               <div class="cv-armor-loc cv-armor-right">
+                <input class="cv-armor-diagram-input" name="system.armor.right.max" type="number" value="{{armor.right.max}}" min="0" aria-label="Right armor" title="Right armor" />
                 <div class="cv-armor-pips">
                   {{#each armor.right.pips as |p|}}
                     <span class="cv-armor-pip {{#if p.filled}}filled{{/if}}" data-loc="right" data-pip="{{p.n}}"></span>
@@ -483,6 +487,7 @@
               </div>
 
               <div class="cv-armor-loc cv-armor-rear">
+                <input class="cv-armor-diagram-input" name="system.armor.rear.max" type="number" value="{{armor.rear.max}}" min="0" aria-label="Rear armor" title="Rear armor" />
                 <div class="cv-armor-pips">
                   {{#each armor.rear.pips as |p|}}
                     <span class="cv-armor-pip {{#if p.filled}}filled{{/if}}" data-loc="rear" data-pip="{{p.n}}"></span>
@@ -515,11 +520,13 @@
                   {{/each}}
                 </div>
               {{else}}
+                {{#if hasTurret}}
                 <div class="cv-structure-loc cv-structure-turret">
                   {{#each structure.turret.pips as |p|}}
                     <span class="cv-structure-pip {{#if p.filled}}filled{{/if}}" data-loc="turret" data-pip="{{p.n}}"></span>
                   {{/each}}
                 </div>
+                {{/if}}
               {{/if}}
 
               <div class="cv-structure-loc cv-structure-rear">

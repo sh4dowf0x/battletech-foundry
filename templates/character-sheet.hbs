@@ -91,10 +91,9 @@
             <div class="personal-field">
               <label>Edge</label>
               <div class="personal-track-input">
-                <input name="system.edge.value" type="number" value="{{system.edge.value}}" />
+                <input name="system.edge.value" type="number" value="{{edgeResource.value}}" min="0" max="{{edgeResource.max}}" title="Current spendable Edge" />
                 <span class="slash">/</span>
-                <input name="system.edge.max" type="number" value="{{system.edge.max}}" disabled title="Max Edge is derived from EDG" />
-                <input type="hidden" name="system.edge.max" value="{{system.edge.max}}" />
+                <input type="number" value="{{edgeResource.max}}" disabled title="Maximum Edge is derived from the EDG attribute" />
               </div>
             </div>
 

@@ -7,6 +7,9 @@ import { getCharacterWeaponMagazine, promptAndRollCharacterWeaponAttack } from "
 import { SKILL_CLASSIFICATION_REFERENCE_VERSION, getEffectiveSkillClassification, getReferencedSkillClassification } from "./skill-classifications.js";
 import { getCharacterWeaponResourceProfile } from "./character-weapon-types.js";
 import { getCharacterPowerPackCapacity, getSelectedCharacterPowerPack } from "./character-power.js";
+import { NATURAL_APTITUDE_DICE_FORMULA, getActiveNaturalAptitude } from "./natural-aptitude.js";
+import { getCharacterEdgeResource, refundCharacterEdge, spendCharacterEdge } from "./character-edge.js";
+import { promptCharacterSkillRoll } from "./character-skill-roll.js";
 
 const SYSTEM_ID = "atow-battletech";
 // NOTE: v2 sheet uses its own template file.
@@ -715,6 +718,16 @@ export class ATOWCharacterSheet extends HandlebarsApplicationMixin(ActorSheetV2)
       earnedTotal: Number(sys.xp?.total ?? 0) || 0
     };
 
+    // Edge is a spendable current pool with a permanent maximum derived from
+    // the EDG attribute.  Build the display from the live attribute value so
+    // it never depends on a stale stored system.edge.max value.
+    const derivedEdge = computeDerivedEdge(this.actor);
+    const currentEdgeRaw = Number(sys.edge?.value ?? derivedEdge.edgeMax);
+    context.edgeResource = {
+      value: Math.min(derivedEdge.edgeMax, Math.max(0, Number.isFinite(currentEdgeRaw) ? currentEdgeRaw : derivedEdge.edgeMax)),
+      max: derivedEdge.edgeMax
+    };
+
     // Derived movement display values (computed; not editable)
     context.derivedMove = computeDerivedMove(this.actor);
     context.movementStatus = buildMovementStatusForActor(this.actor, context.derivedMove);
@@ -979,8 +992,9 @@ export class ATOWCharacterSheet extends HandlebarsApplicationMixin(ActorSheetV2)
     const update = {};
     if (edgeMax !== curMax) update["system.edge.max"] = edgeMax;
 
-    // Clamp current edge to new max
+    // Clamp the spendable pool into the range allowed by the EDG attribute.
     if (curVal > edgeMax) update["system.edge.value"] = edgeMax;
+    else if (curVal < 0) update["system.edge.value"] = 0;
 
     // Ensure min exists (schema has it, but be safe)
     if (this.actor.system?.edge?.min === undefined) update["system.edge.min"] = 0;
@@ -1635,10 +1649,43 @@ export class ATOWCharacterSheet extends HandlebarsApplicationMixin(ActorSheetV2)
     const totalLink = links.reduce((sum, l) => sum + l.link, 0);
     const linkLabel = links.length ? links.map(l => l.label).join(" / ") : "";
 
-    const modifier = rank + totalLink;
-
     const tnRaw = Number(skill.system?.tn);
-    const tn = Number.isFinite(tnRaw) ? tnRaw : undefined;
+    let tn = Number.isFinite(tnRaw) ? tnRaw : undefined;
+    if (tn === undefined) {
+      try { tn = Number(game.settings.get(SYSTEM_ID, "defaultTN")); } catch (_) { tn = 8; }
+    }
+
+    const naturalAptitude = getActiveNaturalAptitude(actor, skill);
+    const diceFormula = naturalAptitude ? NATURAL_APTITUDE_DICE_FORMULA : "2d6";
+    const actionState = getCharacterActionState(actor, { tokenDocument });
+    const actionLabel = actionType === "complex" ? "Complex" : "Simple";
+    const actionSelection = await promptCharacterSkillRoll({
+      actorName: actor.name,
+      skillName: skill.name,
+      classificationCode: classification.code,
+      actionLabel,
+      rankModifier: rank,
+      linkModifier: totalLink,
+      linkLabel: linkLabel || "No Attribute Link",
+      baseModifier: rank + totalLink,
+      targetNumber: Number.isFinite(tn) ? tn : 8,
+      edgeCurrent: getCharacterEdgeResource(actor).value,
+      naturalAptitude: Boolean(naturalAptitude),
+      diceLabel: naturalAptitude ? "3d6, keep highest 2" : "2d6",
+      actionsUsed: actionState.used[actionType],
+      actionsRemaining: actionState.remaining[actionType],
+      actionLimit: actionState.limits[actionType]
+    });
+    if (!actionSelection) return null;
+
+    // Recheck after the dialog has been open in case another action was spent.
+    if (tracksCombatAction) {
+      const actionCheck = canSpendCharacterAction(actor, actionType, { tokenDocument });
+      if (!actionCheck.ok) {
+        ui.notifications?.warn?.(`Cannot use ${skill.name}: ${actionCheck.reason}`);
+        return null;
+      }
+    }
 
     let actionSpend = null;
     if (tracksCombatAction) {
@@ -1652,22 +1699,60 @@ export class ATOWCharacterSheet extends HandlebarsApplicationMixin(ActorSheetV2)
       }
     }
 
-    const flavor = `${skill.name} (${classification.code}, Rank ${rank}${linkLabel ? `, ${linkLabel} Link ${totalLink}` : ""})`;
+    const edgeSpend = await spendCharacterEdge(actor, actionSelection.edgePoints, { label: `Skill: ${skill.name}` });
+    if (!edgeSpend.ok) {
+      if (actionSpend?.ok) await refundCharacterAction(actor, actionType, { tokenDocument }).catch(() => {});
+      ui.notifications?.warn?.(edgeSpend.reason ?? "Could not spend Edge.");
+      return null;
+    }
+
+    const edgeBonus = edgeSpend.spent * 2;
+    const modifier = actionSelection.rankModifier
+      + actionSelection.linkModifier
+      + actionSelection.customModifier
+      + edgeBonus;
+    tn = actionSelection.targetNumber;
+    const aptitudeLabel = naturalAptitude ? ` | Natural Aptitude (${naturalAptitude.name}): 3d6, keep highest 2` : "";
+    const edgeLabel = edgeSpend.spent ? ` | Edge ${edgeSpend.spent} (+${edgeBonus})` : "";
+    const customLabel = actionSelection.customModifier ? ` | Custom ${actionSelection.customModifier > 0 ? "+" : ""}${actionSelection.customModifier}` : "";
+    const flavor = `${skill.name} (${classification.code}, Rank Mod ${actionSelection.rankModifier}${linkLabel ? `, ${linkLabel} Link ${actionSelection.linkModifier}` : ""})${customLabel}${edgeLabel}${aptitudeLabel}`;
+    const messageFlags = {
+      [SYSTEM_ID]: {
+        characterSkillRoll: {
+          version: 1,
+          actorUuid: actor.uuid,
+          actorId: actor.id,
+          skillId: skill.id,
+          skillName: skill.name,
+          classificationCode: classification.code,
+          diceFormula,
+          modifier,
+          targetNumber: tn,
+          baseFlavor: flavor,
+          originalFlavor: flavor,
+          postEdgeBonus: 0,
+          rerollCount: 0,
+          superseded: false
+        }
+      }
+    };
     try {
       const api = game[SYSTEM_ID]?.api;
       if (api?.rollCheck) {
-        return await api.rollCheck({ actor, label: skill.name, modifier, tn, flavor });
+        return await api.rollCheck({ actor, label: skill.name, modifier, tn, flavor, diceFormula, messageFlags });
       }
 
-      const roll = await new Roll(`2d6 + ${modifier}`).evaluate();
+      const roll = await new Roll(`${diceFormula} + ${modifier}`).evaluate();
       return await roll.toMessage({
         speaker: ChatMessage.getSpeaker({ actor }),
-        flavor
+        flavor,
+        flags: messageFlags
       });
     } catch (error) {
       if (actionSpend?.ok) {
         await refundCharacterAction(actor, actionType, { tokenDocument }).catch(() => {});
       }
+      if (edgeSpend.spent) await refundCharacterEdge(actor, edgeSpend.spent).catch(() => {});
       console.error(`${SYSTEM_ID} | Character skill roll failed`, error);
       ui.notifications?.error?.(`Could not roll ${skill.name}.`);
       return null;

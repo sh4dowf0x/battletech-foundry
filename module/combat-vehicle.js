@@ -1,7 +1,7 @@
 // module/combat-vehicle.js
 // Combat vehicle actor sheet for AToW Battletech.
 
-import { markVTOLDefeated, promptAndRollWeaponAttack } from "./mech-attack.js";
+import { applyVehicleCritical, markVehicleDefeated, markVTOLDefeated, promptAndRollWeaponAttack, syncVehicleCriticalStatuses } from "./mech-attack.js";
 
 const SYSTEM_ID = "atow-battletech";
 const TEMPLATE = `systems/${SYSTEM_ID}/templates/combat-vehicle.hbs`;
@@ -29,9 +29,9 @@ const VTOL_ARMOR_KEYS = [
 
 const MOVEMENT_TYPE_OPTIONS = ["Tracked", "Wheeled", "Hovercraft"];
 const CREW_HIT_MAX = 2;
-const SENSOR_HIT_MAX = 2;
+const SENSOR_HIT_MAX = 4;
 const MOTIVE_HIT_MAX = 4;
-const TONNAGE_OPTIONS = Array.from({ length: 17 }, (_, i) => 20 + (i * 5));
+const TONNAGE_OPTIONS = Array.from({ length: 20 }, (_, i) => 5 + (i * 5));
 const VTOL_TONNAGE_OPTIONS = Array.from({ length: 20 }, (_, i) => 5 + (i * 5));
 const VEHICLE_EQUIPMENT_TYPES = new Set(["mechEquipment", "equipment", "gear", "ammo"]);
 const PROCESSED_DROP_EVENTS = new WeakSet();
@@ -164,6 +164,16 @@ function parseAmmoDropItem(item) {
     name: ammoType || key,
     amount
   };
+}
+
+function normalizeVehicleWeaponLocation(value) {
+  const raw = String(value ?? "").trim().toLowerCase();
+  if (/\bturret\b/.test(raw)) return "turret";
+  if (/\bfront\b|\bfore\b|\bnose\b/.test(raw)) return "front";
+  if (/\brear\b|\bback\b|\baft\b/.test(raw)) return "rear";
+  if (/\bleft\b|\bport\b/.test(raw)) return "left";
+  if (/\bright\b|\bstarboard\b/.test(raw)) return "right";
+  return "";
 }
 
 function buildAmmoBinsFromEquipmentItems(items, savedBins = {}) {
@@ -325,11 +335,14 @@ export class ATOWCombatVehicleSheet extends HandlebarsApplicationMixin(ActorShee
     const context = await super._prepareContext(options);
     const system = this.actor.system ?? {};
     const isVTOL = String(this.actor?.type ?? "").toLowerCase() === "vtol";
+    // Existing combat vehicles predate vehicle options, so an absent value
+    // retains the original turreted behavior.
+    const hasTurret = !isVTOL && system?.vehicle?.options?.turret !== false;
     const armorKeys = isVTOL ? VTOL_ARMOR_KEYS : ARMOR_KEYS;
     const tonnage = Number(system?.vehicle?.tonnage ?? 0) || 0;
     const structurePerLoc = isVTOL
       ? Math.max(1, Math.ceil(tonnage / 10))
-      : Math.max(0, Math.floor(tonnage / 10));
+      : (tonnage > 0 ? Math.max(1, Math.floor(tonnage / 10)) : 0);
 
     const armor = {};
     for (const loc of armorKeys) {
@@ -374,7 +387,10 @@ export class ATOWCombatVehicleSheet extends HandlebarsApplicationMixin(ActorShee
         name: i.name ?? "",
         sort: Number(i.sort ?? 0) || 0,
         system: i.system ?? {},
-        itemUuid: i.uuid ?? ""
+        itemUuid: i.uuid ?? "",
+        locationKey: normalizeVehicleWeaponLocation(i.system?.loc),
+        isDestroyed: Boolean(i.system?.destroyed),
+        isMalfunctioned: Boolean(i.system?.vehicleMalfunctioned)
       }))
       .sort((a, b) => (Number(a.sort ?? 0) - Number(b.sort ?? 0)) || String(a.name ?? "").localeCompare(String(b.name ?? ""), undefined, { sensitivity: "base" }));
 
@@ -410,6 +426,7 @@ export class ATOWCombatVehicleSheet extends HandlebarsApplicationMixin(ActorShee
     context.actor = this.actor;
     context.system = system;
     context.isVTOL = isVTOL;
+    context.hasTurret = hasTurret;
     context.vehicleKindLabel = isVTOL ? "VTOL" : "Combat Vehicle";
     context.hideThirdColumn = this._hideThirdColumn === true;
     context.tonnageOptions = (isVTOL ? VTOL_TONNAGE_OPTIONS : TONNAGE_OPTIONS).reduce((acc, t) => {
@@ -424,6 +441,9 @@ export class ATOWCombatVehicleSheet extends HandlebarsApplicationMixin(ActorShee
     context.armor = armor;
     context.structure = structure;
     context.vehicleWeapons = vehicleWeapons;
+    context.weaponLocationOptions = isVTOL
+      ? { front: "Front", left: "Left Side", right: "Right Side", rear: "Rear" }
+      : { front: "Front", left: "Left Side", right: "Right Side", rear: "Rear", ...(hasTurret ? { turret: "Turret" } : {}) };
     context.vehicleEquipment = vehicleEquipment;
     context.hasVehicleEquipment = vehicleEquipment.length > 0;
     context.ammoBins = ammoBins;
@@ -538,6 +558,19 @@ export class ATOWCombatVehicleSheet extends HandlebarsApplicationMixin(ActorShee
       if (row.getAttribute("draggable") === "true") {
         row.addEventListener("dragstart", (event) => this._onWeaponDragStart(event));
       }
+    });
+
+    root.querySelectorAll(".cv-weapon-location[data-item-id]").forEach((select) => {
+      if (select.dataset.atowBound === "1") return;
+      select.dataset.atowBound = "1";
+      select.addEventListener("click", (event) => event.stopPropagation());
+      select.addEventListener("change", (event) => this._onWeaponLocationChange(event));
+    });
+
+    root.querySelectorAll("[data-action='clear-vehicle-weapon-malfunction'], [data-action='clear-vehicle-turret-jam']").forEach((button) => {
+      if (button.dataset.atowBound === "1") return;
+      button.dataset.atowBound = "1";
+      button.addEventListener("click", (event) => this._onClearVehicleMalfunction(event));
     });
 
     root.querySelectorAll(".cv-armor-pip").forEach((el) => {
@@ -741,8 +774,44 @@ export class ATOWCombatVehicleSheet extends HandlebarsApplicationMixin(ActorShee
 
   _onWeaponRowClick(event) {
     if (event?.button === 2) return;
-    if (event.target?.closest?.(".item-delete")) return;
+    if (event.target?.closest?.(".item-delete, select, input, button")) return;
     return this._onWeaponAttack(event);
+  }
+
+  async _onWeaponLocationChange(event) {
+    event.preventDefault();
+    event.stopPropagation?.();
+    const select = event.currentTarget;
+    const item = this.actor.items.get(String(select?.dataset?.itemId ?? ""));
+    if (!item) return;
+    await item.update({ "system.loc": String(select.value ?? "").toLowerCase() });
+    this.render(false);
+  }
+
+  async _onClearVehicleMalfunction(event) {
+    event.preventDefault();
+    event.stopPropagation?.();
+    const action = String(event.currentTarget?.dataset?.action ?? "");
+    const stamp = game.combat?.started
+      ? `${game.combat.id}:${game.combat.round ?? 0}:${game.combat.turn ?? 0}`
+      : `outside-combat:${Date.now()}`;
+    if (game.combat?.started && this.actor.system?.crit?.weaponAttackPhaseUsedStamp === stamp) {
+      ui.notifications?.warn?.("This vehicle has already spent its Weapon Attack Phase clearing a malfunction.");
+      return;
+    }
+
+    if (action === "clear-vehicle-weapon-malfunction") {
+      const item = this.actor.items.get(String(event.currentTarget?.dataset?.itemId ?? ""));
+      if (!item?.system?.vehicleMalfunctioned) return;
+      await item.update({ "system.vehicleMalfunctioned": false });
+    } else if (action === "clear-vehicle-turret-jam") {
+      await this.actor.update({ "system.crit.turretJammed": false });
+    } else return;
+
+    await this.actor.update({ "system.crit.weaponAttackPhaseUsedStamp": stamp });
+    await syncVehicleCriticalStatuses(this.actor);
+    ui.notifications?.info?.("Malfunction cleared; this vehicle may not make weapon attacks during this Weapon Attack Phase.");
+    this.render(false);
   }
 
   _onWeaponRowContext(event) {
@@ -828,7 +897,7 @@ export class ATOWCombatVehicleSheet extends HandlebarsApplicationMixin(ActorShee
     const isVTOL = String(this.actor?.type ?? "").toLowerCase() === "vtol";
     const max = isVTOL
       ? Math.max(1, Math.ceil(tonnage / 10))
-      : Math.max(0, Math.floor(tonnage / 10));
+      : (tonnage > 0 ? Math.max(1, Math.floor(tonnage / 10)) : 0);
     const structLoc = this.actor.system?.structure?.[loc] ?? {};
     const current = Number(structLoc.dmg ?? 0);
 
@@ -844,11 +913,16 @@ export class ATOWCombatVehicleSheet extends HandlebarsApplicationMixin(ActorShee
     }
 
     await this.actor.update(updates);
-    if (isVTOL && next >= max) {
+    if (next > current) {
+      const tableLoc = (loc === "left" || loc === "right") ? "side" : loc;
+      await applyVehicleCritical(this.actor, tableLoc, { attackSide: loc, loc });
+    }
+    if (next >= max && max > 0) {
       const reason = loc === "rotor"
         ? "Rotor internal structure destroyed"
         : `${String(loc).charAt(0).toUpperCase()}${String(loc).slice(1)} internal structure destroyed`;
-      await markVTOLDefeated(this.actor, { reason, crashed: true });
+      if (isVTOL) await markVTOLDefeated(this.actor, { reason, crashed: true });
+      else await markVehicleDefeated(this.actor, { reason, explode: true });
     }
     this.render(false);
   }
@@ -863,7 +937,31 @@ export class ATOWCombatVehicleSheet extends HandlebarsApplicationMixin(ActorShee
     const path = `system.${track}`;
     const current = Number(foundry.utils.getProperty(this.actor, path) ?? 0) || 0;
     const next = (current === value) ? Math.max(0, value - 1) : value;
+
+    if (track === "crit.motiveHits") {
+      const eventBySeverity = { 1: "minor", 2: "moderate", 3: "heavy", 4: "major" };
+      const drivingBySeverity = { 1: 1, 2: 2, 3: 3, 4: 0 };
+      const motiveEvent = eventBySeverity[next] ?? null;
+      await this.actor.update({
+        [path]: next,
+        "system.crit.motiveMinor": next === 1,
+        "system.crit.motiveModerate": next === 2,
+        "system.crit.motiveHeavy": next === 3,
+        "system.crit.motiveMajor": next === 4,
+        "system.crit.motiveDrivingMod": drivingBySeverity[next] ?? 0,
+        "system.crit.motiveEvents": motiveEvent ? [motiveEvent] : []
+      });
+      if (typeof this.actor.toggleStatusEffect === "function") {
+        const remainsImmobile = next === 4 || Boolean(this.actor.system?.crit?.engineHit);
+        await this.actor.toggleStatusEffect("atow-immobile", { active: remainsImmobile }).catch(() => {});
+      }
+      await syncVehicleCriticalStatuses(this.actor);
+      this.render(false);
+      return;
+    }
+
     await this.actor.update({ [path]: next });
+    if (track.startsWith("crit.")) await syncVehicleCriticalStatuses(this.actor);
     this.render(false);
   }
 
@@ -893,7 +991,34 @@ export class ATOWCombatVehicleSheet extends HandlebarsApplicationMixin(ActorShee
     if (/^system\.ammoBins\.[^.]+\.current$/.test(name)) return;
 
     const value = parseFormInputValue(input);
+
+    if (name === "system.vehicle.options.turret") {
+      const hasTurret = Boolean(value);
+      const updates = { [name]: hasTurret };
+      if (!hasTurret) {
+        updates["system.armor.turret.max"] = 0;
+        updates["system.armor.turret.dmg"] = 0;
+        updates["system.structure.turret.dmg"] = 0;
+        updates["system.crit.turretLocked"] = false;
+        updates["system.crit.turretJammed"] = false;
+        updates["system.crit.location.turret"] = false;
+      }
+      await this.actor.update(updates);
+      if (!hasTurret) {
+        const turretWeapons = Array.from(this.actor.items ?? [])
+          .filter(item => ["mechWeapon", "weapon"].includes(item.type))
+          .filter(item => normalizeVehicleWeaponLocation(item.system?.loc) === "turret")
+          .map(item => ({ _id: item.id, "system.loc": "" }));
+        if (turretWeapons.length) await this.actor.updateEmbeddedDocuments("Item", turretWeapons);
+      }
+      await syncVehicleCriticalStatuses(this.actor);
+      this.render(false);
+      return;
+    }
+
     await this.actor.update({ [name]: value });
+
+    if (name.startsWith("system.crit.")) await syncVehicleCriticalStatuses(this.actor);
 
     if (
       name === "system.vehicle.tonnage" ||
@@ -1032,13 +1157,17 @@ export class ATOWCombatVehicleSheet extends HandlebarsApplicationMixin(ActorShee
 // edited manually instead of being changed by the attack resolver.
 Hooks.on("updateActor", async (actor, _changed, options = {}) => {
   try {
-    if (String(actor?.type ?? "").toLowerCase() !== "vtol") return;
-    if (options?.atowVTOLDefeat || actor.system?.crit?.defeated) return;
+    const actorType = String(actor?.type ?? "").toLowerCase();
+    if (!["wheeledvehicle", "vehicle", "vtol"].includes(actorType)) return;
+    if (options?.atowVehicleDefeat || options?.atowVTOLDefeat || actor.system?.crit?.defeated) return;
 
     const system = actor.system ?? {};
     const crit = system.crit ?? {};
     const tonnage = Math.max(0, Number(system.vehicle?.tonnage ?? 0) || 0);
-    const structureMax = Math.max(1, Math.ceil(tonnage / 10));
+    const isVTOL = actorType === "vtol";
+    const structureMax = isVTOL
+      ? Math.max(1, Math.ceil(tonnage / 10))
+      : (tonnage > 0 ? Math.max(1, Math.floor(tonnage / 10)) : 0);
     const structureDestroyed = (loc) => Number(system.structure?.[loc]?.dmg ?? 0) >= structureMax;
     const engineText = String(system.vehicle?.engine ?? "").toLowerCase();
     const iceOrFuelCell = /\bice\b/.test(engineText)
@@ -1048,6 +1177,21 @@ Hooks.on("updateActor", async (actor, _changed, options = {}) => {
 
     let reason = "";
     let killCrew = false;
+
+    if (!isVTOL) {
+      const locations = ["front", "left", "right", "rear"];
+      if (system.vehicle?.options?.turret !== false) locations.push("turret");
+      const destroyedLoc = structureMax > 0 ? locations.find(structureDestroyed) : null;
+      if (destroyedLoc) {
+        reason = `${destroyedLoc.charAt(0).toUpperCase()}${destroyedLoc.slice(1)} internal structure destroyed`;
+        await markVehicleDefeated(actor, { reason, explode: true });
+      } else if (crit.crewKilled) {
+        await markVehicleDefeated(actor, { reason: "Vehicle crew killed", killCrew: true, explode: false, tint: false });
+      } else if (crit.fuelTankHit && iceOrFuelCell) {
+        await markVehicleDefeated(actor, { reason: "Fuel tank explosion", killCrew: true, explode: true });
+      }
+      return;
+    }
 
     if (crit.fuelTankHit && iceOrFuelCell) {
       reason = "Fuel tank explosion";
@@ -1071,5 +1215,52 @@ Hooks.on("updateActor", async (actor, _changed, options = {}) => {
     if (reason) await markVTOLDefeated(actor, { reason, killCrew, crashed: true });
   } catch (err) {
     console.warn("ATOWCombatVehicleSheet | VTOL destruction synchronization failed", err);
+  }
+});
+
+// Crew Stunned applies to future vehicle activations. Count down one result
+// after each affected activation, but never consume a result inflicted during
+// that same activation.
+const VEHICLE_TURN_STATE = globalThis.__ATOW_VEHICLE_TURN_STATE__ ??= new Map();
+Hooks.on("updateCombat", async (combat, changed) => {
+  try {
+    if (!game.user?.isGM || !("turn" in changed || "round" in changed) || !combat?.started) return;
+    const previous = VEHICLE_TURN_STATE.get(combat.id);
+    if (previous?.actorUuid) {
+      const previousActor = await fromUuid(previous.actorUuid).catch(() => null);
+      const actorType = String(previousActor?.type ?? "").toLowerCase();
+      if (["wheeledvehicle", "vehicle", "vtol"].includes(actorType)) {
+        const turns = Math.max(0, Number(previousActor.system?.crit?.crewStunnedTurns ?? 0) || 0);
+        const appliedStamp = String(previousActor.system?.crit?.crewStunnedAppliedStamp ?? "");
+        if (turns > 0 && appliedStamp !== previous.stamp) {
+          await previousActor.update({ "system.crit.crewStunnedTurns": Math.max(0, turns - 1) });
+          await syncVehicleCriticalStatuses(previousActor);
+        }
+      }
+    }
+
+    const currentActor = combat.combatant?.actor ?? null;
+    VEHICLE_TURN_STATE.set(combat.id, {
+      actorUuid: currentActor?.uuid ?? "",
+      stamp: `${combat.id}:${combat.round ?? 0}:${combat.turn ?? 0}`
+    });
+  } catch (err) {
+    console.warn("ATOWCombatVehicleSheet | Crew Stunned turn countdown failed", err);
+  }
+});
+
+// Bring existing vehicle actors into sync after a system update so saved
+// critical damage immediately receives the corresponding token conditions.
+Hooks.once("ready", async () => {
+  if (!game.user?.isGM) return;
+  const actors = new Map();
+  for (const actor of game.actors?.contents ?? []) actors.set(actor.uuid ?? actor.id, actor);
+  for (const token of canvas?.tokens?.placeables ?? []) {
+    if (token?.actor) actors.set(token.actor.uuid ?? token.actor.id, token.actor);
+  }
+  for (const actor of actors.values()) {
+    const actorType = String(actor?.type ?? "").toLowerCase();
+    if (!["wheeledvehicle", "vehicle", "vtol"].includes(actorType)) continue;
+    await syncVehicleCriticalStatuses(actor).catch(() => {});
   }
 });

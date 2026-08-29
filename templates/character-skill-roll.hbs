@@ -1,0 +1,73 @@
+<form class="atow-attack-dialog atow-vehicle-attack-dialog atow-character-skill-roll-dialog">
+  <header class="attack-card-header">
+    <div>
+      <div class="attack-kicker">Personal-Scale Skill Check</div>
+      <h2>{{skillName}}</h2>
+    </div>
+  </header>
+
+  <section class="attack-summary-grid">
+    <div><span>Character</span><strong>{{actorName}}</strong></div>
+    <div><span>Skill Type</span><strong>{{classificationCode}}</strong></div>
+    <div><span>Action</span><strong>{{actionLabel}}</strong></div>
+  </section>
+
+  <section class="attack-mod-line">
+    <strong>Calculated Mods:</strong>
+    <span class="attack-mod-chip">Rank {{signed rankModifier}}</span>
+    <span class="attack-mod-chip">{{linkLabel}} {{signed linkModifier}}</span>
+    {{#if naturalAptitude}}
+      <span class="attack-mod-chip">Natural Aptitude: 3d6, keep highest 2</span>
+    {{/if}}
+  </section>
+
+  <section class="attack-form-grid">
+    <label>
+      <span>Skill Rank Modifier</span>
+      <input type="number" name="rankModifier" value="{{rankModifier}}" step="1" />
+    </label>
+
+    <label>
+      <span>Attribute Link Modifier</span>
+      <input type="number" name="linkModifier" value="{{linkModifier}}" step="1" />
+    </label>
+
+    <label>
+      <span>Custom Modifier</span>
+      <input type="number" name="customModifier" value="0" step="1" />
+    </label>
+
+    <label>
+      <span>Spend Edge ({{edgeCurrent}} available)</span>
+      <select name="edgePoints">
+        {{#each edgeOptions as |option|}}
+          <option value="{{option.value}}">{{option.label}}</option>
+        {{/each}}
+      </select>
+    </label>
+
+    <label>
+      <span>Target Number</span>
+      <input type="number" name="targetNumber" value="{{targetNumber}}" step="1" />
+    </label>
+
+    <label>
+      <span>Dice</span>
+      <input type="text" value="{{diceLabel}}" disabled />
+    </label>
+  </section>
+
+  <section class="attack-note-line">
+    <span>Uses 1 {{actionLabel}} Action. Currently {{actionsUsed}}/{{actionLimit}} used; {{actionsRemaining}} remaining.</span>
+    <span>Each Edge point adds +2 to this roll and is spent when the roll is confirmed.</span>
+  </section>
+
+  <section class="attack-total-line">
+    <strong>Total Modifier</strong>
+    <span data-skill-roll-total>{{signed baseModifier}}</span>
+    <strong>Edge Bonus</strong>
+    <span data-skill-edge-bonus>0</span>
+    <strong>TN</strong>
+    <span data-skill-target-number>{{targetNumber}}</span>
+  </section>
+</form>

@@ -4,6 +4,7 @@
 import { canSpendCharacterAction, getCharacterActionState, refundCharacterAction, spendCharacterAction } from "./character-combat.js";
 import { getCharacterWeaponResourceProfile } from "./character-weapon-types.js";
 import { getCharacterPowerPackCapacity, getSelectedCharacterPowerPack } from "./character-power.js";
+import { NATURAL_APTITUDE_DICE_FORMULA, getActiveNaturalAptitude } from "./natural-aptitude.js";
 
 const SYSTEM_ID = "atow-battletech";
 const CHARACTER_ATTACK_TEMPLATE = `systems/${SYSTEM_ID}/templates/character-attack.hbs`;
@@ -742,6 +743,8 @@ async function rollCharacterAttack(actor, weapon, profile, skillItem, skill, for
   const targetEvasionModifier = num(targetEvasion?.modifier, 0);
   const targetCoverModifier = profile.attackType === CHARACTER_ATTACK_TYPES.RANGED ? num(targetCover?.modifier, 0) : 0;
   const modifier = skill.modifier + movementModifier + rangeModifier + targetMovementModifier + targetEvasionModifier + targetCoverModifier + otherModifier;
+  const naturalAptitude = getActiveNaturalAptitude(actor, skillItem);
+  const diceFormula = naturalAptitude ? NATURAL_APTITUDE_DICE_FORMULA : "2d6";
   const movementLabel = movementMode ? movementMode[0].toUpperCase() + movementMode.slice(1) : "Stationary";
   const flavor = [
     `${weapon.name} | ${profile.attackType === CHARACTER_ATTACK_TYPES.MELEE ? "Melee" : "Ranged"} Attack`,
@@ -755,16 +758,17 @@ async function rollCharacterAttack(actor, weapon, profile, skillItem, skill, for
       : "",
     profile.apbd !== "--" ? `AP/BD: ${profile.apbd}` : "",
     profile.attackType === CHARACTER_ATTACK_TYPES.RANGED && profile.range !== "--" ? `Range Profile: ${profile.range}` : "",
-    otherModifier ? `Other: ${otherModifier > 0 ? "+" : ""}${otherModifier}` : ""
+    otherModifier ? `Other: ${otherModifier > 0 ? "+" : ""}${otherModifier}` : "",
+    naturalAptitude ? `Natural Aptitude (${naturalAptitude.name}): 3d6, keep highest 2` : ""
   ].filter(Boolean).join(" | ");
 
   const configuredTN = skill.tn ?? game.settings.get(SYSTEM_ID, "defaultTN");
   const api = game[SYSTEM_ID]?.api;
   let message;
   if (typeof api?.rollCheck === "function") {
-    message = await api.rollCheck({ actor, label: `${weapon.name} Attack`, modifier, tn: configuredTN, flavor });
+    message = await api.rollCheck({ actor, label: `${weapon.name} Attack`, modifier, tn: configuredTN, flavor, diceFormula });
   } else {
-    const roll = await new Roll(`2d6 + ${modifier}`).evaluate();
+    const roll = await new Roll(`${diceFormula} + ${modifier}`).evaluate();
     const total = num(roll.total, 0);
     const margin = total - num(configuredTN, 0);
     message = await roll.toMessage({

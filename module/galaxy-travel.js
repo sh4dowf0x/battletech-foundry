@@ -2,7 +2,11 @@ const SYSTEM_ID = "atow-battletech";
 const GALAXY_FLAG = "galaxyMap";
 const SYSTEM_NOTE_FLAG = "galaxySystem";
 const ROUTE_OVERLAY_NAME = "atow-galaxy-travel-route";
+const LOCATION_OVERLAY_NAME = "atow-galaxy-company-location";
 const SHARED_ROUTE_FLAG = "travelRoute";
+const COMPANY_LOCATION_FLAG = "companyLocation";
+const COMPANY_LOCATION_ANIMATION = `systems/${SYSTEM_ID}/assets/animations/target.webm`;
+const COMPANY_LOCATION_MARKER_SIZE = 130;
 const MAX_JUMP_DISTANCE = 30;
 const DAYS_PER_JUMP = 7;
 
@@ -14,7 +18,9 @@ const TRAVEL_COSTS = Object.freeze({
 
 const state = {
   overlay: null,
-  route: null
+  route: null,
+  locationOverlay: null,
+  locationDrawId: 0
 };
 
 function isGalaxyMapScene(scene = canvas?.scene ?? game?.scenes?.active) {
@@ -35,6 +41,10 @@ function escapeHTML(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
+}
+
+function isChecked(value) {
+  return value === true || value === 1 || ["true", "on", "yes", "1"].includes(String(value ?? "").toLowerCase());
 }
 
 function pixelsPerDistanceUnit(scene = canvas?.scene ?? game?.scenes?.active) {
@@ -277,6 +287,69 @@ function sharedRouteData(scene = canvas?.scene ?? game?.scenes?.active) {
     ?? null;
 }
 
+function companyLocationData(scene = canvas?.scene ?? game?.scenes?.active) {
+  return scene?.getFlag?.(SYSTEM_ID, GALAXY_FLAG)?.[COMPANY_LOCATION_FLAG]
+    ?? scene?.flags?.[SYSTEM_ID]?.[GALAXY_FLAG]?.[COMPANY_LOCATION_FLAG]
+    ?? null;
+}
+
+function clearCompanyLocationMarker({ destroy = false } = {}) {
+  state.locationDrawId += 1;
+  if (state.locationOverlay && !state.locationOverlay.destroyed) {
+    if (destroy) state.locationOverlay.destroy({ children: true, texture: false, baseTexture: false });
+    else state.locationOverlay.removeChildren().forEach(child => child.destroy?.({ children: true, texture: false, baseTexture: false }));
+  }
+  if (destroy) state.locationOverlay = null;
+}
+
+function ensureCompanyLocationOverlay() {
+  if (!canvas?.ready || !canvas?.interface) return null;
+  if (state.locationOverlay && !state.locationOverlay.destroyed) return state.locationOverlay;
+  const overlay = new PIXI.Container();
+  overlay.name = LOCATION_OVERLAY_NAME;
+  overlay.eventMode = "none";
+  overlay.interactiveChildren = false;
+  overlay.zIndex = 59;
+  canvas.interface.sortableChildren = true;
+  canvas.interface.addChild(overlay);
+  state.locationOverlay = overlay;
+  return overlay;
+}
+
+export async function drawCompanyLocationMarker(scene = canvas?.scene ?? game?.scenes?.active) {
+  clearCompanyLocationMarker();
+  const drawId = state.locationDrawId;
+  if (!scene || scene.id !== canvas?.scene?.id || !isGalaxyMapScene(scene)) return false;
+
+  const location = companyLocationData(scene);
+  const systemId = String(location?.systemId ?? "");
+  if (!systemId) return false;
+  const system = collectGalaxyTravelSystems(scene).find(node => String(node.id) === systemId);
+  if (!system?.point) return false;
+
+  const overlay = ensureCompanyLocationOverlay();
+  if (!overlay) return false;
+  try {
+    const texture = await foundry.canvas.loadTexture(COMPANY_LOCATION_ANIMATION);
+    if (!texture || drawId !== state.locationDrawId || overlay.destroyed) return false;
+    const marker = new PIXI.Sprite(texture);
+    marker.name = `${LOCATION_OVERLAY_NAME}-marker`;
+    marker.anchor.set(0.5);
+    const sourceSize = Math.max(Number(texture.width) || 1, Number(texture.height) || 1);
+    marker.scale.set(COMPANY_LOCATION_MARKER_SIZE / sourceSize);
+    marker.position.set(system.point.x, system.point.y);
+    marker.eventMode = "none";
+    overlay.addChild(marker);
+
+    const video = game?.video?.getVideoSource?.(texture);
+    if (video) game.video.play(video, { loop: true, volume: 0 }).catch(() => {});
+    return true;
+  } catch (error) {
+    console.warn(`${SYSTEM_ID} | Failed to draw the company galaxy location`, error);
+    return false;
+  }
+}
+
 function routeFromSharedData(data, scene = canvas?.scene ?? game?.scenes?.active) {
   const ids = Array.isArray(data?.nodeIds) ? data.nodeIds.map(String) : [];
   if (!ids.length) return null;
@@ -328,15 +401,28 @@ async function gmSetSharedGalaxyRoute(sceneId, request = null) {
   if (!route) return { ok: false, reason: "No route could be found using jumps of 30 LY or less." };
   const costTier = Object.hasOwn(TRAVEL_COSTS, request.costTier) ? request.costTier : "moderate";
   const data = {
-    version: 1,
+    version: 2,
     nodeIds: route.nodes.map(node => String(node.id)),
     startId: String(request.startId),
     endId: String(request.endId),
     costTier,
     updatedAt: Date.now()
   };
-  await scene.update({ [`${root}.${SHARED_ROUTE_FLAG}`]: data }, { atowGalaxyTravelRoute: true });
-  return { ok: true, route: data };
+  const updates = { [`${root}.${SHARED_ROUTE_FLAG}`]: data };
+  let companyLocation = null;
+  if (isChecked(request.moveCompany)) {
+    const destination = route.nodes.at(-1);
+    companyLocation = {
+      version: 1,
+      systemId: String(destination.id),
+      systemName: String(destination.name),
+      updatedAt: Date.now(),
+      updatedBy: String(game.user?.id ?? "")
+    };
+    updates[`${root}.${COMPANY_LOCATION_FLAG}`] = companyLocation;
+  }
+  await scene.update(updates, { atowGalaxyTravelRoute: true, atowGalaxyCompanyLocation: Boolean(companyLocation) });
+  return { ok: true, route: data, companyLocation };
 }
 
 async function requestSharedGalaxyRoute(request = null) {
@@ -397,7 +483,7 @@ function activateSystemSearch(dialog) {
   }
 }
 
-async function showRouteResult(route, selectedCost) {
+async function showRouteResult(route, selectedCost, { companyMoved = false } = {}) {
   const chosen = TRAVEL_COSTS[selectedCost] ?? TRAVEL_COSTS.moderate;
   const days = route.jumps * DAYS_PER_JUMP;
   const routeText = route.segments.map(segment => `
@@ -417,6 +503,7 @@ async function showRouteResult(route, selectedCost) {
           <span>${days} days</span>
           <span>${currency(chosen.perJump * route.jumps)} (${chosen.label})</span>
         </div>
+        ${companyMoved ? `<div class="atow-galaxy-company-moved"><i class="fas fa-location-crosshairs"></i> Company location moved to <strong>${escapeHTML(route.nodes.at(-1)?.name)}</strong>.</div>` : ""}
         <p class="hint">Travel time assumes one seven-day recharge cycle per jump. In-system transit time is not included.</p>
         <ol class="atow-galaxy-route-legs">${routeText || `<li>${escapeHTML(route.nodes[0]?.name)} — already at destination</li>`}</ol>
         <table>
@@ -442,8 +529,14 @@ export async function openGalaxyTravelCalculator() {
     return null;
   }
 
+  const savedLocationId = String(companyLocationData(scene)?.systemId ?? "");
+  const defaultStartId = systems.some(system => String(system.id) === savedLocationId)
+    ? savedLocationId
+    : String(systems[0]?.id ?? "");
+  const defaultEndId = String(systems.find(system => String(system.id) !== defaultStartId)?.id ?? systems[1]?.id ?? "");
+
   const systemOptions = selectedId => systems.map(system =>
-    `<option value="${escapeHTML(system.id)}"${system.id === selectedId ? " selected" : ""}>${escapeHTML(system.name)}</option>`
+    `<option value="${escapeHTML(system.id)}"${String(system.id) === String(selectedId) ? " selected" : ""}>${escapeHTML(system.name)}</option>`
   ).join("");
   const result = await foundry.applications.api.DialogV2.input({
     window: { title: "Galaxy Travel Calculator" },
@@ -454,13 +547,13 @@ export async function openGalaxyTravelCalculator() {
           <div class="atow-galaxy-system-picker">
             <label>Starting System</label>
             <input type="search" data-system-search="startId" placeholder="Search starting systems…" autocomplete="off" />
-            <select name="startId" size="8">${systemOptions(systems[0]?.id)}</select>
+            <select name="startId" size="8">${systemOptions(defaultStartId)}</select>
             <small data-system-count>${systems.length} systems</small>
           </div>
           <div class="atow-galaxy-system-picker">
             <label>Destination</label>
             <input type="search" data-system-search="endId" placeholder="Search destination systems…" autocomplete="off" />
-            <select name="endId" size="8">${systemOptions(systems[1]?.id)}</select>
+            <select name="endId" size="8">${systemOptions(defaultEndId)}</select>
             <small data-system-count>${systems.length} systems</small>
           </div>
         </div>
@@ -469,6 +562,11 @@ export async function openGalaxyTravelCalculator() {
           <option value="moderate" selected>Moderate — 5,000 C-bills per jump</option>
           <option value="expensive">Expensive — 10,000 C-bills per jump</option>
         </select></div></div>
+        <div class="form-group atow-galaxy-move-company">
+          <label>Company Movement</label>
+          <div class="form-fields"><label class="checkbox"><input type="checkbox" name="moveCompany" /> Move the company dropship and assets to the destination</label></div>
+          <p class="hint">Leave unchecked when calculating a possible route only. Moving updates the persistent location marker for everyone.</p>
+        </div>
         <p class="hint">Routes use inhabited systems as jump points, with a maximum jump distance of ${MAX_JUMP_DISTANCE} LY.</p>
       </div>`,
     ok: { label: "Calculate Route", icon: "fas fa-route" },
@@ -496,14 +594,16 @@ export async function openGalaxyTravelCalculator() {
   const shared = await requestSharedGalaxyRoute({
     startId: String(result.startId),
     endId: String(result.endId),
-    costTier: String(result.costTier ?? "moderate")
+    costTier: String(result.costTier ?? "moderate"),
+    moveCompany: isChecked(result.moveCompany)
   });
   if (!shared?.ok) {
     ui.notifications?.error?.(shared?.reason ?? "Could not share the galaxy route.");
     return null;
   }
   drawGalaxyRoute(route);
-  await showRouteResult(route, String(result.costTier ?? "moderate"));
+  if (shared.companyLocation) await drawCompanyLocationMarker(scene);
+  await showRouteResult(route, String(result.costTier ?? "moderate"), { companyMoved: Boolean(shared.companyLocation) });
   return route;
 }
 
@@ -548,6 +648,8 @@ export function registerAtowGalaxyTravelTools(namespace = null) {
     collectSystems: collectGalaxyTravelSystems,
     open: openGalaxyTravelCalculator,
     draw: drawGalaxyRoute,
+    drawCompanyLocation: drawCompanyLocationMarker,
+    getCompanyLocation: companyLocationData,
     clear: clearSharedGalaxyRoute,
     clearLocal: clearGalaxyRoute,
     maxJumpDistance: MAX_JUMP_DISTANCE,
@@ -559,17 +661,32 @@ export function registerAtowGalaxyTravelTools(namespace = null) {
   Hooks.on("getSceneControlButtons", registerGalaxyTravelControls);
   Hooks.on("canvasReady", () => {
     clearGalaxyRoute({ destroy: true });
+    clearCompanyLocationMarker({ destroy: true });
     drawSharedGalaxyRoute(canvas?.scene);
+    drawCompanyLocationMarker(canvas?.scene);
   });
   Hooks.on("updateScene", (scene, changed) => {
     if (scene?.id !== canvas?.scene?.id) return;
     const root = `flags.${SYSTEM_ID}.${GALAXY_FLAG}`;
     const paths = Object.keys(foundry.utils.flattenObject(changed ?? {}));
-    if (!paths.some(path => (path === root) || (path.startsWith(root) && path.includes(SHARED_ROUTE_FLAG)))) return;
-    drawSharedGalaxyRoute(scene);
+    const rootChanged = paths.some(path => path === root);
+    if (rootChanged || paths.some(path => path.startsWith(root) && path.includes(SHARED_ROUTE_FLAG))) drawSharedGalaxyRoute(scene);
+    if (rootChanged || paths.some(path => path.startsWith(root) && path.includes(COMPANY_LOCATION_FLAG))) drawCompanyLocationMarker(scene);
+  });
+  Hooks.on("updateNote", note => {
+    if (note?.parent?.id !== canvas?.scene?.id) return;
+    if (String(note.id) !== String(companyLocationData(note.parent)?.systemId ?? "")) return;
+    drawCompanyLocationMarker(note.parent);
+  });
+  Hooks.on("deleteNote", note => {
+    if (note?.parent?.id !== canvas?.scene?.id) return;
+    if (String(note.id) !== String(companyLocationData(note.parent)?.systemId ?? "")) return;
+    clearCompanyLocationMarker();
   });
   Hooks.on("deleteScene", scene => {
-    if (scene?.id === canvas?.scene?.id) clearGalaxyRoute({ destroy: true });
+    if (scene?.id !== canvas?.scene?.id) return;
+    clearGalaxyRoute({ destroy: true });
+    clearCompanyLocationMarker({ destroy: true });
   });
 }
 

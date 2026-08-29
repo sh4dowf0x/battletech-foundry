@@ -9,6 +9,7 @@ const CATEGORY_DEFINITIONS = Object.freeze([
   { id: "all", label: "All", icon: "fa-solid fa-grid-2" },
   { id: "mechs", label: "BattleMechs", icon: "fa-solid fa-robot" },
   { id: "vehicles", label: "Vehicles", icon: "fa-solid fa-truck-monster" },
+  { id: "buildings", label: "Buildings", icon: "fa-solid fa-building" },
   { id: "personal", label: "Personal Gear", icon: "fa-solid fa-person-rifle" },
   { id: "mechGear", label: "Mech Gear", icon: "fa-solid fa-gears" },
   { id: "creation", label: "Character Options", icon: "fa-solid fa-user-plus" },
@@ -40,6 +41,7 @@ const TYPE_LABELS = Object.freeze({
   npc: "NPC",
   mech: "BattleMech",
   dropship: "DropShip",
+  building: "Building",
   wheeledvehicle: "Combat Vehicle",
   vtol: "VTOL",
   vehicle: "Vehicle",
@@ -96,6 +98,7 @@ function categoryForDocument(document) {
   const type = String(document?.type ?? "");
   if (type === "mech") return "mechs";
   if (["wheeledvehicle", "vtol", "vehicle", "dropship"].includes(type)) return "vehicles";
+  if (type === "building") return "buildings";
   if (["characterWeapon", "characterArmor", "characterEquipment"].includes(type)) return "personal";
   if (["mechWeapon", "mechEquipment", "mechQuirk"].includes(type)) return "mechGear";
   if (["characterModule", "skill", "characterSkill", "trait", "characterTrait"].includes(type)) return "creation";
@@ -168,6 +171,15 @@ function buildStats(document, { tonnage, year, techBase, role }) {
       pushStat(stats, "BV", numberAt(system, "dropship.bv") || "");
       pushStat(stats, "Thrust", numberAt(system, "dropship.thrust.safe") ? `${numberAt(system, "dropship.thrust.safe")}/${numberAt(system, "dropship.thrust.max")}` : "");
       break;
+    case "building":
+      pushStat(stats, "Function", valueAt(system, "building.function"));
+      pushStat(stats, "Class", valueAt(system, "building.classification"));
+      pushStat(stats, "Type", valueAt(system, "building.type"));
+      pushStat(stats, "CF", numberAt(system, "building.cf") || "");
+      pushStat(stats, "Hexes", numberAt(system, "building.size.hexes") || "");
+      pushStat(stats, "Levels", numberAt(system, "building.levels") || "");
+      pushStat(stats, "Tech", valueAt(system, "building.techBase"));
+      break;
     case "mechWeapon":
       pushStat(stats, "Damage", numberAt(system, "damage") || "");
       pushStat(stats, "Heat", numberAt(system, "heat") || "0");
@@ -239,13 +251,14 @@ function normalizeDocument(document, pack) {
   const system = document.system ?? {};
   const tonnage = numberAt(system, "mech.tonnage", "vehicle.tonnage", "dropship.tonnage", "stats.tonnage", "tonnage");
   const year = numberAt(system, "mech.yearProduced", "yearProduced", "year");
-  const techBase = String(valueAt(system, "mech.techBase", "vehicle.techBase", "dropship.techBase", "techBase", "ratings.tech") ?? "").trim();
-  const role = String(valueAt(system, "mech.role", "vehicle.role", "dropship.role", "role") ?? "").trim();
+  const techBase = String(valueAt(system, "mech.techBase", "vehicle.techBase", "dropship.techBase", "building.techBase", "techBase", "ratings.tech") ?? "").trim();
+  const role = String(valueAt(system, "mech.role", "vehicle.role", "dropship.role", "building.function", "role") ?? "").trim();
   const category = categoryForDocument(document);
   const description = valueAt(
     system,
     "description",
     "biography",
+    "building.notes",
     "notes",
     "specialRules",
     "mech.notes",

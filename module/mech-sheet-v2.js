@@ -3,6 +3,8 @@
 
 import { promptAndRollWeaponAttack, promptAndRollMeleeAttack, resolveAmmoExplosionEvent, rollHitLocation, applyMechDamageCluster, applyMechPilotHit, resolvePilotSeatbeltCheck, syncNarcPodsForDestroyedLocations, getHatchetProfile, getSwordProfile, getRetractableBladeProfile, getRotaryACProfile } from "./mech-attack.js";
 import { ATOW_AUDIO_CUES, ATOW_AUDIO_EFFECTS, enqueueActorAudioCues, playActorMechExplosionEffect, playActorPowerRestoredAnnouncement, playActorShutdownAnnouncement } from "./audio-helper.js";
+import { isMechSearchlightActive } from "./searchlight.js";
+import { getMechC3State, getMechECMState, getStealthArmorState } from "./mech-stealth.js";
 
 const SYSTEM_ID = "atow-battletech";
 const TEMPLATE = `systems/${SYSTEM_ID}/templates/mech-sheet-v2.hbs`;
@@ -1260,7 +1262,7 @@ const ARMOR_TYPE_OPTIONS = Object.freeze({
   hardened: "Hardened",
   "laser-reflective": "Laser-Reflective",
   reactive: "Reactive",
-  "vehicular-stealth": "Vehicular Stealth"
+  stealth: "Stealth Armor"
 });
 
 function normalizeArmorType(value) {
@@ -1274,7 +1276,7 @@ function normalizeArmorType(value) {
   if (compact.includes("ferrolamellor")) return "ferro-lamellor";
   if (compact.includes("ferrofibrous")) return "ferro-fibrous";
   if (compact.includes("laserreflective")) return "laser-reflective";
-  if (compact.includes("vehicularstealth")) return "vehicular-stealth";
+  if (compact === "stealth" || compact.includes("stealtharmor") || compact.includes("vehicularstealth")) return "stealth";
   if (compact.includes("hardened")) return "hardened";
   if (compact.includes("reactive")) return "reactive";
   return "standard";
@@ -1290,7 +1292,7 @@ function getArmorTypeRequirement(type, techBase) {
     case "hardened": return "No critical slots; movement effects pending";
     case "laser-reflective": return `${clan ? 5 : 10} critical slots`;
     case "reactive": return `${clan ? 7 : 14} critical slots`;
-    case "vehicular-stealth": return "Special installation rules pending";
+    case "stealth": return "12 critical slots: 2 each in both arms, both legs, and both side torsos; requires Guardian or Angel ECM";
     default: return "No critical slots";
   }
 }
@@ -1317,7 +1319,7 @@ function detectArmorTypeFromCritSlots(actorSystem) {
       else if (compact.includes("ferrolamellor")) found.add("ferro-lamellor");
       else if (compact.includes("ferrofibrous")) found.add("ferro-fibrous");
       else if (compact.includes("laserreflective")) found.add("laser-reflective");
-      else if (compact.includes("vehicularstealth")) found.add("vehicular-stealth");
+      else if (compact === "stealth" || compact.includes("stealtharmor") || compact.includes("vehicularstealth")) found.add("stealth");
       else if (compact.includes("reactivearmor") || compact === "reactive") found.add("reactive");
     }
   }
@@ -1330,7 +1332,7 @@ function detectArmorTypeFromCritSlots(actorSystem) {
     "ferro-lamellor",
     "laser-reflective",
     "reactive",
-    "vehicular-stealth"
+    "stealth"
   ].find(type => found.has(type)) ?? null;
 }
 
@@ -4957,6 +4959,17 @@ export class AToWMechSheetV2 extends HandlebarsApplicationMixin(ActorSheetV2) {
       techBase: mechTechBase
     });
     context.partialWing = partialWing;
+    context.isSearchlightActive = isMechSearchlightActive(this.token?.document ?? this.actor);
+    context.stealthArmor = getStealthArmorState(this.actor);
+    context.hasStealthArmor = context.stealthArmor.installed;
+    context.isStealthArmorActive = context.stealthArmor.active;
+    context.isStealthArmorOperational = context.stealthArmor.operational;
+    context.ecmSystem = getMechECMState(this.actor);
+    context.hasECMSystem = context.ecmSystem.installed;
+    context.isECMEnabled = context.ecmSystem.active;
+    context.c3System = getMechC3State(this.actor);
+    context.hasC3System = context.c3System.installed;
+    context.isC3Enabled = context.c3System.active;
 
     const tsmSlotsTotal = countComponentCritSlots(system, _TSM_LABEL_RE, { includeDestroyed: true });
     const tsmSlotsIntact = countComponentCritSlots(system, _TSM_LABEL_RE, { includeDestroyed: false });
@@ -5252,6 +5265,7 @@ const hasFerro = !hasHeavyFerro && !hasLightFerro && (Number(ferroSlots.standard
 const ferroLamellorSlots = countComponentCritSlots(system, /^ferro\s*-?\s*lamellor(?:\s+armor)?$/i, { includeDestroyed: true });
 const ferroLamellorNeeded = 12;
 const hasFerroLamellor = context.armorType === "ferro-lamellor" && ferroLamellorSlots >= ferroLamellorNeeded;
+const stealthArmor = context.stealthArmor ?? getStealthArmorState(this.actor);
 
 const armorTonsStd = armorPoints / 16;
 // Ferro-Fibrous math (per our rule): 1 ton = 16 armor points × multiplier (then rounded)
@@ -5281,6 +5295,8 @@ const armorNote = hasHardenedArmor
   ? `Ferro-Lamellor (${ferroLamellorSlots}/${ferroLamellorNeeded} slots; 14 armor points/ton; damage reduction active)`
   : context.armorType === "ferro-lamellor"
     ? `Standard protection (Ferro-Lamellor ${ferroLamellorSlots}/${ferroLamellorNeeded} slots)`
+  : context.armorType === "stealth"
+    ? `Stealth Armor (${stealthArmor.intactSlots}/${stealthArmor.requiredSlots} intact slots; ${stealthArmor.ecmOperational ? stealthArmor.ecmName : "Guardian/Angel ECM required"}${stealthArmor.active ? "; ACTIVE, +10 heat/turn" : ""})`
   : hasHeavyFerro
   ? `Heavy Ferro-Fibrous (${Number(ferroSlots.heavy ?? 0)}/${heavyFerroNeeded} slots)`
   : hasLightFerro
@@ -6752,9 +6768,11 @@ if (zone === "crit") {
   const isPartialWing = isPartialWingName(droppedName);
   const isHeavyFerroFibrous = /^heavy\s+ferro\s*-?\s*fibrous$/i.test(droppedName);
   const isFerroLamellor = /^ferro\s*-?\s*lamellor(?:\s+armor)?$/i.test(droppedName);
+  const isStealthArmorComponent = /^stealth(?:\s+armor)?$/i.test(droppedName);
   const isClanECMSuite = /^ecm\s+suite(?:\s*\(clan\))?$/i.test(droppedName);
   const isGuardianECM = /^guardian\s+ecm$/i.test(droppedName);
-  const isECMEquipment = isClanECMSuite || isGuardianECM;
+  const isAngelECM = /^angel\s+ecm$/i.test(droppedName);
+  const isECMEquipment = isClanECMSuite || isGuardianECM || isAngelECM;
 
   if (isECMEquipment) {
     const techBase = _getMechTechBase(this.actor, this.actor.system?.mech?.engine ?? null);
@@ -6794,6 +6812,27 @@ if (zone === "crit") {
   if (isPartialWing && loc !== "lt" && loc !== "rt") {
     ui?.notifications?.warn?.("Partial Wing sections can only be installed in the Left Torso and Right Torso.");
     return;
+  }
+  if (isStealthArmorComponent) {
+    const validLocations = new Set(["la", "ra", "lt", "rt", "ll", "rl"]);
+    if (!validLocations.has(loc)) {
+      ui?.notifications?.warn?.("Stealth Armor components may only be installed in the arms, legs, and side torsos.");
+      return;
+    }
+    const locationSlotsRaw = this.actor.system?.crit?.[loc]?.slots ?? [];
+    const locationSlots = Array.isArray(locationSlotsRaw) ? locationSlotsRaw : Object.values(locationSlotsRaw);
+    const targetSlot = locationSlots[index] ?? {};
+    const targetStartIndex = targetSlot.partOf !== undefined && targetSlot.partOf !== null ? Number(targetSlot.partOf) : index;
+    const targetStart = locationSlots[targetStartIndex] ?? targetSlot;
+    const replacingStealth = /^stealth(?:\s+armor)?$/i.test(String(targetStart?.label ?? "").trim());
+    const installedHere = locationSlots.filter(slot => {
+      if (!slot || (slot.partOf !== undefined && slot.partOf !== null)) return false;
+      return /^stealth(?:\s+armor)?$/i.test(String(slot.label ?? "").trim());
+    }).length;
+    if (installedHere >= 2 && !replacingStealth) {
+      ui?.notifications?.warn?.(`Stealth Armor permits exactly two critical slots in the ${loc.toUpperCase()}.`);
+      return;
+    }
   }
   if (isSupercharger) {
     const profile = getSuperchargerProfile(this.actor);
@@ -6946,7 +6985,8 @@ if (zone === "crit") {
   }
   if (isHeavyFerroFibrous) requested = 1;
   if (isFerroLamellor) requested = 1;
-  if (isECMEquipment) requested = 2;
+  if (isStealthArmorComponent) requested = 1;
+  if (isClanECMSuite || isGuardianECM) requested = 2;
 
   // TSM and MASC are mutually exclusive.
   if (isTSM) {
@@ -7023,6 +7063,7 @@ if (zone === "crit") {
   updates[`system.crit.${loc}.slots.${startIndex}.partOf`] = null;
   updates[`system.crit.${loc}.slots.${startIndex}.destroyed`] = false;
   updates[`system.crit.${loc}.slots.${startIndex}.rearMounted`] = false;
+  if (isStealthArmorComponent) updates["system.mech.armorType"] = "stealth";
 
   // Continuation slots (rendered, disabled)
   for (let j = 1; j < span; j++) {
@@ -7069,7 +7110,16 @@ if (zone === "crit") {
     );
   }
   if (isECMEquipment) {
-    ui?.notifications?.info?.(`${droppedName} installed: 1.5 tons, 2 critical slots, 6-hex ECM radius.`);
+    if (isAngelECM) ui?.notifications?.info?.(`${droppedName} installed: ${span} critical slot${span === 1 ? "" : "s"}; qualifies for Stealth Armor.`);
+    else ui?.notifications?.info?.(`${droppedName} installed: 1.5 tons, 2 critical slots, 6-hex ECM radius.`);
+  }
+  if (isStealthArmorComponent) {
+    const stealth = getStealthArmorState(this.actor);
+    const location = stealth.locations?.[loc];
+    const message = stealth.installed
+      ? `Stealth Armor installation complete (${stealth.totalSlots}/${stealth.requiredSlots} slots). ${stealth.ecmOperational ? `${stealth.ecmName} is operational.` : "Install an operational Guardian or Angel ECM to activate it."}`
+      : `Stealth installed in ${location?.label ?? loc.toUpperCase()} (${location?.total ?? 0}/2); total ${stealth.totalSlots}/${stealth.requiredSlots}.`;
+    ui?.notifications?.info?.(message);
   }
   return;
 }
@@ -7710,6 +7760,15 @@ if (isMechDestroyed(this.actor)) {
       const v = Number(value);
       if (Number.isNaN(v)) return;
       const current = Number(this.actor.system?.pilot?.hitsTaken ?? 0) || 0;
+
+      // Clicking the highest filled box toggles that hit back off.  Track boxes
+      // represent cumulative hits, so clicking "1" while one hit is recorded
+      // must write zero rather than writing one back to the actor.
+      if (v === current) {
+        await this.actor.update({ "system.pilot.hitsTaken": Math.max(0, current - 1) });
+        return;
+      }
+
       if (v === current + 1) {
         await applyMechPilotHit(this.actor, { reason: "Manual pilot hit" });
         return;
@@ -7718,7 +7777,7 @@ if (isMechDestroyed(this.actor)) {
         ui.notifications?.warn?.("Apply pilot hits one at a time so each consciousness check is rolled.");
         return;
       }
-      await this.actor.update({ "system.pilot.hitsTaken": v });
+      await this.actor.update({ "system.pilot.hitsTaken": Math.max(0, v) });
       return;
     }
 

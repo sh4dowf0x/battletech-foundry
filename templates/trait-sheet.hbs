@@ -33,6 +33,21 @@
     </div>
   </section>
 
+  {{#if naturalAptitude.enabled}}
+  <section class="atow-card">
+    <div class="atow-field">
+      <label>Natural Aptitude Skill ({{naturalAptitude.categoryLabel}})</label>
+      <select name="system.naturalAptitudeSkill">
+        <option value="">Choose a {{naturalAptitude.categoryLabel}} skill...</option>
+        {{#each naturalAptitude.skillChoices as |skill|}}
+          <option value="{{skill.value}}" {{#if skill.selected}}selected{{/if}}>{{skill.label}}</option>
+        {{/each}}
+      </select>
+      <div class="atow-field-hint">While this trait is active, checks using the selected skill roll 3d6 and keep the highest two dice.</div>
+    </div>
+  </section>
+  {{/if}}
+
   <section class="atow-card atow-stat-card">
     <div class="atow-stat-table-wrap">
       <table class="atow-stat-table">

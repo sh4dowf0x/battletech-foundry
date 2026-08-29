@@ -6,6 +6,7 @@
       "npc",
       "mech",
       "dropship",
+      "building",
       "company",
       "wheeledvehicle",
       "vtol",
@@ -231,6 +232,63 @@
       ],
       "stats": {}
     },
+    "building": {
+      "templates": [
+        "base"
+      ],
+      "building": {
+        "function": "",
+        "classification": "standard",
+        "type": "light",
+        "techBase": "innerSphere",
+          "levels": 1,
+          "expandedCF": false,
+          "defeated": false,
+          "defeatReason": "",
+        "cf": 1,
+        "size": {
+          "hexes": 1,
+          "shapeNotes": ""
+        },
+        "armor": {
+          "tonsPerHex": 0
+        },
+        "power": {
+          "source": "grid"
+        },
+        "hexes": [
+          {
+            "id": "H01",
+              "cfDamage": 0,
+              "armorDamage": 0,
+              "unspecifiedTons": 0,
+              "collapsed": false,
+              "crit": {
+                "gunnersKilled": false,
+                "gunnersStunnedTurns": 0,
+                "gunnersStunnedAppliedStamp": "",
+                "turretJammed": false,
+                "turretLocked": false
+              },
+              "threshold": {
+                "stamp": "",
+                "startCf": 0
+              },
+              "levels": []
+          }
+        ],
+          "crew": {
+            "name": "",
+            "count": 0,
+            "gunnery": 4,
+            "hits": 0,
+            "maxHits": 6
+        },
+        "cost": 0,
+        "bv": 0,
+        "notes": ""
+      }
+    },
     "dropship": {
       "templates": [
         "base"
@@ -426,6 +484,9 @@
         "rulesLevel": "",
         "role": "",
         "engine": "",
+        "options": {
+          "turret": true
+        },
         "movement": {
           "cruise": 0,
           "flank": 0,
@@ -455,9 +516,28 @@
         "turret": { "dmg": 0 }
       },
       "crit": {
+        "turretLocked": false,
+        "turretJammed": false,
+        "turretJamHits": 0,
         "engineHit": false,
+        "commanderHit": false,
+        "driverHit": false,
+        "crewKilled": false,
+        "crewStunnedTurns": 0,
+        "crewStunnedAppliedStamp": "",
+        "weaponAttackPhaseUsedStamp": "",
+        "cargoDestroyed": false,
+        "lastCargoInfantryDamage": 0,
+        "defeated": false,
+        "defeatReason": "",
         "sensorHits": 0,
         "motiveHits": 0,
+        "motiveMinor": false,
+        "motiveModerate": false,
+        "motiveHeavy": false,
+        "motiveMajor": false,
+        "motiveDrivingMod": 0,
+        "motiveEvents": [],
         "stabilizerLeft": false,
         "stabilizerRight": false,
         "location": {
@@ -598,7 +678,9 @@
       },
       "manufacturer": "",
       "ammoType": "",
-      "specialRules": ""
+      "specialRules": "",
+      "destroyed": false,
+      "vehicleMalfunctioned": false
     },
     "mechEquipment": {
       "templates": [
@@ -721,14 +803,16 @@
         "base"
       ],
       "category": "advantage",
-      "cost": 0
+      "cost": 0,
+      "naturalAptitudeSkill": ""
     },
     "characterTrait": {
       "templates": [
         "base"
       ],
       "category": "advantage",
-      "cost": 0
+      "cost": 0,
+      "naturalAptitudeSkill": ""
     },
     "characterEquipment": {
       "templates": [

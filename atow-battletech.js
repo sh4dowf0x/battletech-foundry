@@ -18,8 +18,15 @@ import {
 import { AToWMechWeaponSheet} from "./module/mech-weapon.js";
 import { ATOWCombatVehicleSheet } from "./module/combat-vehicle.js";
 import { ATOWDropshipSheet } from "./module/dropship-sheet.js";
+import { ATOWBuildingSheet } from "./module/building-sheet.js";
+import { registerBuildingVisionWalls } from "./module/building-visibility.js";
+import { registerMechVisionHeight } from "./module/token-vision-height.js";
+import { disableMechSearchlights, registerSearchlightHooks, registerSearchlightSockets, toggleMechSearchlight } from "./module/searchlight.js";
+import { runMechSensorSweep } from "./module/sensor-sweep.js";
+import { isStealthArmorActive, registerStealthArmorHooks, shutdownMechElectronics, toggleMechC3, toggleMechECM, toggleStealthArmor } from "./module/mech-stealth.js";
 import { ATOWCompanySheet } from "./module/company-sheet.js";
 import { getCharacterInitiativeDetails, registerCharacterCombatApi } from "./module/character-combat.js";
+import { registerCharacterEdgeChatHooks } from "./module/character-edge-chat.js";
 
 import { AToWMechEquipmentSheet } from "./module/mech-equipment.js";
 import { AToWMechQuirkSheet } from "./module/mech-quirk.js";
@@ -38,6 +45,7 @@ import { registerAtowAudioHooks, playActorJumpjetEffect, playActorPowerRestoredA
 import { registerAtowTerrainTools } from "./module/terrain.js";
 import { registerAtowGalaxyMapTools } from "./module/galaxy-map.js";
 import { registerATOWGalaxyTravelSockets, registerAtowGalaxyTravelTools } from "./module/galaxy-travel.js";
+import { registerAtowBattleMapBuilder } from "./module/battle-map-builder.js";
 import { registerAToWCompendiumBrowser } from "./module/compendium-browser.js";
 import {
   SKILL_CLASSIFICATION_REFERENCE,
@@ -46,6 +54,23 @@ import {
 } from "./module/skill-classifications.js";
 
 export const SYSTEM_ID = "atow-battletech";
+
+/**
+ * Foundry document hooks are broadcast to every connected client. Any hook
+ * which performs follow-up document mutations must therefore elect a single
+ * writer, otherwise non-owners will attempt to update another user's Actor or
+ * synthetic ActorDelta. Prefer Foundry's active GM; when no GM is connected,
+ * allow only the client which originated the update to handle its owned token.
+ */
+function isAuthoritativeTokenHookClient(tokenDoc, userId = null) {
+  const activeGM = game.users?.activeGM ?? null;
+  if (activeGM) return String(game.user?.id ?? "") === String(activeGM.id ?? "");
+
+  const isOriginatingClient = Boolean(userId)
+    && String(game.user?.id ?? "") === String(userId);
+  if (!isOriginatingClient) return false;
+  return Boolean(tokenDoc?.isOwner || tokenDoc?.actor?.isOwner);
+}
 
 /**
  * A small namespace we can hang utilities off of.
@@ -100,7 +125,7 @@ function hasInstalledAdvancedArmorComponents(actorOrSystem) {
       const label = String(typeof slot === "string" ? slot : slot.label ?? "")
         .toLowerCase()
         .replace(/[^a-z0-9]+/g, "");
-      if (/ferrofibrous|ferrolamellor|laserreflective|reactivearmor|^reactive$|vehicularstealth/.test(label)) {
+      if (/ferrofibrous|ferrolamellor|laserreflective|reactivearmor|^reactive$|vehicularstealth|stealtharmor|^stealth$/.test(label)) {
         return true;
       }
     }
@@ -188,7 +213,12 @@ if (!globalThis.__ATOW_BT_ECM_STATUS_HOOKS_REGISTERED__) {
   Hooks.on("updateActor", (actor, changed) => {
     if (String(actor?.type ?? "").toLowerCase() !== "mech") return;
     const changedPaths = Object.keys(foundry.utils.flattenObject(changed ?? {}));
-    if (changedPaths.some(path => path.startsWith("system.crit."))) {
+    if (changedPaths.some(path => path.startsWith("system.crit.")
+      || path.startsWith(`flags.${SYSTEM_ID}.ecmEnabled`)
+      || path.startsWith(`flags.${SYSTEM_ID}.ecmDisabled`)
+      || path.startsWith(`flags.${SYSTEM_ID}.stealthArmorActive`)
+      || path.startsWith(`flags.${SYSTEM_ID}.shutdownManual`)
+      || path.startsWith("system.heat.shutdown"))) {
       scheduleECMProtectionStatusSync();
     }
   });
@@ -288,6 +318,7 @@ Hooks.once("init", async () => {
       const socket = registerATOWAttackSockets();
       registerATOWCharacterAttackSockets(socket);
       registerATOWGalaxyTravelSockets(socket);
+      registerSearchlightSockets(socket);
     } catch (err) {
       console.warn(`${SYSTEM_ID} | Failed to register socketlib handlers`, err);
     }
@@ -296,9 +327,15 @@ Hooks.once("init", async () => {
   registerAtowAudioHooks();
   registerAtowTerrainTools(ATOW);
   registerAtowGalaxyMapTools(ATOW);
+  registerAtowBattleMapBuilder(ATOW);
   registerAtowGalaxyTravelTools(ATOW);
   registerAToWCompendiumBrowser(ATOW);
   registerCharacterCombatApi(ATOW);
+  registerCharacterEdgeChatHooks();
+  registerBuildingVisionWalls(ATOW);
+  registerMechVisionHeight(ATOW);
+  registerSearchlightHooks(ATOW);
+  registerStealthArmorHooks(ATOW);
   if (globalThis.socketlib?.registerSystem) tryRegisterSystemSocket();
   Hooks.once("socketlib.ready", tryRegisterSystemSocket);
 
@@ -388,6 +425,7 @@ Hooks.once("init", async () => {
   CONFIG.Actor.typeLabels.wheeledvehicle = "Combat Vehicle";
   CONFIG.Actor.typeLabels.vtol = "VTOL";
   CONFIG.Actor.typeLabels.dropship = "DropShip";
+  CONFIG.Actor.typeLabels.building = "Building";
   CONFIG.Actor.typeLabels.abomination = "Abomination";
   CONFIG.Actor.typeLabels.company = "Company";
 
@@ -413,7 +451,7 @@ registerSystemSettings();
       precedence,
       onDown: () => {
         if (!game.settings.get(SYSTEM_ID, "relativeMovementKeys")) return false;
-        const tokenDoc = getControlledMechTokenDocForKeybind();
+        const tokenDoc = getControlledRelativeMovementTokenDocForKeybind();
         if (!tokenDoc) return false;
         handler(tokenDoc).catch?.(err => console.warn(`AToW Battletech | ${name} keybind failed`, err));
         return true;
@@ -426,8 +464,8 @@ registerSystemSettings();
   registerRelativeMovementKeybinding("turnLeft", "KeyA", (tokenDoc) => relativeTurnTokenOneStep(tokenDoc, { clockwise: false }));
   registerRelativeMovementKeybinding("turnRight", "KeyD", (tokenDoc) => relativeTurnTokenOneStep(tokenDoc, { clockwise: true }));
   const relativeFacingPriority = CONST.KEYBINDING_PRECEDENCE.PRIORITY ?? CONST.KEYBINDING_PRECEDENCE.NORMAL;
-  registerRelativeMovementKeybinding("torsoTwistLeft", "KeyQ", (tokenDoc) => torsoTwistTokenOneStep(tokenDoc, { clockwise: false }), { precedence: relativeFacingPriority });
-  registerRelativeMovementKeybinding("torsoTwistRight", "KeyE", (tokenDoc) => torsoTwistTokenOneStep(tokenDoc, { clockwise: true }), { precedence: relativeFacingPriority });
+  registerRelativeMovementKeybinding("torsoTwistLeft", "KeyQ", (tokenDoc) => secondaryFacingTokenOneStep(tokenDoc, { clockwise: false }), { precedence: relativeFacingPriority });
+  registerRelativeMovementKeybinding("torsoTwistRight", "KeyE", (tokenDoc) => secondaryFacingTokenOneStep(tokenDoc, { clockwise: true }), { precedence: relativeFacingPriority });
   game.keybindings?.register?.(SYSTEM_ID, "resetMovementToTurnStart", {
     name: "Reset Movement to Turn Start",
     editable: [{ key: "KeyZ", modifiers: ["Control"] }],
@@ -556,12 +594,21 @@ registerSystemSettings();
       // persistent status whose attached hit location is tracked by the attack engine.
       mk("narc",          "Narc'd",        icon("tagged")),
       mk("ecm-protected", "ECM Protected", icon("ecm-protected")),
+      mk("stealth-active", "Stealth Armor Active", icon("stealth-active")),
 
       // Core AToW conditions
       mk("atow-shutdown",  "Shutdown", icon("shutdown")),
       mk("atow-immobile",  "Immobile", icon("immobile")),
       mk("mobbed",         "Mobbed",   icon("mobbed")),
       mk("hobbled",        "Hobbled",  icon("hobbled")),
+
+      // Combat vehicle critical damage
+      mk("vehicle-crew-stunned",      "Vehicle Crew Stunned",      icon("vehicle-crew-stunned")),
+      mk("vehicle-motive-damage",     "Vehicle Motive Damage",     icon("vehicle-motive-damage")),
+      mk("vehicle-sensor-damage",     "Vehicle Sensor Damage",     icon("vehicle-sensor-damage")),
+      mk("vehicle-engine-hit",        "Vehicle Engine Hit",        icon("vehicle-engine-hit")),
+      mk("vehicle-turret-disabled",   "Vehicle Turret Disabled",   icon("vehicle-turret-disabled")),
+      mk("vehicle-stabilizer-damage", "Vehicle Stabilizer Damage", icon("vehicle-stabilizer-damage")),
 
       // Location destruction (used by mech-sheet.js structure cascading)
       mk("left-arm-destroyed",    "Left Arm Destroyed",    icon("left-arm-destroyed")),
@@ -1055,6 +1102,12 @@ registerSystemSettings();
     types: ["dropship"],
     makeDefault: true,
     label: "AToW DropShip Sheet"
+  });
+
+  Actors.registerSheet(SYSTEM_ID, ATOWBuildingSheet, {
+    types: ["building"],
+    makeDefault: true,
+    label: "AToW Advanced Building Sheet"
   });
 
   Actors.registerSheet(SYSTEM_ID, ATOWCompanySheet, {
@@ -1602,6 +1655,12 @@ const _syncShutdownAndImmobileOnActorTokens = async (actor) => {
   const desiredShutdown = _shouldBeShutdown(actor);
   const desiredImmobile = desiredShutdown || _isAllFourLimbsDestroyed(actor);
 
+  if (desiredShutdown) {
+    await shutdownMechElectronics(actor);
+    await disableMechSearchlights(actor);
+    await syncECMProtectionStatuses().catch(() => {});
+  }
+
   // Ensure actor-level effects exist even if there is no active token.
   await _withStatusSyncGuard(actor, async () => {
     await _setActorStatusEffect(actor, SHUTDOWN_STATUS_ID, desiredShutdown);
@@ -1849,6 +1908,7 @@ Hooks.once("ready", async () => {
       nativeFacing: _getNativeFacing(tokenDoc),
       aboutFaceDirection: _getAboutFaceDir(tokenDoc),
       torsoFacing: tokenDoc.getFlag?.(SYSTEM_ID, "torsoFacing") ?? null,
+      turretFacing: tokenDoc.getFlag?.(SYSTEM_ID, "turretFacing") ?? null,
       turnStart: topLeft,
       lastPos: topLeft,
       facingStart: facing,
@@ -1964,6 +2024,8 @@ Hooks.once("ready", async () => {
     };
     if (snapshot.torsoFacing === null || snapshot.torsoFacing === undefined) atowFlags["-=torsoFacing"] = null;
     else atowFlags.torsoFacing = snapshot.torsoFacing;
+    if (snapshot.turretFacing === null || snapshot.turretFacing === undefined) atowFlags["-=turretFacing"] = null;
+    else atowFlags.turretFacing = snapshot.turretFacing;
 
     const update = {
       x: Number(snapshot.x ?? tokenDoc.x ?? 0) || 0,
@@ -2682,6 +2744,7 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
   };
 
   const _normalizeNativeFacing = (v) => {
+    if (v === null || v === undefined || String(v).trim() === "") return null;
     const n = Number(v);
     if (!Number.isFinite(n)) return null;
     const maxDir = isHexGrid() ? 5 : 7;
@@ -2724,6 +2787,7 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
   const _aboutFaceActive = () => Boolean(game?.modules?.get?.("about-face")?.active);
 
   const _normalizeAboutFaceDir = (v) => {
+    if (v === null || v === undefined || String(v).trim() === "") return null;
     const n = Number(v);
     if (!Number.isFinite(n)) return null;
     const maxDir = isHexGrid() ? 5 : 7;
@@ -2767,6 +2831,27 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
     const n = Number(raw);
     if (Number.isFinite(n)) return normalizeDegrees(n);
     return getTokenFacingDegrees(tokenDoc);
+  };
+
+  const isGroundCombatVehicleActor = (actor) => ["wheeledvehicle", "vehicle"].includes(String(actor?.type ?? "").toLowerCase());
+
+  const vehicleHasTurretForMovement = (actor) => isGroundCombatVehicleActor(actor)
+    && actor?.system?.vehicle?.options?.turret !== false;
+
+  const getTokenTurretFacingDegrees = (tokenDoc) => {
+    const raw = tokenDoc?.getFlag?.(SYSTEM_ID, "turretFacing");
+    const n = Number(raw);
+    if (Number.isFinite(n)) return normalizeDegrees(n);
+    return getTokenFacingDegrees(tokenDoc);
+  };
+
+  const ensureTurretFacingForToken = async (tokenDoc, { force = false } = {}) => {
+    if (!tokenDoc || !vehicleHasTurretForMovement(tokenDoc.actor)) return null;
+    const raw = tokenDoc.getFlag?.(SYSTEM_ID, "turretFacing");
+    if (!force && Number.isFinite(Number(raw))) return normalizeDegrees(Number(raw));
+    const seeded = getTokenFacingDegrees(tokenDoc);
+    await tokenDoc.setFlag(SYSTEM_ID, "turretFacing", seeded).catch(() => {});
+    return seeded;
   };
 
   const clearTokenTorsoTwist = async (tokenDoc, facing = null) => {
@@ -2972,11 +3057,12 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
     return Math.round((normalizeDegrees(deg) - offset) / step);
   };
 
-  const getControlledMechTokenDocForKeybind = () => {
+  const getControlledRelativeMovementTokenDocForKeybind = () => {
     const controlled = Array.from(canvas?.tokens?.controlled ?? []).filter(Boolean);
     if (controlled.length !== 1) return null;
     const tokenDoc = controlled[0]?.document ?? controlled[0] ?? null;
-    if (!tokenDoc?.actor || tokenDoc.actor.type !== "mech") return null;
+    const actorType = String(tokenDoc?.actor?.type ?? "").toLowerCase();
+    if (!tokenDoc?.actor || !["mech", "wheeledvehicle", "vehicle"].includes(actorType)) return null;
     return tokenDoc;
   };
 
@@ -3035,7 +3121,8 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
 
   const canUseRelativeMovementKeybind = (tokenDoc) => {
     if (!canvas?.ready) return false;
-    if (!tokenDoc?.actor || tokenDoc.actor.type !== "mech") return false;
+    const actorType = String(tokenDoc?.actor?.type ?? "").toLowerCase();
+    if (!tokenDoc?.actor || !["mech", "wheeledvehicle", "vehicle"].includes(actorType)) return false;
     if (_isTypingInField()) return false;
 
     if (game.combat?.started) {
@@ -3051,13 +3138,26 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
 
   const relativeMoveTokenOneStep = async (tokenDoc, { backward = false } = {}) => {
     if (!canUseRelativeMovementKeybind(tokenDoc)) return false;
-    if (isGyroDestroyed(tokenDoc?.actor)) {
+    const actor = tokenDoc?.actor;
+    if (actor?.type === "mech" && isGyroDestroyed(actor)) {
       ui.notifications?.warn?.("A mech with a destroyed gyro cannot move.");
       return false;
     }
-    if (tokenHasStatus(tokenDoc, "prone")) {
+    if (actor?.type === "mech" && tokenHasStatus(tokenDoc, "prone")) {
       ui.notifications?.warn?.("A prone mech cannot move normally. Use facing changes or the stand-up action.");
       return false;
+    }
+    if (isGroundCombatVehicleActor(actor)) {
+      const crit = actor.system?.crit ?? {};
+      if (crit.defeated || crit.crewKilled || crit.engineHit || crit.motiveMajor || Number(crit.motiveHits ?? 0) >= 4) {
+        ui.notifications?.warn?.("This combat vehicle is immobile and cannot move.");
+        return false;
+      }
+      const speeds = getMoveSpeeds(actor);
+      if (Math.max(0, Number(speeds?.run ?? 0) || 0) <= 0) {
+        ui.notifications?.warn?.("This combat vehicle has no movement points remaining.");
+        return false;
+      }
     }
 
     const currentFacing = await ensureNativeFacingForToken(tokenDoc);
@@ -3076,12 +3176,28 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
         }
       }
     });
-    playRandomFootstepSequence({ count: 2, gapMs: 180, volume: 0.5 }).catch?.(() => {});
+    if (actor?.type === "mech") {
+      playRandomFootstepSequence({ count: 2, gapMs: 180, volume: 0.5 }).catch?.(() => {});
+    }
     return true;
   };
 
   const relativeTurnTokenOneStep = async (tokenDoc, { clockwise = false } = {}) => {
     if (!canUseRelativeMovementKeybind(tokenDoc)) return false;
+
+    const actor = tokenDoc?.actor;
+    if (isGroundCombatVehicleActor(actor)) {
+      const crit = actor.system?.crit ?? {};
+      if (crit.defeated || crit.crewKilled || crit.engineHit || crit.motiveMajor || Number(crit.motiveHits ?? 0) >= 4) {
+        ui.notifications?.warn?.("This combat vehicle is immobile and cannot change facing.");
+        return false;
+      }
+      const speeds = getMoveSpeeds(actor);
+      if (Math.max(0, Number(speeds?.run ?? 0) || 0) <= 0) {
+        ui.notifications?.warn?.("This combat vehicle has no movement points remaining.");
+        return false;
+      }
+    }
 
     const currentFacing = await ensureNativeFacingForToken(tokenDoc);
     const step = getFacingStepDegrees();
@@ -3118,6 +3234,52 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
     return true;
   };
 
+  const turretRotateTokenOneStep = async (tokenDoc, { clockwise = false } = {}) => {
+    if (!canUseRelativeMovementKeybind(tokenDoc)) return false;
+    const actor = tokenDoc?.actor;
+    if (!vehicleHasTurretForMovement(actor)) {
+      ui.notifications?.warn?.("This combat vehicle does not have a turret.");
+      return false;
+    }
+
+    const crit = actor.system?.crit ?? {};
+    if (crit.turretLocked || crit.turretJammed) {
+      ui.notifications?.warn?.("The turret is jammed or locked and cannot rotate.");
+      return false;
+    }
+
+    if (game.combat?.started) {
+      const currentStamp = getCombatStamp(game.combat);
+      const firedStamp = String(tokenDoc.getFlag?.(SYSTEM_ID, "vehicleFiredStamp") ?? "");
+      const fired = Boolean(
+        firedStamp === currentStamp && (
+          tokenDoc.getFlag?.(SYSTEM_ID, "vehicleFiredThisTurn")
+          || tokenDoc.getFlag?.(SYSTEM_ID, "weaponFireConsumedThisTurn")
+        )
+      );
+      if (fired) {
+        ui.notifications?.warn?.("The turret cannot rotate after this vehicle has fired a weapon this turn.");
+        return false;
+      }
+    }
+
+    const current = await ensureTurretFacingForToken(tokenDoc);
+    const step = getFacingStepDegrees();
+    const next = normalizeDegrees(current + (clockwise ? step : -step));
+    await tokenDoc.update({
+      flags: { [SYSTEM_ID]: { turretFacing: next } }
+    }, { atowTurretRotate: true });
+    playTorsoTwistEffect({ volume: 0.55 }).catch?.(() => {});
+    return true;
+  };
+
+  const secondaryFacingTokenOneStep = async (tokenDoc, { clockwise = false } = {}) => {
+    if (isGroundCombatVehicleActor(tokenDoc?.actor)) {
+      return turretRotateTokenOneStep(tokenDoc, { clockwise });
+    }
+    return torsoTwistTokenOneStep(tokenDoc, { clockwise });
+  };
+
   Hooks.on("preCreateToken", (tokenDoc, data) => {
     try {
       const existing = tokenDoc?.getFlag?.(SYSTEM_ID, "facing");
@@ -3125,7 +3287,9 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
       if (existing != null || incoming != null) return;
 
       const seeded = _quantizeToFacingStep((data?.rotation ?? tokenDoc?.rotation ?? 0) + getRotationToFacingOffsetDegrees());
-      tokenDoc.updateSource({ flags: { [SYSTEM_ID]: { facing: seeded } } });
+      const systemFlags = { facing: seeded };
+      if (vehicleHasTurretForMovement(tokenDoc?.actor)) systemFlags.turretFacing = seeded;
+      tokenDoc.updateSource({ flags: { [SYSTEM_ID]: systemFlags } });
     } catch (_) {}
   });
 
@@ -3171,10 +3335,22 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
 
     foundry.utils.setProperty(changes, getNativeFacingFlagPath(), desiredFacing);
 
+    const actorType = String(tokenDoc?.actor?.type ?? "").toLowerCase();
     const torsoPath = `flags.${SYSTEM_ID}.torsoFacing`;
     const hasTorsoChange = foundry.utils.getProperty(changes, torsoPath) !== undefined;
-    if (!options?.atowTorsoTwist && !hasTorsoChange) {
+    if (actorType === "mech" && !options?.atowTorsoTwist && !hasTorsoChange) {
       foundry.utils.setProperty(changes, torsoPath, desiredFacing);
+    }
+
+    if (isGroundCombatVehicleActor(tokenDoc?.actor) && vehicleHasTurretForMovement(tokenDoc.actor)) {
+      const turretPath = `flags.${SYSTEM_ID}.turretFacing`;
+      const hasTurretChange = foundry.utils.getProperty(changes, turretPath) !== undefined;
+      if (!options?.atowTurretRotate && !hasTurretChange) {
+        const priorHullFacing = getTokenFacingDegrees(tokenDoc);
+        const priorTurretFacing = getTokenTurretFacingDegrees(tokenDoc);
+        const hullDelta = signedAngleDelta(priorHullFacing, desiredFacing);
+        foundry.utils.setProperty(changes, turretPath, normalizeDegrees(priorTurretFacing + hullDelta));
+      }
     }
 
     if (hasRotationChange || (incomingFacing != null && _nativeFacingArtRotationEnabled())) {
@@ -3243,7 +3419,8 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
     const legArrow = makeArrow({ arrowColor: color });
     container.addChild(legArrow);
 
-    const torsoFacing = getTokenTorsoFacingDegrees(token.document);
+    const actorType = String(token.document?.actor?.type ?? "").toLowerCase();
+    const torsoFacing = actorType === "mech" ? getTokenTorsoFacingDegrees(token.document) : null;
     if (torsoFacing != null && Math.abs(signedAngleDelta(facing, torsoFacing)) > 0.0001) {
       const torsoArrow = makeArrow({
         arrowColor: 0x36d7ff,
@@ -3256,6 +3433,19 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
       container.addChild(torsoArrow);
     }
 
+    if (vehicleHasTurretForMovement(token.document.actor)) {
+      const turretFacing = getTokenTurretFacingDegrees(token.document);
+      const turretArrow = makeArrow({
+        arrowColor: 0x72e38d,
+        alpha: 0.78,
+        arrowDistance: distance * 0.82,
+        arrowScale: scale * 0.94,
+        lineWidth: 3
+      });
+      turretArrow.angle = signedAngleDelta(facing, turretFacing);
+      container.addChild(turretArrow);
+    }
+
     container.x = width / 2;
     container.y = height / 2;
     container.angle = facing;
@@ -3266,27 +3456,39 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
 
   ATOW.api.getTokenFacingDegrees = getTokenFacingDegrees;
   ATOW.api.getTokenTorsoFacingDegrees = getTokenTorsoFacingDegrees;
+  ATOW.api.getTokenTurretFacingDegrees = getTokenTurretFacingDegrees;
   ATOW.api.ensureTokenFacing = ensureNativeFacingForToken;
+  ATOW.api.ensureTokenTurretFacing = ensureTurretFacingForToken;
   ATOW.api.torsoTwistTokenOneStep = torsoTwistTokenOneStep;
+  ATOW.api.turretRotateTokenOneStep = turretRotateTokenOneStep;
   ATOW.api.drawFacingIndicator = drawFacingIndicator;
 
   Hooks.on("canvasReady", async () => {
     const tokens = Array.from(canvas?.tokens?.placeables ?? []);
     for (const token of tokens) {
-      await ensureNativeFacingForToken(token.document);
+      if (game.user?.isGM) {
+        await ensureNativeFacingForToken(token.document);
+        await ensureTurretFacingForToken(token.document);
+      }
       await drawFacingIndicator(token);
     }
   });
 
-  Hooks.on("createToken", async (tokenDoc) => {
+  Hooks.on("createToken", async (tokenDoc, _options, userId) => {
     if (!tokenDoc?.object) return;
-    await ensureNativeFacingForToken(tokenDoc);
+    if (isAuthoritativeTokenHookClient(tokenDoc, userId)) {
+      await ensureNativeFacingForToken(tokenDoc);
+      await ensureTurretFacingForToken(tokenDoc);
+    }
     await drawFacingIndicator(tokenDoc.object);
   });
 
-  Hooks.on("updateToken", async (tokenDoc) => {
+  Hooks.on("updateToken", async (tokenDoc, _changed, _options, userId) => {
     if (!tokenDoc?.object) return;
-    await ensureNativeFacingForToken(tokenDoc);
+    if (isAuthoritativeTokenHookClient(tokenDoc, userId)) {
+      await ensureNativeFacingForToken(tokenDoc);
+      await ensureTurretFacingForToken(tokenDoc);
+    }
     await drawFacingIndicator(tokenDoc.object);
   });
 
@@ -3430,11 +3632,32 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
       const vehicleMove = sys.vehicle?.movement ?? {};
       let walk = Number(vehicleMove.cruise ?? vehicleMove.walk ?? vehicleMove.Walk ?? 0) || 0;
       let run = Number(vehicleMove.flank ?? vehicleMove.run ?? vehicleMove.Run ?? 0) || 0;
+      const vehicleCrit = sys.crit ?? {};
       if (actor?.type === "vtol") {
         const rotorHits = Math.max(0, Number(sys.crit?.rotorHits ?? 0) || 0);
         const crashed = Boolean(sys.crit?.crashed || sys.crit?.rotorsDestroyed || sys.crit?.defeated);
         walk = crashed ? 0 : Math.max(0, walk - rotorHits);
         run = crashed ? 0 : Math.ceil(walk * 1.5);
+      }
+      if (vehicleCrit.defeated || vehicleCrit.crewKilled || vehicleCrit.engineHit || Number(vehicleCrit.motiveHits ?? 0) >= 4) {
+        walk = 0;
+        run = 0;
+      } else {
+        const motiveEvents = Array.isArray(vehicleCrit.motiveEvents) ? vehicleCrit.motiveEvents : [];
+        if (motiveEvents.length) {
+          for (const event of motiveEvents) {
+            if (event === "moderate") walk = Math.max(0, walk - 1);
+            else if (event === "heavy") walk = Math.ceil(walk / 2);
+            else if (event === "major") walk = 0;
+          }
+          run = Math.ceil(walk * 1.5);
+        } else {
+          const motive = Math.max(0, Number(vehicleCrit.motiveHits ?? 0) || 0);
+          if (motive >= 3) walk = Math.ceil(walk / 2);
+          else if (motive >= 2) walk = Math.max(0, walk - 1);
+          run = motive >= 2 ? Math.ceil(walk * 1.5) : run;
+        }
+        if (Number(vehicleCrit.crewStunnedTurns ?? 0) > 0) run = walk;
       }
       return { walk, run, jump: 0 };
     }
@@ -3670,6 +3893,17 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
   const _snapPointToGridTopLeft = (point) => {
     if (!point) return null;
     try {
+      // Foundry v13's native offset APIs avoid edge/boundary ambiguity on
+      // hex grids. The legacy getTopLeft(x, y) path is retained only as a
+      // compatibility fallback.
+      if (typeof canvas?.grid?.getOffset === "function"
+        && typeof canvas?.grid?.getTopLeftPoint === "function") {
+        const offset = canvas.grid.getOffset({ x: point.x, y: point.y });
+        const topLeft = canvas.grid.getTopLeftPoint(offset);
+        if (topLeft && Number.isFinite(topLeft.x) && Number.isFinite(topLeft.y)) {
+          return { x: topLeft.x, y: topLeft.y };
+        }
+      }
       if (typeof canvas?.grid?.getTopLeft === "function") {
         const [x, y] = canvas.grid.getTopLeft(point.x, point.y);
         return { x, y };
@@ -3679,6 +3913,40 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
       x: Math.round(Number(point.x ?? 0) || 0),
       y: Math.round(Number(point.y ?? 0) || 0)
     };
+  };
+
+  const _measureJumpHexDistance = (tokenDoc, destinationTopLeft) => {
+    try {
+      const grid = canvas?.grid;
+      const origin = _getTokenGridOffset(tokenDoc);
+      if (grid?.getOffset && origin && destinationTopLeft) {
+        const destinationCenter = getCenterPointFromTopLeft(
+          destinationTopLeft.x,
+          destinationTopLeft.y
+        );
+        const destination = grid.getOffset(destinationCenter);
+
+        // Both inputs are integer grid offsets, so Foundry returns the exact
+        // number of crossed hexes rather than a fractional pixel distance.
+        if (typeof grid.measurePath === "function") {
+          const measured = grid.measurePath([origin, destination]);
+          const spaces = Number(measured?.spaces);
+          if (Number.isFinite(spaces)) return Math.max(0, Math.round(spaces));
+        }
+
+        if (typeof grid.getDirectPath === "function") {
+          const path = grid.getDirectPath([origin, destination]);
+          if (Array.isArray(path) && path.length) return Math.max(0, path.length - 1);
+        }
+      }
+    } catch (_) {
+      // Fall through to the older cross-version measurement helper.
+    }
+
+    return Math.max(0, Math.round(measureGridSpaces(
+      { x: tokenDoc?.x ?? 0, y: tokenDoc?.y ?? 0 },
+      destinationTopLeft
+    )));
   };
 
   const _getFacingChoiceLabel = (deg) => {
@@ -3879,7 +4147,7 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
           const gx = snapped?.x ?? tokenDoc.x;
           const gy = snapped?.y ?? tokenDoc.y;
 
-          const dist = measureGridSpaces({ x: tokenDoc.x, y: tokenDoc.y }, { x: gx, y: gy });
+          const dist = _measureJumpHexDistance(tokenDoc, { x: gx, y: gy });
           if (dist <= 0) {
             ui.notifications?.warn?.("Choose a different hex to jump to.");
             continue;
@@ -4106,10 +4374,19 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
       return false;
     }
 
+    if (!game.user?.isGM && !tokenDoc?.isOwner && !actorDoc?.isOwner) {
+      ui.notifications?.warn?.("You do not own the actor associated with this BattleTech action.");
+      return false;
+    }
+
     switch (normalized) {
       case "masc":
         if (!actorDoc || actorDoc.type !== "mech") {
           ui.notifications?.warn?.("Select or open a mech to activate MASC.");
+          return false;
+        }
+        if (_shouldBeShutdown(actorDoc)) {
+          ui.notifications?.warn?.("Restart the BattleMech before activating MASC.");
           return false;
         }
         return await activateMASC(actorDoc, tokenDoc);
@@ -4119,7 +4396,58 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
           ui.notifications?.warn?.("Select or open a mech to activate its Supercharger.");
           return false;
         }
+        if (_shouldBeShutdown(actorDoc)) {
+          ui.notifications?.warn?.("Restart the BattleMech before activating its Supercharger.");
+          return false;
+        }
         return await activateSupercharger(actorDoc, tokenDoc);
+
+      case "searchlight":
+        if (!actorDoc || actorDoc.type !== "mech") {
+          ui.notifications?.warn?.("Select or open a BattleMech to use its searchlight.");
+          return false;
+        }
+        return await toggleMechSearchlight(actorDoc, tokenDoc);
+
+      case "sensors":
+        if (!actorDoc || actorDoc.type !== "mech") {
+          ui.notifications?.warn?.("Select or open a BattleMech to use active sensors.");
+          return false;
+        }
+        if (_shouldBeShutdown(actorDoc)) {
+          ui.notifications?.warn?.("Restart the BattleMech before activating its sensors.");
+          return false;
+        }
+        return await runMechSensorSweep(actorDoc, tokenDoc);
+
+      case "stealth":
+        if (!actorDoc || actorDoc.type !== "mech") {
+          ui.notifications?.warn?.("Select or open a BattleMech to use Stealth Armor.");
+          return false;
+        }
+        {
+          const toggled = await toggleStealthArmor(actorDoc);
+          if (toggled) await syncECMProtectionStatuses().catch(() => {});
+          return toggled;
+        }
+
+      case "ecm":
+        if (!actorDoc || actorDoc.type !== "mech") {
+          ui.notifications?.warn?.("Select or open a BattleMech to control its ECM.");
+          return false;
+        }
+        {
+          const toggled = await toggleMechECM(actorDoc);
+          if (toggled) await syncECMProtectionStatuses().catch(() => {});
+          return toggled;
+        }
+
+      case "c3":
+        if (!actorDoc || actorDoc.type !== "mech") {
+          ui.notifications?.warn?.("Select or open a BattleMech to control its C3 system.");
+          return false;
+        }
+        return await toggleMechC3(actorDoc);
 
       case "jump":
         if (!actorDoc || actorDoc.type !== "mech") {
@@ -4174,6 +4502,10 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
           return false;
         }
         const next = !Boolean(actorDoc?.getFlag?.(SYSTEM_ID, "dazzleMode"));
+        if (next && actorDoc.type === "mech" && _shouldBeShutdown(actorDoc)) {
+          ui.notifications?.warn?.("Restart the BattleMech before enabling Dazzle Mode.");
+          return false;
+        }
         await actorDoc.setFlag(SYSTEM_ID, "dazzleMode", next);
         ui.notifications?.info?.(`${actorDoc.name}: Dazzle Mode ${next ? "enabled" : "disabled"}.`);
         return true;
@@ -4185,6 +4517,10 @@ const measureTokenSegmentSpaces = (_tokenDoc, fromXY, toXY) => {
           return false;
         }
         const next = actorDoc.getFlag?.(SYSTEM_ID, "amsEnabled") === false;
+        if (next && _shouldBeShutdown(actorDoc)) {
+          ui.notifications?.warn?.("Restart the BattleMech before enabling AMS.");
+          return false;
+        }
         await actorDoc.setFlag(SYSTEM_ID, "amsEnabled", next);
         ui.notifications?.info?.(`${actorDoc.name}: AMS ${next ? "enabled" : "disabled"}.`);
         return true;
@@ -4219,6 +4555,36 @@ return await runner({
 });`;
   };
 
+  const generatedMacroDefaultOwnership = () =>
+    Number(CONST.DOCUMENT_OWNERSHIP_LEVELS?.LIMITED ?? 1);
+
+  const generatedMacroFlags = () => ({
+    [SYSTEM_ID]: { generatedActionMacro: true }
+  });
+
+  const isGeneratedATOWMacro = macro => {
+    if (!macro || !String(macro.name ?? "").startsWith("AToW: ")) return false;
+    if (macro.getFlag?.(SYSTEM_ID, "generatedActionMacro") === true) return true;
+    const command = String(macro.command ?? "");
+    return command.includes(`game["${SYSTEM_ID}"]`)
+      || command.includes(`/systems/${SYSTEM_ID}/`);
+  };
+
+  const normalizeGeneratedMacroPermissions = async macro => {
+    if (!macro || !game.user?.isGM || !isGeneratedATOWMacro(macro)) return macro;
+    const limited = generatedMacroDefaultOwnership();
+    const currentDefault = Number(macro.ownership?.default ?? 0) || 0;
+    const alreadyFlagged = macro.getFlag?.(SYSTEM_ID, "generatedActionMacro") === true;
+    if (currentDefault >= limited && alreadyFlagged) return macro;
+
+    const ownership = { ...(macro.ownership ?? {}), default: Math.max(currentDefault, limited) };
+    await macro.update({
+      ownership,
+      [`flags.${SYSTEM_ID}.generatedActionMacro`]: true
+    }, { renderSheet: false });
+    return macro;
+  };
+
   const ensureHeaderActionMacro = async ({ action, label = null, img = null, actorId = null, tokenId = null } = {}) => {
     const normalized = String(action ?? "").trim().toLowerCase();
     if (!normalized) return null;
@@ -4240,10 +4606,13 @@ return await runner({
         type: "script",
         scope: "global",
         command,
-        img: macroImg
+        img: macroImg,
+        ownership: { default: generatedMacroDefaultOwnership() },
+        flags: generatedMacroFlags()
       }, { renderSheet: false });
     }
 
+    if (macro) await normalizeGeneratedMacroPermissions(macro);
     return macro ?? null;
   };
 
@@ -4252,6 +4621,10 @@ return await runner({
     const actorDoc = tokenDoc?.actor ?? resolvedActor;
     if (!actorDoc || String(actorDoc.type ?? "").toLowerCase() !== "mech") {
       ui.notifications?.warn?.("Select or open a mech to use this weapon action.");
+      return false;
+    }
+    if (!game.user?.isGM && !tokenDoc?.isOwner && !actorDoc?.isOwner) {
+      ui.notifications?.warn?.("You do not own the mech associated with this weapon action.");
       return false;
     }
 
@@ -4305,6 +4678,10 @@ if (!actorDoc || String(actorDoc.type ?? "").toLowerCase() !== "mech") {
   ui.notifications?.warn?.("Select or open a mech to use this weapon action.");
   return false;
 }
+if (!game.user?.isGM && !tokenDoc?.isOwner && !actorDoc?.isOwner) {
+  ui.notifications?.warn?.("You do not own the mech associated with this weapon action.");
+  return false;
+}
 let weapon = null;
 try {
   weapon = await fromUuid(base.itemUuid);
@@ -4342,30 +4719,18 @@ return await mod.promptAndRollWeaponAttack(actorDoc, weapon, {
     ) ?? null;
 
     if (!macro) {
-      const sameNameMacro = game.macros?.find?.(m =>
-        m?.name === macroName &&
-        m?.type === "script"
-      ) ?? null;
-
-      if (sameNameMacro) {
-        await sameNameMacro.update({
-          command,
-          img: macroImg
-        }, { renderSheet: false });
-        macro = sameNameMacro;
-      }
-    }
-
-    if (!macro) {
       macro = await Macro.create({
         name: macroName,
         type: "script",
         scope: "global",
         command,
-        img: macroImg
+        img: macroImg,
+        ownership: { default: generatedMacroDefaultOwnership() },
+        flags: generatedMacroFlags()
       }, { renderSheet: false });
     }
 
+    if (macro) await normalizeGeneratedMacroPermissions(macro);
     return macro ?? null;
   };
 
@@ -4378,6 +4743,20 @@ return await mod.promptAndRollWeaponAttack(actorDoc, weapon, {
   ATOW.api.runWeaponAttackMacro = executeWeaponAttack;
   ATOW.api.buildWeaponAttackMacroCommand = buildWeaponAttackMacroCommand;
   ATOW.api.ensureWeaponAttackMacro = ensureWeaponAttackMacro;
+
+  // Repair generated macros created by an earlier system version. Foundry v13
+  // requires LIMITED document ownership to execute a Macro. Only the active GM
+  // performs this world-document migration; players never attempt to edit the
+  // shared Macro documents while their sheets are rendering.
+  if (game.user?.isGM) {
+    const activeGM = game.users?.activeGM ?? null;
+    if (!activeGM || activeGM.id === game.user.id) {
+      Promise.all((game.macros?.contents ?? [])
+        .filter(isGeneratedATOWMacro)
+        .map(macro => normalizeGeneratedMacroPermissions(macro)))
+        .catch(error => console.warn(`${SYSTEM_ID} | Generated macro permission migration failed`, error));
+    }
+  }
 
   Hooks.on("hotbarDrop", async (bar, data, slot) => {
     if (data?.type !== HEADER_ACTION_DRAG_TYPE) return;
@@ -4420,7 +4799,9 @@ return await mod.promptAndRollWeaponAttack(actorDoc, weapon, {
     const actor = entry?.tokenDoc?.actor ?? entry?.actor ?? null;
     if (!actor || actor.type !== "mech") return;
 
-    const heat = getEngineHitHeatGeneration(actor);
+    const engineHeat = getEngineHitHeatGeneration(actor);
+    const stealthHeat = isStealthArmorActive(actor) ? 10 : 0;
+    const heat = engineHeat + stealthHeat;
     if (heat <= 0) return;
 
     const stamp = String(entry?.stamp ?? "");
@@ -4432,9 +4813,12 @@ return await mod.promptAndRollWeaponAttack(actorDoc, weapon, {
     if (stamp && flagDoc?.setFlag) await flagDoc.setFlag(SYSTEM_ID, "engineHeatAppliedStamp", stamp).catch(() => {});
 
     const hits = clamp(Math.floor(Number(actor.system?.critHits?.engine ?? 0) || 0), 0, 3);
+    const sources = [];
+    if (engineHeat > 0) sources.push(`${engineHeat} from ${hits} engine hit${hits === 1 ? "" : "s"}`);
+    if (stealthHeat > 0) sources.push(`${stealthHeat} from active Stealth Armor`);
     await ChatMessage.create({
       speaker: ChatMessage.getSpeaker({ actor }),
-      content: `<b>${actor.name}</b> generates <b>+${heat} heat</b> from ${hits} engine hit${hits === 1 ? "" : "s"}.`
+      content: `<b>${actor.name}</b> generates <b>+${heat} heat</b> (${sources.join("; ")}).`
     }).catch(() => {});
   };
 
@@ -4627,6 +5011,11 @@ return await mod.promptAndRollWeaponAttack(actorDoc, weapon, {
     // Stamp this token to the current combat turn, so preUpdateToken can self-heal if needed
     await tokenDoc.setFlag("atow-battletech", "turnStamp", getCombatStamp(combat));
     await tokenDoc.setFlag("atow-battletech", "weaponFireConsumedThisTurn", false);
+    await tokenDoc.setFlag("atow-battletech", "vehicleFiredThisTurn", false);
+    await tokenDoc.setFlag("atow-battletech", "vehicleFiredStamp", "");
+    if (["wheeledvehicle", "vehicle"].includes(String(tokenDoc.actor?.type ?? "").toLowerCase())) {
+      await tokenDoc.actor?.setFlag?.(SYSTEM_ID, "vehicleFiredThisTurn", false).catch?.(() => {});
+    }
     await resetWeaponFireTrackingForCombatant(c, combat);
 
     try {
@@ -4660,6 +5049,11 @@ return await mod.promptAndRollWeaponAttack(actorDoc, weapon, {
     const isFacingTurn = isTurn || isNativeFacingTurn || isAboutFaceTurn;
     if (!isMove && !isFacingTurn) return;
 
+    const revertVehicleTurretFacing = () => {
+      if (!vehicleHasTurretForMovement(tokenDoc?.actor)) return;
+      foundry.utils.setProperty(changes, `flags.${SYSTEM_ID}.turretFacing`, getTokenTurretFacingDegrees(tokenDoc));
+    };
+
     if (prone && isMove) {
       changes.x = tokenDoc.x;
       changes.y = tokenDoc.y;
@@ -4683,6 +5077,7 @@ return await mod.promptAndRollWeaponAttack(actorDoc, weapon, {
       if (isNativeFacingTurn) {
         foundry.utils.setProperty(changes, getNativeFacingFlagPath(), _getNativeFacing(tokenDoc) ?? 0);
       }
+      revertVehicleTurretFacing();
       if (isAboutFaceTurn) {
         changes.flags = changes.flags ?? {};
         changes.flags["about-face"] = changes.flags["about-face"] ?? {};
@@ -4761,6 +5156,18 @@ return await mod.promptAndRollWeaponAttack(actorDoc, weapon, {
       && String(tokenDoc.getFlag(SYSTEM_ID, "moveMode") ?? "").toLowerCase() === "evade";
     const maxAllowedMp = walkOnlyThisUpdate ? maxWalk : (declaredEvade ? maxRun : (isCharacter ? maxSprint : maxRun));
 
+    if (isGroundCombatVehicleActor(actor) && maxAllowedMp <= 0) {
+      if (isMove) {
+        changes.x = tokenDoc.x;
+        changes.y = tokenDoc.y;
+      }
+      if (isTurn) changes.rotation = tokenDoc.rotation;
+      if (isNativeFacingTurn) foundry.utils.setProperty(changes, getNativeFacingFlagPath(), _getNativeFacing(tokenDoc) ?? 0);
+      revertVehicleTurretFacing();
+      ui.notifications?.warn?.("This combat vehicle is immobile and cannot move or change facing.");
+      return;
+    }
+
     // 1) Turning cost (facing changes). Personal-scale facing changes are
     // intentionally free for now; mech and vehicle facing costs are unchanged.
     let deltaTurns = 0;
@@ -4777,6 +5184,7 @@ return await mod.promptAndRollWeaponAttack(actorDoc, weapon, {
         if (isNativeFacingTurn) {
           foundry.utils.setProperty(changes, getNativeFacingFlagPath(), _getNativeFacing(tokenDoc) ?? 0);
         }
+        revertVehicleTurretFacing();
         if (isAboutFaceTurn) {
           changes.flags = changes.flags ?? {};
           changes.flags["about-face"] = changes.flags["about-face"] ?? {};
@@ -4983,7 +5391,15 @@ return await mod.promptAndRollWeaponAttack(actorDoc, weapon, {
   });
 
 
-  Hooks.on("updateToken", async (tokenDoc, changed, options) => {
+  Hooks.on("updateToken", async (tokenDoc, changed, options, userId) => {
+    // Every client receives updateToken. Only one authoritative client may
+    // perform the follow-up ActiveEffect, ActorDelta, heat, and flag writes.
+    // Other clients still refresh their local token visuals below.
+    if (!isAuthoritativeTokenHookClient(tokenDoc, userId)) {
+      refreshTokenConditionVisuals(tokenDoc);
+      return;
+    }
+
     if (("x" in changed || "y" in changed) && ["character", "npc"].includes(String(tokenDoc?.actor?.type ?? "").toLowerCase())) {
       for (const statusId of CHARACTER_COVER_STATUS_IDS) {
         await setTokenStatusEffect(tokenDoc, statusId, false);
@@ -5645,11 +6061,32 @@ Hooks.once("ready", () => {
       const vehicleMove = sys.vehicle?.movement ?? {};
       let walk = Number(vehicleMove.cruise ?? vehicleMove.walk ?? vehicleMove.Walk ?? 0) || 0;
       let run = Number(vehicleMove.flank ?? vehicleMove.run ?? vehicleMove.Run ?? 0) || 0;
+      const vehicleCrit = sys.crit ?? {};
       if (actor?.type === "vtol") {
         const rotorHits = Math.max(0, Number(sys.crit?.rotorHits ?? 0) || 0);
         const crashed = Boolean(sys.crit?.crashed || sys.crit?.rotorsDestroyed || sys.crit?.defeated);
         walk = crashed ? 0 : Math.max(0, walk - rotorHits);
         run = crashed ? 0 : Math.ceil(walk * 1.5);
+      }
+      if (vehicleCrit.defeated || vehicleCrit.crewKilled || vehicleCrit.engineHit || Number(vehicleCrit.motiveHits ?? 0) >= 4) {
+        walk = 0;
+        run = 0;
+      } else {
+        const motiveEvents = Array.isArray(vehicleCrit.motiveEvents) ? vehicleCrit.motiveEvents : [];
+        if (motiveEvents.length) {
+          for (const event of motiveEvents) {
+            if (event === "moderate") walk = Math.max(0, walk - 1);
+            else if (event === "heavy") walk = Math.ceil(walk / 2);
+            else if (event === "major") walk = 0;
+          }
+          run = Math.ceil(walk * 1.5);
+        } else {
+          const motive = Math.max(0, Number(vehicleCrit.motiveHits ?? 0) || 0);
+          if (motive >= 3) walk = Math.ceil(walk / 2);
+          else if (motive >= 2) walk = Math.max(0, walk - 1);
+          run = motive >= 2 ? Math.ceil(walk * 1.5) : run;
+        }
+        if (Number(vehicleCrit.crewStunnedTurns ?? 0) > 0) run = walk;
       }
       return { walk, run, jump: 0 };
     }
@@ -5868,8 +6305,8 @@ function registerSystemSettings() {
 
 
   game.settings.register(SYSTEM_ID, "restrictMoveForwardBackward", {
-    name: "Restrict Mech Translation to Forward/Backward",
-    hint: "If enabled, a mech may only translate forward or backward relative to its current facing. Lateral movement requires turning first.",
+    name: "Restrict Unit Translation to Forward/Backward",
+    hint: "If enabled, BattleMechs and combat vehicles may only translate forward or backward relative to their current hull/leg facing. Lateral movement requires turning first.",
     scope: "world",
     config: true,
     type: Boolean,
@@ -5936,7 +6373,7 @@ function registerSystemSettings() {
 
   game.settings.register(SYSTEM_ID, "relativeMovementKeys", {
     name: "Battletech Relative Movement Keys",
-    hint: "Use W/S to move forward and backward relative to facing, and A/D to turn left and right for a controlled mech token.",
+    hint: "Use W/S to move forward and backward and A/D to turn a controlled BattleMech or combat vehicle. Q/E twists a mech torso or rotates a vehicle turret.",
     scope: "client",
     config: true,
     type: Boolean,
@@ -5970,11 +6407,13 @@ async function preloadHandlebarsTemplates() {
   const paths = [
     `systems/${SYSTEM_ID}/templates/character-sheet.hbs`,
     `systems/${SYSTEM_ID}/templates/character-attack.hbs`,
+    `systems/${SYSTEM_ID}/templates/character-skill-roll.hbs`,
     `systems/${SYSTEM_ID}/templates/abomination-sheet.hbs`,
     `systems/${SYSTEM_ID}/templates/skill-sheet.hbs`,
     `systems/${SYSTEM_ID}/templates/trait-sheet.hbs`,
     `systems/${SYSTEM_ID}/templates/combat-vehicle.hbs`,
     `systems/${SYSTEM_ID}/templates/dropship-sheet.hbs`,
+    `systems/${SYSTEM_ID}/templates/building-sheet.hbs`,
     `systems/${SYSTEM_ID}/templates/company-sheet.hbs`,
     `systems/${SYSTEM_ID}/templates/vehicle-attack.hbs`,
     `systems/${SYSTEM_ID}/templates/mech-weapon.hbs`,
@@ -6037,6 +6476,9 @@ async function rollCheck({
   actor = null,
   label = "Check",
   modifier = 0,
+  diceFormula = "2d6",
+  messageFlags = null,
+  messageData = null,
   tn = undefined,         // undefined => use default setting, null => no TN comparison
   flavor = ""
 } = {}) {
@@ -6063,7 +6505,8 @@ async function rollCheck({
   }
 
   const mod = Number(modifier ?? 0);
-  const formula = `2d6 + ${mod}`;
+  const dice = String(diceFormula ?? "2d6").trim() || "2d6";
+  const formula = `${dice} + ${mod}`;
   const roll = await (new Roll(formula)).evaluate();
 
   const showDetails = game.settings.get(SYSTEM_ID, "showRollDetails");
@@ -6081,7 +6524,9 @@ async function rollCheck({
   const speaker = ChatMessage.getSpeaker({ actor: actor ?? undefined });
 
   return roll.toMessage({
+    ...(messageData ?? {}),
     speaker,
-    flavor: `${flavor || label}${outcomeText}`
+    flavor: `${flavor || label}${outcomeText}`,
+    ...(messageFlags ? { flags: messageFlags } : {})
   });
 }

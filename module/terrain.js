@@ -1,5 +1,7 @@
 const SYSTEM_ID = "atow-battletech";
 const TERRAIN_FLAG = "terrain";
+const TERRAIN_ELEVATION_FLAG = "terrainElevation";
+const TERRAIN_BASE_ELEVATION_FLAG = "terrainBaseElevation";
 const OVERLAY_NAME = "atow-terrain-overlay";
 
 const BRUSHES = {
@@ -34,7 +36,8 @@ function isGalaxyMapScene(scene = canvas?.scene ?? game?.scenes?.active) {
 
 function isEmptyTerrain(entry) {
   if (!entry || typeof entry !== "object") return true;
-  return !entry.woods && !entry.waterDepth && !entry.elevation && !entry.rough;
+  return !entry.woods && !entry.waterDepth && !entry.elevation && !entry.rough
+    && !entry.road && !entry.groundCover && !entry.wall && !entry.wallGate && !entry.building;
 }
 
 function applyBrush(entry, brush) {
@@ -260,11 +263,21 @@ export function drawTerrainOverlay() {
 
   for (const [key, entry] of Object.entries(data)) {
     if (isEmptyTerrain(entry)) continue;
+    const displayEntry = { ...entry };
+    if (entry?.visualTileWoods) displayEntry.woods = null;
+    if (entry?.visualTileRough) displayEntry.rough = false;
+    if (entry?.visualTileElevation) displayEntry.elevation = 0;
+    if (entry?.visualTileRoad) displayEntry.road = false;
+    if (entry?.visualTileGroundCover) displayEntry.groundCover = null;
+    if (entry?.visualTileWall) displayEntry.wall = false;
+    if (entry?.visualTileWall) displayEntry.wallGate = false;
+    if (entry?.visualTileBuilding) displayEntry.building = false;
+    if (isEmptyTerrain(displayEntry)) continue;
     const offset = offsetFromKey(key);
     const topLeft = topLeftFromOffset(offset);
     if (!topLeft) continue;
 
-    const style = terrainColor(entry);
+    const style = terrainColor(displayEntry);
     const g = new PIXI.Graphics();
     g.lineStyle(2, style.line, 0.75);
     g.beginFill(style.fill, style.alpha);
@@ -272,7 +285,7 @@ export function drawTerrainOverlay() {
     g.endFill();
     overlay.addChild(g);
 
-    const label = terrainLabel(entry);
+    const label = terrainLabel(displayEntry);
     if (!label) continue;
     const text = new PIXI.Text(label, {
       fontFamily: "Arial",
@@ -471,6 +484,83 @@ export function getTerrainForTokenPosition(tokenLike, position = {}, scene = can
   return getTerrainAtPoint(tokenCenterPointForPosition(tokenLike, position), scene);
 }
 
+function terrainElevationForTokenPosition(tokenLike, position = {}, scene = canvas?.scene ?? game?.scenes?.active) {
+  const terrain = getTerrainForTokenPosition(tokenLike, position, scene);
+  return Number(terrain?.elevation ?? 0) || 0;
+}
+
+function storedTerrainElevation(tokenDoc) {
+  const value = tokenDoc?.getFlag?.(SYSTEM_ID, TERRAIN_ELEVATION_FLAG)
+    ?? tokenDoc?.flags?.[SYSTEM_ID]?.[TERRAIN_ELEVATION_FLAG];
+  return Number.isFinite(Number(value)) ? Number(value) : 0;
+}
+
+function storedTerrainBaseElevation(tokenDoc) {
+  const value = tokenDoc?.getFlag?.(SYSTEM_ID, TERRAIN_BASE_ELEVATION_FLAG)
+    ?? tokenDoc?.flags?.[SYSTEM_ID]?.[TERRAIN_BASE_ELEVATION_FLAG];
+  return Number.isFinite(Number(value)) ? Number(value) : null;
+}
+
+function isResponsibleGM() {
+  if (!game.user?.isGM) return false;
+  const activeGM = game.users?.activeGM ?? null;
+  return !activeGM || activeGM.id === game.user.id;
+}
+
+export async function syncTokenTerrainElevation(tokenDoc, { force = false, position = null } = {}) {
+  if (!tokenDoc || !isResponsibleGM()) return false;
+  const scene = tokenDoc.parent ?? canvas?.scene ?? game?.scenes?.active;
+  if (!scene || isGalaxyMapScene(scene)) return false;
+
+  const flagExists = tokenDoc?.getFlag?.(SYSTEM_ID, TERRAIN_ELEVATION_FLAG) !== undefined
+    || tokenDoc?.flags?.[SYSTEM_ID]?.[TERRAIN_ELEVATION_FLAG] !== undefined;
+  const previousTerrainElevation = storedTerrainElevation(tokenDoc);
+  const nextTerrainElevation = terrainElevationForTokenPosition(tokenDoc, position ?? {}, scene);
+  const currentElevation = Number(tokenDoc.elevation ?? 0) || 0;
+  let relativeElevation = storedTerrainBaseElevation(tokenDoc);
+  if (relativeElevation === null) {
+    // Migrate the first implementation's numeric terrain flag. If elevation
+    // already exactly matches that contribution, it was applied; otherwise
+    // treat the current height as the token's pre-automation baseline.
+    relativeElevation = flagExists
+      && Math.abs(currentElevation - previousTerrainElevation) < 0.0001
+      ? 0
+      : currentElevation;
+  }
+  const nextElevation = relativeElevation + nextTerrainElevation;
+  if (!force
+    && flagExists
+    && previousTerrainElevation === nextTerrainElevation
+    && storedTerrainBaseElevation(tokenDoc) !== null
+    && Math.abs(currentElevation - nextElevation) < 0.0001) return false;
+
+  await tokenDoc.update({
+    elevation: nextElevation,
+    [`flags.${SYSTEM_ID}.${TERRAIN_ELEVATION_FLAG}`]: nextTerrainElevation,
+    [`flags.${SYSTEM_ID}.${TERRAIN_BASE_ELEVATION_FLAG}`]: relativeElevation
+  }, { atowTerrainElevation: true });
+  return true;
+}
+
+async function recordExplicitTokenElevation(tokenDoc, position = null) {
+  if (!tokenDoc || !isResponsibleGM()) return;
+  const scene = tokenDoc.parent ?? canvas?.scene ?? game?.scenes?.active;
+  if (!scene || isGalaxyMapScene(scene)) return;
+  const terrainElevation = terrainElevationForTokenPosition(tokenDoc, position ?? {}, scene);
+  const absoluteElevation = Number(tokenDoc.elevation ?? 0) || 0;
+  await tokenDoc.update({
+    [`flags.${SYSTEM_ID}.${TERRAIN_ELEVATION_FLAG}`]: terrainElevation,
+    [`flags.${SYSTEM_ID}.${TERRAIN_BASE_ELEVATION_FLAG}`]: absoluteElevation - terrainElevation
+  }, { atowTerrainElevation: true });
+}
+
+async function syncSceneTerrainElevations(scene = canvas?.scene ?? null) {
+  if (!scene || !isResponsibleGM()) return;
+  for (const tokenDoc of scene.tokens?.contents ?? []) {
+    await syncTokenTerrainElevation(tokenDoc);
+  }
+}
+
 export function getTerrainDebugForToken(tokenLike, position = {}, scene = canvas?.scene ?? game?.scenes?.active) {
   const point = tokenCenterPointForPosition(tokenLike, position);
   const key = keyFromPoint(point);
@@ -502,6 +592,8 @@ export function registerAtowTerrainTools(namespace = null) {
     getTerrainAtPoint,
     getTerrainForToken,
     getTerrainForTokenPosition,
+    terrainElevationForTokenPosition,
+    syncTokenTerrainElevation,
     getTerrainDebugForToken,
     setBrush,
     setEnabled
@@ -520,12 +612,57 @@ export function registerAtowTerrainTools(namespace = null) {
     if (isGalaxyMapScene()) setEnabled(false);
     drawTerrainOverlay();
     bindCanvasEvents();
+    syncSceneTerrainElevations(canvas?.scene).catch(error => {
+      console.warn("AToW Terrain | Initial token elevation sync failed", error);
+    });
+  });
+
+  Hooks.on("createToken", tokenDoc => {
+    syncTokenTerrainElevation(tokenDoc, { force: true }).catch(error => {
+      console.warn("AToW Terrain | New token elevation sync failed", error);
+    });
+  });
+
+  Hooks.on("updateToken", (tokenDoc, changed, options) => {
+    if (options?.atowTerrainElevation || !isResponsibleGM()) return;
+    const moved = "x" in (changed ?? {}) || "y" in (changed ?? {});
+    const elevationChanged = "elevation" in (changed ?? {});
+    const baseElevation = storedTerrainBaseElevation(tokenDoc);
+    const priorExpectedElevation = baseElevation === null
+      ? null
+      : baseElevation + storedTerrainElevation(tokenDoc);
+    const suppliedElevation = Number(changed?.elevation);
+    const destination = moved ? {
+      x: changed.x ?? tokenDoc.x,
+      y: changed.y ?? tokenDoc.y
+    } : null;
+    const explicitElevationChange = elevationChanged
+      && (priorExpectedElevation === null
+        || !Number.isFinite(suppliedElevation)
+        || Math.abs(suppliedElevation - priorExpectedElevation) > 0.0001);
+
+    if (moved && explicitElevationChange) {
+      recordExplicitTokenElevation(tokenDoc, destination).catch(error => {
+        console.warn("AToW Terrain | Explicit moved-token elevation sync failed", error);
+      });
+    } else if (moved) {
+      syncTokenTerrainElevation(tokenDoc, { position: destination }).catch(error => {
+        console.warn("AToW Terrain | Moved-token elevation sync failed", error);
+      });
+    } else if (elevationChanged) {
+      recordExplicitTokenElevation(tokenDoc).catch(error => {
+        console.warn("AToW Terrain | Explicit token elevation sync failed", error);
+      });
+    }
   });
 
   Hooks.on("updateScene", (scene, changed) => {
     if (scene?.id !== canvas?.scene?.id) return;
     if (!foundry.utils.hasProperty(changed, `flags.${SYSTEM_ID}.${TERRAIN_FLAG}`)) return;
     drawTerrainOverlay();
+    syncSceneTerrainElevations(scene).catch(error => {
+      console.warn("AToW Terrain | Painted terrain elevation sync failed", error);
+    });
   });
 
   Hooks.on("deleteScene", () => {
